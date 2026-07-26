@@ -1,0 +1,98 @@
+[package]
+name = "llama-ui"
+version = "0.1.0"
+description = "LLM Desktop Console for managing llama-server"
+authors = ["LlamaUI"]
+edition = "2021"
+rust-version = "1.70"
+license = "MIT"
+homepage = "https://github.com/your-repo/LlamaUI"
+repository = "https://github.com/your-repo/LlamaUI"
+keywords = ["llm", "llama", "desktop", "tauri", "gui"]
+categories = ["gui", "desktop"]
+readme = "README.md"
+
+[lints.rust]
+# 不安全代码必须显式标注
+unsafe_op_in_unsafe_fn = "deny"
+# 不允许死代码
+dead_code = "warn"
+# 未使用的导入
+unused_imports = "warn"
+
+[lints.clippy]
+# 不允许 unwrap/expect（必须显式处理错误）
+unwrap_used = "warn"
+expect_used = "warn"
+# 不允许 panic
+panic = "warn"
+# 不允许使用 print!（必须用日志）
+print_stderr = "warn"
+print_stdout = "warn"
+# 不允许使用 .clone() 当类型实现了 Copy
+clone_on_copy = "warn"
+# 不允许不必要的类型转换
+cast_lossless = "warn"
+# 不允许使用 .into_iter() 当 .iter() 就够用时
+into_iter_on_ref = "warn"
+# 不允许空循环
+empty_loop = "deny"
+# 不允许不必要的 unwrap
+unnecessary_unwrap = "warn"
+# 不允许使用 .len() > 0，推荐 !is_empty()
+len_zero = "warn"
+# 不允许使用 .map(|x| x) 这种无意义转换
+useless_conversion = "warn"
+# 变量名风格
+module_name_repetitions = "allow"
+# 大枚举变体差异
+enum_variant_names = "warn"
+# 相似的 if-else 分支
+if_same_then_else = "warn"
+# 逻辑上可合并的 match 分支
+match_same_arms = "warn"
+# 未使用的异步函数
+unused_async = "warn"
+# 不必要的 owned 类型
+needless_pass_by_value = "warn"
+# 隐式 clone
+implicit_clone = "warn"
+
+[lib]
+name = "llama_ui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+which = "6"
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+dirs = "5"
+anyhow = "1"
+thiserror = "1"
+futures = "0.3"
+sysinfo = "0.31"
+windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_Foundation", "Wdk_System_Threading", "Wdk_System_SystemServices", "Win32_System_JobObjects", "Win32_Security"] }
+
+[features]
+# This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+# `tauri::test::mock_app` 等测试工具需要 `test` feature。
+tauri = { version = "2", features = ["test"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
