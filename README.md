@@ -16,7 +16,7 @@
 
 ## 关于项目
 
-LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大平台的本地渲染，并兼容 **Web**（React/Vue）技术栈。目标是 **零配置、即插即用**，帮助开发者专注业务逻辑。
+LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大平台的本地渲染，并兼容 **Web** 技术栈。目标是 **零配置、即插即用**，让开发者专注业务。
 
 ### 主要功能
 
@@ -26,13 +26,13 @@ LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大
 
 ### 技术栈
 
-- **Rust** – 高性能原生渲染引擎
+- **Rust** – 高性能渲染引擎
 - **WebAssembly** – 将核心编译为 WASM，供前端调用
 - **Tauri** – 桌面包装层，实现系统托盘、自动更新等功能
 
 > **⚠️ 重要声明**
 >
-> 本项目遵循 MIT 许可证，代码仅供学习和商业使用，版权归原作者所有。请勿用于侵权或违法用途。
+> 本项目遵循 MIT 许可证，仅供学习和商业使用。请勿用于侵权或违法用途。
 
 ## 下载与兼容性
 
@@ -40,12 +40,12 @@ LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大
 
 | 平台 | 最低要求 | 架构 | 兼容性 | 下载链接 |
 |------|----------|------|--------|----------|
-| **Windows** | Windows 10 1809+ | x86_64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-windows-x86_64.exe) |
-| **Windows** | Windows 10 1809+ | arm64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-windows-arm64.exe) |
-| **Linux** | glibc 2.28+ | x86_64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-linux-x86_64) |
-| **Linux** | glibc 2.28+ | arm64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-linux-arm64) |
-| **macOS** | macOS 11+ | x86_64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-macos-x86_64) |
-| **macOS** | macOS 11+ | arm64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-macos-arm64) |
+| **Windows** | Windows 10 1809+ | x86_64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-windows-x86_64.exe) |
+| **Windows** | Windows 10 1809+ | arm64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-windows-arm64.exe) |
+| **Linux** | glibc 2.28+ | x86_64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-linux-x86_64) |
+| **Linux** | glibc 2.28+ | arm64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-linux-arm64) |
+| **macOS** | macOS 11+ | x86_64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-macos-x86_64) |
+| **macOS** | macOS 11+ | arm64 | ✅ | [GitHub 直链](https://github.com/ZMH21306/LlamaUI/releases/latest/download/llamaui-macos-arm64) |
 
 ## 开发路线
 
@@ -83,8 +83,8 @@ LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大
 
 ## 联系方式
 
-- [电子邮件](mailto:example@example.com) - example@example.com
-- QQ 群 - 12345678
+- [电子邮件](mailto:example@example.com) – example@example.com
+- QQ 群 – 12345678
 - 其他联系方式请自行补充
 
 ## Star 历史
