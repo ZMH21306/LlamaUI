@@ -16,7 +16,7 @@
 
 ## 关于项目
 
-LlamaUI 致力于提供一个统一的 API，支持 Windows、Linux、macOS 三大平台的本地渲染，兼容 Web 技术栈。它的核心目标是 **零配置、即插即用**，让开发者专注业务逻辑。
+LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大平台的本地渲染，并兼容 **Web**（React/Vue）技术栈。目标是 **零配置、即插即用**，帮助开发者专注业务逻辑。
 
 ### 主要功能
 
@@ -26,8 +26,8 @@ LlamaUI 致力于提供一个统一的 API，支持 Windows、Linux、macOS 三�
 
 ### 技术栈
 
-- **Rust** – 核心渲染引擎，提供高性能原生绘制
-- **WebAssembly** – 将核心编译为 WASM，供前端框架调用
+- **Rust** – 高性能原生渲染引擎
+- **WebAssembly** – 将核心编译为 WASM，供前端调用
 - **Tauri** – 桌面包装层，实现系统托盘、自动更新等功能
 
 > **⚠️ 重要声明**
@@ -65,7 +65,7 @@ LlamaUI 致力于提供一个统一的 API，支持 Windows、Linux、macOS 三�
 
 ## 贡献指南
 
-贡献让开源社区更加活跃。欢迎提交 Pull Request 或者打开带有 `enhancement` 标签的 Issue。
+贡献让开源社区更加活跃。欢迎提交 Pull Request 或打开带有 `enhancement` 标签的 Issue。
 
 1. Fork 本仓库
 2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
