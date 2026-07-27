@@ -90,8 +90,7 @@ mod tests {
     #[test]
     fn accept_http_localhost() {
         assert_eq!(
-            validate_url("http://127.0.0.1:10897/")
-                .expect(&format!("{}: http 应被接受", PREFIX)),
+            validate_url("http://127.0.0.1:10897/").expect(&format!("{}: http 应被接受", PREFIX)),
             "http://127.0.0.1:10897/"
         );
     }
@@ -100,8 +99,7 @@ mod tests {
     #[test]
     fn accept_https_with_path() {
         assert_eq!(
-            validate_url("https://example.com/path")
-                .expect(&format!("{}: https 应被接受", PREFIX)),
+            validate_url("https://example.com/path").expect(&format!("{}: https 应被接受", PREFIX)),
             "https://example.com/path"
         );
     }
@@ -110,8 +108,7 @@ mod tests {
     #[test]
     fn accept_mixed_case_scheme() {
         assert_eq!(
-            validate_url("HTTPS://Example.COM")
-                .expect(&format!("{}: 大写 https 应被接受", PREFIX)),
+            validate_url("HTTPS://Example.COM").expect(&format!("{}: 大写 https 应被接受", PREFIX)),
             "HTTPS://Example.COM"
         );
     }
@@ -152,7 +149,12 @@ mod tests {
     #[test]
     fn reject_javascript_scheme() {
         let r = validate_url("javascript:alert(1)");
-        assert!(r.is_err(), "{}: javascript: 必须被拒绝，实际 {:?}", PREFIX, r);
+        assert!(
+            r.is_err(),
+            "{}: javascript: 必须被拒绝，实际 {:?}",
+            PREFIX,
+            r
+        );
         assert_eq!(
             r.expect_err(&format!("{}: 已知错误", PREFIX)),
             UrlError::SchemeNotAllowed

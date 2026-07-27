@@ -144,37 +144,53 @@ mod tests {
     #[test]
     fn segment_eq_with_separator_finds_middle() {
         // 路径中段含 `\temp\`
-        assert!(segment_eq_with_separator("c:\\foo\\temp\\bar", "\\", "temp"));
+        assert!(segment_eq_with_separator(
+            "c:\\foo\\temp\\bar",
+            "\\",
+            "temp"
+        ));
     }
 
     #[test]
     fn segment_eq_with_separator_rejects_partial() {
         // `tempbar` 不是 `temp` + 分隔符
-        assert!(!segment_eq_with_separator("c:\\foo\\tempbar\\bar", "\\", "temp"));
+        assert!(!segment_eq_with_separator(
+            "c:\\foo\\tempbar\\bar",
+            "\\",
+            "temp"
+        ));
     }
 
     #[test]
     fn is_world_writable_detects_temp_dir() {
         // 父目录末段是 temp
-        assert!(is_world_writable_path(Path::new("C:\\users\\x\\AppData\\Local\\Temp\\llama-server.exe")));
+        assert!(is_world_writable_path(Path::new(
+            "C:\\users\\x\\AppData\\Local\\Temp\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_detects_middle_temp() {
         // 父目录中含 \temp\
-        assert!(is_world_writable_path(Path::new("C:\\foo\\temp\\bar\\llama-server.exe")));
+        assert!(is_world_writable_path(Path::new(
+            "C:\\foo\\temp\\bar\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_allows_normal_dirs() {
         // 普通目录
-        assert!(!is_world_writable_path(Path::new("C:\\Program Files\\llama.cpp\\llama-server.exe")));
+        assert!(!is_world_writable_path(Path::new(
+            "C:\\Program Files\\llama.cpp\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_handles_relative_paths() {
         // 相对路径
-        assert!(!is_world_writable_path(Path::new("target/debug/llama-server.exe")));
+        assert!(!is_world_writable_path(Path::new(
+            "target/debug/llama-server.exe"
+        )));
     }
 
     #[test]

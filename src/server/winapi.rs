@@ -11,16 +11,16 @@
 // `sysinfo::System`，避免每秒 4 次 `System::new()` 造成的 4 MB/s 内存抖动。
 
 #[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, NTSTATUS};
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::OpenProcess;
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, NTSTATUS};
 // 使用 windows-sys 官方提供的 VM_COUNTERS 结构体（注意 PageFaultCount 必须是 u32）
 #[cfg(windows)]
-use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessVmCounters};
-#[cfg(windows)]
 use windows_sys::Wdk::System::SystemServices::VM_COUNTERS;
+#[cfg(windows)]
+use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessVmCounters};
 
 use std::sync::OnceLock;
 
@@ -59,9 +59,15 @@ pub fn query_windows_virtual_size(pid: u32) -> u64 {
             &mut ret_len,
         )
     };
-    let virtual_size = if status >= 0 { vm.VirtualSize as u64 } else { 0 };
+    let virtual_size = if status >= 0 {
+        vm.VirtualSize as u64
+    } else {
+        0
+    };
 
-    unsafe { CloseHandle(handle); }
+    unsafe {
+        CloseHandle(handle);
+    }
     virtual_size
 }
 
@@ -98,13 +104,13 @@ pub fn get_process_exe_name(pid: u32) -> Option<String> {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
         pid,
     )]));
-    sys.process(sysinfo::Pid::from_u32(pid))
-        .map(|p| {
-            // 优先无损 UTF-8 转换（兼容非 ASCII 进程名），失败时再 lossy
-            p.name().to_str()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| p.name().to_string_lossy().into_owned())
-        })
+    sys.process(sysinfo::Pid::from_u32(pid)).map(|p| {
+        // 优先无损 UTF-8 转换（兼容非 ASCII 进程名），失败时再 lossy
+        p.name()
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| p.name().to_string_lossy().into_owned())
+    })
 }
 
 // ============================================================

@@ -101,7 +101,12 @@ mod tests {
         let s = "x".repeat(1024 * 1024); // 1 MB
         let out = truncate_log_line(&s);
         // 输出 = head(512) + "...<已截断 6 位数+字节>..." + tail(256) ≈ 800 字节
-        assert!(out.len() <= MAX_LOG_LINE_BYTES + 50, "截断后长度 {} 应接近上限 {}", out.len(), MAX_LOG_LINE_BYTES);
+        assert!(
+            out.len() <= MAX_LOG_LINE_BYTES + 50,
+            "截断后长度 {} 应接近上限 {}",
+            out.len(),
+            MAX_LOG_LINE_BYTES
+        );
     }
 
     /// 多字节 UTF-8 截断：使用 ASCII 字符（每个字节都是 char boundary）。

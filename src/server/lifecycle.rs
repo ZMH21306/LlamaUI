@@ -30,7 +30,10 @@ use crate::config::AppConfig;
 use crate::events::ServerStatus;
 use crate::log::{emit_log, emit_status};
 
-use super::cmdline::{expand_pro_vars, extract_port_from_argv, resolve_program, split_command_line, validate_pro_program};
+use super::cmdline::{
+    expand_pro_vars, extract_port_from_argv, resolve_program, split_command_line,
+    validate_pro_program,
+};
 use super::job::Job;
 use super::log_channel::create as create_log_channel;
 use super::port::select_smart_port;
@@ -102,26 +105,25 @@ impl ServerProcess {
         // ---- 解析最终生效的 program 和 args ----
         // pro 模式：从 custom_command 解析（替换变量、空白拆分），首项 = 程序；
         // custom_command 为空时回退到普通模式（自动检测 + 最简命令）。
-        let (program, mut custom_argv): (String, Vec<String>) = if cfg.mode == "pro"
-            && !cfg.custom_command.trim().is_empty()
-        {
-            let expanded = expand_pro_vars(&cfg.custom_command, &cfg);
-            let tokens: Vec<String> = split_command_line(&expanded);
-            // P2-9 修复：用 let-else 替代 tokens.is_empty() 检查 + iter.next().unwrap()。
-            // - 原本两段式：先 is_empty() bail，再 iter.next().unwrap()，clippy 会标
-            //   "unnecessary_unwrap"；现在 let-else 一次完成"判空+取首项"。
-            // - 语义保持完全一致：tokens 为空时直接返回 Err。
-            let mut iter = tokens.into_iter();
-            let Some(prog) = iter.next() else {
-                anyhow::bail!("专业模式命令为空");
+        let (program, mut custom_argv): (String, Vec<String>) =
+            if cfg.mode == "pro" && !cfg.custom_command.trim().is_empty() {
+                let expanded = expand_pro_vars(&cfg.custom_command, &cfg);
+                let tokens: Vec<String> = split_command_line(&expanded);
+                // P2-9 修复：用 let-else 替代 tokens.is_empty() 检查 + iter.next().unwrap()。
+                // - 原本两段式：先 is_empty() bail，再 iter.next().unwrap()，clippy 会标
+                //   "unnecessary_unwrap"；现在 let-else 一次完成"判空+取首项"。
+                // - 语义保持完全一致：tokens 为空时直接返回 Err。
+                let mut iter = tokens.into_iter();
+                let Some(prog) = iter.next() else {
+                    anyhow::bail!("专业模式命令为空");
+                };
+                // 安全校验：专业模式首 token 必须是 llama-server 相关可执行文件，
+                // 阻止用户通过 `cmd /c calc` 等方式实现 RCE。
+                let validated = validate_pro_program(&prog, &cfg)?;
+                (validated, iter.collect())
+            } else {
+                (resolve_program(&cfg), Vec::new())
             };
-            // 安全校验：专业模式首 token 必须是 llama-server 相关可执行文件，
-            // 阻止用户通过 `cmd /c calc` 等方式实现 RCE。
-            let validated = validate_pro_program(&prog, &cfg)?;
-            (validated, iter.collect())
-        } else {
-            (resolve_program(&cfg), Vec::new())
-        };
 
         // ---- 模型目录校验（非 pro 模式校验自定义路径） ----
         if cfg.mode != "pro" {
@@ -313,17 +315,15 @@ impl ServerProcess {
                 {
                     // tokio::process::Child::id() 返回 Option<u32>：
                     // spawn 刚返回时 PID 一定存在（之前是 None）
-                    let process_handle = pid.and_then(|p| {
-                        match Job::open_process_handle(p) {
-                            Ok(h) => Some(h),
-                            Err(e) => {
-                                emit_log(
-                                    &app,
-                                    "system",
-                                    &format!("警告：OpenProcess 失败：{}（降级为 Drop 兜底）", e),
-                                );
-                                None
-                            }
+                    let process_handle = pid.and_then(|p| match Job::open_process_handle(p) {
+                        Ok(h) => Some(h),
+                        Err(e) => {
+                            emit_log(
+                                &app,
+                                "system",
+                                &format!("警告：OpenProcess 失败：{}（降级为 Drop 兜底）", e),
+                            );
+                            None
                         }
                     });
                     if let Some(h) = process_handle {
@@ -331,7 +331,10 @@ impl ServerProcess {
                             emit_log(
                                 &app,
                                 "system",
-                                &format!("警告：绑定子进程到 Job Object 失败：{}（降级为 Drop 兜底）", e),
+                                &format!(
+                                    "警告：绑定子进程到 Job Object 失败：{}（降级为 Drop 兜底）",
+                                    e
+                                ),
                             );
                         }
                         // 立即关闭 process handle：Job 已持有引用，重复 handle 可关
@@ -375,9 +378,19 @@ impl ServerProcess {
         if let Some(stderr) = child.stderr.take() {
             all_tasks.push(super::tasks::spawn_stderr_reader(stderr, tx.clone()));
         }
-        all_tasks.push(super::tasks::spawn_log_pump(rx, app.clone(), Arc::clone(&inner_arc)));
-        all_tasks.push(super::tasks::spawn_watcher(Arc::clone(&inner_arc), app.clone()));
-        all_tasks.push(super::tasks::spawn_metrics_sampler(Arc::clone(&inner_arc), app.clone()));
+        all_tasks.push(super::tasks::spawn_log_pump(
+            rx,
+            app.clone(),
+            Arc::clone(&inner_arc),
+        ));
+        all_tasks.push(super::tasks::spawn_watcher(
+            Arc::clone(&inner_arc),
+            app.clone(),
+        ));
+        all_tasks.push(super::tasks::spawn_metrics_sampler(
+            Arc::clone(&inner_arc),
+            app.clone(),
+        ));
         drop(tx); // 释放 sender 引用计数，让 pump 在 reader 退出后能正常结束
 
         // ---- 单次原子注册 ----

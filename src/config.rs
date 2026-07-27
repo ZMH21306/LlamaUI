@@ -7,11 +7,11 @@
 //     内部转换 ConfigError → anyhow::Error。
 
 use crate::error::ConfigError;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 const CONFIG_FILE: &str = "config.json";
 
@@ -111,10 +111,14 @@ impl AppConfig {
             other => return Err(ConfigError::InvalidMode(other.to_string())),
         }
         if !(128..=1_048_576).contains(&self.ctx_size) {
-            return Err(ConfigError::CtxSizeOutOfRange { value: self.ctx_size });
+            return Err(ConfigError::CtxSizeOutOfRange {
+                value: self.ctx_size,
+            });
         }
         if !(-1..=200).contains(&self.n_gpu_layers) {
-            return Err(ConfigError::GpuLayersOutOfRange { value: self.n_gpu_layers });
+            return Err(ConfigError::GpuLayersOutOfRange {
+                value: self.n_gpu_layers,
+            });
         }
         if self.mtp_draft_n_max > 16 {
             return Err(ConfigError::MtpDraftOutOfRange {

@@ -163,7 +163,9 @@ mod tests {
 
     #[test]
     fn config_error_display_includes_field_name() {
-        let e = ConfigError::NulInPath { field: "llama_server_path" };
+        let e = ConfigError::NulInPath {
+            field: "llama_server_path",
+        };
         let s = e.to_string();
         assert!(s.contains("llama_server_path"), "必须包含字段名：{}", s);
     }

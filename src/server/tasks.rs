@@ -226,10 +226,7 @@ pub(crate) fn spawn_metrics_sampler(
             // Snapshot what we need with the lock held briefly.
             let (pid_opt, uptime, port) = {
                 let guard = inner.lock();
-                let uptime = guard
-                    .started_at
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
+                let uptime = guard.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                 (guard.pid, uptime, guard.active_port)
             };
 
@@ -264,7 +261,11 @@ pub(crate) fn spawn_metrics_sampler(
             #[cfg(windows)]
             let virtual_size_bytes = {
                 let virt = query_windows_virtual_size(pid);
-                if virt > 0 { virt } else { virt_sysinfo }
+                if virt > 0 {
+                    virt
+                } else {
+                    virt_sysinfo
+                }
             };
             #[cfg(not(windows))]
             let virtual_size_bytes = virt_sysinfo;
@@ -338,16 +339,10 @@ mod tests {
     /// 防止后续重构把签名改坏（`lifecycle::start` 收集到同一个 Vec）。
     #[allow(dead_code)]
     fn _signature_invariants() {
-        fn _check_stdout(
-            s: ChildStdout,
-            tx: tokio::sync::mpsc::Sender<LogLine>,
-        ) -> JoinHandle<()> {
+        fn _check_stdout(s: ChildStdout, tx: tokio::sync::mpsc::Sender<LogLine>) -> JoinHandle<()> {
             spawn_stdout_reader(s, tx)
         }
-        fn _check_stderr(
-            s: ChildStderr,
-            tx: tokio::sync::mpsc::Sender<LogLine>,
-        ) -> JoinHandle<()> {
+        fn _check_stderr(s: ChildStderr, tx: tokio::sync::mpsc::Sender<LogLine>) -> JoinHandle<()> {
             spawn_stderr_reader(s, tx)
         }
     }

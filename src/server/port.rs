@@ -192,7 +192,11 @@ pub async fn select_smart_port(
             }
             if !is_pid_alive(pid) {
                 choice.killed_holders.push(pid);
-                emit_log(app, "system", &format!("旧 llama-server（PID {}）已停止", pid));
+                emit_log(
+                    app,
+                    "system",
+                    &format!("旧 llama-server（PID {}）已停止", pid),
+                );
             } else {
                 emit_log(
                     app,
@@ -213,9 +217,12 @@ pub async fn select_smart_port(
         .map(|i| desired.saturating_add(i))
         .filter(|&p| p != 0)
         .collect();
-    let probes = stream::iter(candidates.iter().copied().map(|port| async move {
-        (port, is_port_available(port).await)
-    }))
+    let probes = stream::iter(
+        candidates
+            .iter()
+            .copied()
+            .map(|port| async move { (port, is_port_available(port).await) }),
+    )
     .buffer_unordered(par as usize)
     .collect::<Vec<_>>()
     .await;
@@ -242,10 +249,7 @@ pub async fn select_smart_port(
     }
 
     if !auto_shift {
-        return Err(format!(
-            "端口 {} 被占用且未启用自动顺延",
-            desired
-        ));
+        return Err(format!("端口 {} 被占用且未启用自动顺延", desired));
     }
 
     Err(format!(
@@ -268,13 +272,18 @@ async fn probe_ports_parallel(desired: u16, max: u16, cancel: &CancelFlag) -> Op
         .map(|i| desired.saturating_add(i))
         .filter(|&p| p != 0)
         .collect();
-    let probes = stream::iter(candidates.iter().copied().map(|port| async move {
-        (port, is_port_available(port).await)
-    }))
+    let probes = stream::iter(
+        candidates
+            .iter()
+            .copied()
+            .map(|port| async move { (port, is_port_available(port).await) }),
+    )
     .buffer_unordered(par as usize)
     .collect::<Vec<_>>()
     .await;
-    probes.into_iter().find_map(|(port, avail)| if avail { Some(port) } else { None })
+    probes
+        .into_iter()
+        .find_map(|(port, avail)| if avail { Some(port) } else { None })
 }
 
 #[cfg(test)]

@@ -42,10 +42,7 @@ pub struct StatusResponse {
 /// Windows 上额外创建 Job Object 绑定子进程，父进程任何方式死亡时内核会
 /// 回收子进程。
 #[tauri::command]
-pub async fn start_server(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn start_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let cfg = state.config.get();
     state
         .server
@@ -64,10 +61,7 @@ pub async fn start_server(
 ///
 /// 若当前未运行则返回 `Ok(())`（幂等）。
 #[tauri::command]
-pub async fn stop_server(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.server.stop(&app).await.map_err(|e| e.to_string())
 }
 
@@ -77,10 +71,7 @@ pub async fn stop_server(
 /// 第二次启动若失败会向上抛错（前半 stop 失败被忽略，因为若服务未运行
 /// 时调用 stop 是合法的）。
 #[tauri::command]
-pub async fn restart_server(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn restart_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     // Stop first (ignore error if not running)
     let _ = state.server.stop(&app).await;
     // Small delay so the port is released
@@ -145,7 +136,11 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"status\":\"Running\""), "status 字段：{}", s);
         assert!(s.contains("\"port\":10897"), "port 字段：{}", s);
-        assert!(s.contains("\"active_port\":10898"), "active_port 字段：{}", s);
+        assert!(
+            s.contains("\"active_port\":10898"),
+            "active_port 字段：{}",
+            s
+        );
     }
 
     /// 验证 `ServerStatus` 序列化值与前端 JS 期望一致。

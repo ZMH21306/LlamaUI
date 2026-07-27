@@ -15,7 +15,12 @@ use super::STEP_INSTALL;
 
 /// ② 驱动与 llama 安装检查（缺失时尝试自动补齐）
 pub(super) async fn step_install_check(app: &AppHandle, cfg: &AppConfig) -> Result<(), String> {
-    emit_log_to(app, "system", "开始检查 llama-server 安装", Some(STEP_INSTALL));
+    emit_log_to(
+        app,
+        "system",
+        "开始检查 llama-server 安装",
+        Some(STEP_INSTALL),
+    );
 
     // 自定义路径优先
     if let Some(custom) = &cfg.llama_server_path {
@@ -64,7 +69,8 @@ pub(super) async fn step_install_check(app: &AppHandle, cfg: &AppConfig) -> Resu
             emit_log_to(app, "system", &msg, Some(STEP_INSTALL));
             // 验证安装结果
             if which::which("llama-server").is_err() {
-                let msg = "自动安装完成，但 PATH 中仍找不到 llama-server，请重启终端后再试".to_string();
+                let msg =
+                    "自动安装完成，但 PATH 中仍找不到 llama-server，请重启终端后再试".to_string();
                 emit_log_to(app, "system", &msg, Some(STEP_INSTALL));
                 return Err(msg);
             }
@@ -76,12 +82,7 @@ pub(super) async fn step_install_check(app: &AppHandle, cfg: &AppConfig) -> Resu
                 &format!("自动安装失败：{}", e),
                 Some(STEP_INSTALL),
             );
-            emit_log_to(
-                app,
-                "system",
-                "请手动安装 llama.cpp：",
-                Some(STEP_INSTALL),
-            );
+            emit_log_to(app, "system", "请手动安装 llama.cpp：", Some(STEP_INSTALL));
             emit_log_to(
                 app,
                 "system",
@@ -122,12 +123,7 @@ async fn check_driver(app: &AppHandle) {
     #[cfg(windows)]
     {
         // 通过 nvidia-smi 探测 NVIDIA 驱动
-        match tokio::time::timeout(
-            PROBE_TIMEOUT,
-            Command::new("nvidia-smi").output(),
-        )
-        .await
-        {
+        match tokio::time::timeout(PROBE_TIMEOUT, Command::new("nvidia-smi").output()).await {
             Ok(Ok(out)) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let first = stdout.lines().next().unwrap_or("").trim();
@@ -158,7 +154,10 @@ async fn check_driver(app: &AppHandle) {
                 emit_log_to(
                     app,
                     "system",
-                    &format!("nvidia-smi 探测超时（{}s），跳过（可能为驱动半死）", PROBE_TIMEOUT.as_secs()),
+                    &format!(
+                        "nvidia-smi 探测超时（{}s），跳过（可能为驱动半死）",
+                        PROBE_TIMEOUT.as_secs()
+                    ),
                     Some(STEP_INSTALL),
                 );
             }
@@ -166,11 +165,7 @@ async fn check_driver(app: &AppHandle) {
     }
     #[cfg(target_os = "linux")]
     {
-        let probe = tokio::time::timeout(
-            PROBE_TIMEOUT,
-            Command::new("nvidia-smi").output(),
-        )
-        .await;
+        let probe = tokio::time::timeout(PROBE_TIMEOUT, Command::new("nvidia-smi").output()).await;
         let has_nvidia = matches!(probe, Ok(Ok(o)) if o.status.success());
         if has_nvidia {
             emit_log_to(
@@ -221,7 +216,12 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
     #[cfg(windows)]
     {
         // 1) winget
-        emit_log_to(app, "system", "尝试使用 winget 安装 llama.cpp...", Some(STEP_INSTALL));
+        emit_log_to(
+            app,
+            "system",
+            "尝试使用 winget 安装 llama.cpp...",
+            Some(STEP_INSTALL),
+        );
         match Command::new("winget")
             .args([
                 "install",
@@ -252,8 +252,17 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
         }
 
         // 2) scoop
-        emit_log_to(app, "system", "尝试使用 scoop 安装 llama.cpp...", Some(STEP_INSTALL));
-        match Command::new("scoop").args(["install", "llama.cpp"]).output().await {
+        emit_log_to(
+            app,
+            "system",
+            "尝试使用 scoop 安装 llama.cpp...",
+            Some(STEP_INSTALL),
+        );
+        match Command::new("scoop")
+            .args(["install", "llama.cpp"])
+            .output()
+            .await
+        {
             Ok(out) if out.status.success() => return Ok("通过 scoop 安装 llama.cpp 成功".into()),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -278,7 +287,11 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
             "尝试使用 choco 安装 llama.cpp...",
             Some(STEP_INSTALL),
         );
-        match Command::new("choco").args(["install", "-y", "llama.cpp"]).output().await {
+        match Command::new("choco")
+            .args(["install", "-y", "llama.cpp"])
+            .output()
+            .await
+        {
             Ok(out) if out.status.success() => return Ok("通过 choco 安装 llama.cpp 成功".into()),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -299,13 +312,27 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
 
     #[cfg(target_os = "macos")]
     {
-        emit_log_to(app, "system", "尝试使用 brew 安装 llama.cpp...", Some(STEP_INSTALL));
-        match Command::new("brew").args(["install", "llama.cpp"]).output().await {
+        emit_log_to(
+            app,
+            "system",
+            "尝试使用 brew 安装 llama.cpp...",
+            Some(STEP_INSTALL),
+        );
+        match Command::new("brew")
+            .args(["install", "llama.cpp"])
+            .output()
+            .await
+        {
             Ok(out) if out.status.success() => return Ok("通过 brew 安装 llama.cpp 成功".into()),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 last_err = format!("brew 失败：{}", stderr.lines().next().unwrap_or(""));
-                emit_log_to(app, "system", &format!("brew 失败：{}", last_err), Some(STEP_INSTALL));
+                emit_log_to(
+                    app,
+                    "system",
+                    &format!("brew 失败：{}", last_err),
+                    Some(STEP_INSTALL),
+                );
             }
             Err(e) => {
                 last_err = format!("brew 不可用：{}", e);
@@ -317,7 +344,12 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
         // apt
-        emit_log_to(app, "system", "尝试使用 apt 安装 llama.cpp...", Some(STEP_INSTALL));
+        emit_log_to(
+            app,
+            "system",
+            "尝试使用 apt 安装 llama.cpp...",
+            Some(STEP_INSTALL),
+        );
         match Command::new("sh")
             .arg("-c")
             .arg("sudo -n apt-get install -y llama.cpp 2>&1 || apt-get install -y llama.cpp 2>&1")
@@ -328,7 +360,12 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 last_err = format!("apt 失败：{}", stderr.lines().next().unwrap_or(""));
-                emit_log_to(app, "system", &format!("apt 失败：{}", last_err), Some(STEP_INSTALL));
+                emit_log_to(
+                    app,
+                    "system",
+                    &format!("apt 失败：{}", last_err),
+                    Some(STEP_INSTALL),
+                );
             }
             Err(e) => {
                 last_err = format!("apt 不可用：{}", e);
@@ -337,13 +374,27 @@ async fn try_install_llama(app: &AppHandle) -> Result<String, String> {
         }
 
         // dnf
-        emit_log_to(app, "system", "尝试使用 dnf 安装 llama.cpp...", Some(STEP_INSTALL));
-        match Command::new("dnf").args(["install", "-y", "llama.cpp"]).output().await {
+        emit_log_to(
+            app,
+            "system",
+            "尝试使用 dnf 安装 llama.cpp...",
+            Some(STEP_INSTALL),
+        );
+        match Command::new("dnf")
+            .args(["install", "-y", "llama.cpp"])
+            .output()
+            .await
+        {
             Ok(out) if out.status.success() => return Ok("通过 dnf 安装 llama.cpp 成功".into()),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 last_err = format!("dnf 失败：{}", stderr.lines().next().unwrap_or(""));
-                emit_log_to(app, "system", &format!("dnf 失败：{}", last_err), Some(STEP_INSTALL));
+                emit_log_to(
+                    app,
+                    "system",
+                    &format!("dnf 失败：{}", last_err),
+                    Some(STEP_INSTALL),
+                );
             }
             Err(e) => {
                 last_err = format!("dnf 不可用：{}", e);
