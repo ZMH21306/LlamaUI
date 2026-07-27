@@ -4,11 +4,11 @@
 
 <div align="center">
 
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![Release][release-shield]][release-url]
-[![Downloads][downloads-shield]][release-url]
+[![Forks](https://img.shields.io/github/forks/ZMH21306/LlamaUI?style=social)](https://github.com/ZMH21306/LlamaUI/fork)
+[![Stars](https://img.shields.io/github/stars/ZMH21306/LlamaUI?style=social)](https://github.com/ZMH21306/LlamaUI/stargazers)
+[![Issues](https://img.shields.io/github/issues/ZMH21306/LlamaUI)](https://github.com/ZMH21306/LlamaUI/issues)
+[![Release](https://img.shields.io/github/v/release/ZMH21306/LlamaUI)](https://github.com/ZMH21306/LlamaUI/releases)
+[![Downloads](https://img.shields.io/github/downloads/ZMH21306/LlamaUI/total)](https://github.com/ZMH21306/LlamaUI/releases)
 
 <h4>
   <a href="https://github.com/ZMH21306/LlamaUI/issues/new?template=bug_report.yml">报告问题</a>
