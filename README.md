@@ -85,7 +85,6 @@ LlamaUI 致力于提供统一的 API，支持 **Windows、Linux、macOS** 三大
 
 - [电子邮件](mailto:example@example.com) – example@example.com
 - QQ 群 – 12345678
-- 其他联系方式请自行补充
 
 ## Star 历史
 
