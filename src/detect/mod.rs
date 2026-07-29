@@ -39,7 +39,7 @@ mod stage4;
 
 use ctx::Ctx;
 
-pub use ctx::{new_cancel_flag, CancelFlag};
+pub use ctx::{CancelFlag, new_cancel_flag};
 
 /// 进度事件 payload
 #[derive(Debug, Clone, Serialize)]
@@ -82,13 +82,7 @@ pub fn detect_llama_with_progress(app: &AppHandle, cancel: CancelFlag) -> Detect
     // 阶段 1
     ctx.emit(1, "① 环境变量 / PATH", "检查中...", false, "running");
     if let Some(p) = stage1::llama() {
-        ctx.emit(
-            1,
-            "① 环境变量 / PATH",
-            &format!("命中：{}", p.display()),
-            true,
-            "found",
-        );
+        ctx.emit(1, "① 环境变量 / PATH", &format!("命中：{}", p.display()), true, "found");
         return ctx.result_done("llama", &p, 1, "通过环境变量或 PATH 找到");
     }
     ctx.emit(1, "① 环境变量 / PATH", "未命中", false, "done");
@@ -177,13 +171,7 @@ pub fn detect_models_with_progress(app: &AppHandle, cancel: CancelFlag) -> Detec
 
     ctx.emit(1, "① 环境变量 / 配置", "检查中...", false, "running");
     if let Some(p) = stage1::models() {
-        ctx.emit(
-            1,
-            "① 环境变量 / 配置",
-            &format!("命中：{}", p.display()),
-            true,
-            "found",
-        );
+        ctx.emit(1, "① 环境变量 / 配置", &format!("命中：{}", p.display()), true, "found");
         return ctx.result_done("models", &p, 1, "通过环境变量找到");
     }
     ctx.emit(1, "① 环境变量 / 配置", "未命中", false, "done");
@@ -234,21 +222,12 @@ pub fn detect_models_with_progress(app: &AppHandle, cancel: CancelFlag) -> Detec
         ctx.emit(
             3,
             "③ 关联 llama-server 目录",
-            &format!(
-                "找到 llama-server {}，但未找到同级 models",
-                llama_exe.display()
-            ),
+            &format!("找到 llama-server {}，但未找到同级 models", llama_exe.display()),
             false,
             "done",
         );
     } else {
-        ctx.emit(
-            3,
-            "③ 关联 llama-server 目录",
-            "未找到任何 llama-server",
-            false,
-            "done",
-        );
+        ctx.emit(3, "③ 关联 llama-server 目录", "未找到任何 llama-server", false, "done");
     }
 
     if ctx.is_cancelled() {

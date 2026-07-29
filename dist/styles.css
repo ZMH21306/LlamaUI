@@ -70,8 +70,8 @@
 
   /* 布局 */
   --topbar-h: 56px;
-  --pane-left-w: 360px;
-  --pane-right-w: 420px;
+  --pane-left-w: 420px;
+  --pane-right-w: 280px;
 }
 
 /* ---- 基础 ---- */
@@ -88,6 +88,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 button, input, select, textarea {
   font: inherit;
@@ -116,6 +117,19 @@ code {
 *::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
 /* ---- 应用骨架 ---- */
+
+/* ---- WebView 适配 ---- */
+.webview {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--bg-1);
+  color-scheme: light dark;
+  transition: filter var(--dur) var(--ease);
+}
+.webview.match-dark {
+  filter: invert(1) hue-rotate(180deg);
+}
 .app {
   height: 100vh;
   display: grid;
@@ -132,7 +146,8 @@ code {
   background: var(--bg-0);
   /* 窗口过小时允许整体横向滚动，避免中间 webview 区域被压缩到 0 */
   min-width: calc(var(--pane-min-w, 240px) * 2 + 320px + 8px + 16px);
-  overflow: hidden;
+  overflow-x: auto; /* 允许横向滚动 */
+  overflow-y: hidden;
 }
 .topbar { grid-area: topbar; }
 .pane-left { grid-area: left; }
@@ -140,7 +155,8 @@ code {
 .pane-right { grid-area: right; }
 .splitter { grid-area: sep-l; }
 .splitter-right { grid-area: sep-r; }
-.pane-left, .pane-right, .pane-main { min-width: 0; min-height: 0; }
+.pane-left, .pane-right, .pane-main { min-height: 0; }
+.pane-left, .pane-right { min-width: var(--pane-min-w); transition: width var(--dur) var(--ease); }
 
 /* ---- 顶栏 ---- */
 .topbar {
@@ -152,6 +168,7 @@ code {
   border-bottom: 1px solid var(--border);
   user-select: none;
   -webkit-app-region: drag;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .topbar .btn, .topbar .btn-primary, .topbar .btn-secondary, .topbar .btn-danger,
 .topbar .status-pill { -webkit-app-region: no-drag; }
@@ -284,6 +301,7 @@ code {
   min-width: 0;
   min-height: 0;
   background: var(--bg-1);
+  transition: background var(--dur) var(--ease);
 }
 .pane-left { border-right: 1px solid var(--border); }
 .pane-right { border-left: 1px solid var(--border); }
@@ -303,6 +321,7 @@ code {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .card-flex { flex: 1 1 auto; min-height: 220px; }
 
@@ -538,12 +557,15 @@ input[type="checkbox"]:checked::after {
 /* ---- 模式 tab ---- */
 .mode-tabs {
   display: flex;
+  flex-wrap: nowrap;               /* 防止换行 */
+  overflow-x: auto;                /* 超出时滚动 */
   padding: var(--s-2) var(--s-2) 0;
   gap: 2px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .mode-tab {
   flex: 1 1 auto;
+  min-width: 0;                     /* 允许更小宽度 */
   height: 32px;
   background: transparent;
   border: none;
@@ -552,7 +574,9 @@ input[type="checkbox"]:checked::after {
   font-weight: 500;
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   position: relative;
-  transition: color var(--dur) var(--ease);
+  white-space: nowrap;              /* 防止文字换行 */
+  text-align: center;               /* 居中 */
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 .mode-tab:hover { color: var(--text-1); }
 .mode-tab.active { color: var(--text-1); }
@@ -910,7 +934,7 @@ input[type="checkbox"]:checked::after {
   max-width: 560px;
   opacity: 0;
   transform: translateY(-12px) scale(0.96);
-  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+  transition: background var(--dur) var(--ease), border-left-color var(--dur) var(--ease), color var(--dur) var(--ease), opacity 200ms var(--ease), transform 200ms var(--ease);
 }
 .toast.show { opacity: 1; transform: translateY(0) scale(1); }
 .toast.success { border-left-color: var(--success); }
@@ -1035,6 +1059,7 @@ input[type="checkbox"]:checked::after {
   padding: 22px 24px 18px;
   animation: modal-pop 0.18s var(--ease);
   overflow: hidden;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .modal-title {
   font-size: var(--fs-lg);
@@ -1233,7 +1258,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
   :root { --pane-right-w: 360px; }
 }
 @media (max-width: 1080px) {
-  :root { --pane-left-w: 320px; --pane-right-w: 320px; }
+  :root { --pane-left-w: 373px; --pane-right-w: 320px; }
 }
 
 /* =========================================================
@@ -1259,6 +1284,9 @@ body.light-theme {
   --accent: #4a7cff;
   --accent-2: #6a96ff;
   --accent-soft: rgba(74, 124, 255, 0.12);
+
+  --success: #2f855a; /* darker green for readability */
+  --success-soft: rgba(47, 133, 90, 0.15);
 
   --shadow-1: 0 1px 3px rgba(0,0,0,0.10);
   --shadow-2: 0 8px 30px rgba(0,0,0,0.12);

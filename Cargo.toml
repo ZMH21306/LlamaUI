@@ -6,11 +6,9 @@ authors = ["LlamaUI"]
 edition = "2021"
 rust-version = "1.70"
 license = "MIT"
-homepage = "https://github.com/your-repo/LlamaUI"
-repository = "https://github.com/your-repo/LlamaUI"
+homepage = ""
+repository = ""
 keywords = ["llm", "llama", "desktop", "tauri", "gui"]
-categories = ["gui", "desktop"]
-readme = "README.md"
 
 [lints.rust]
 # 不安全代码必须显式标注

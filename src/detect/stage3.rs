@@ -107,12 +107,7 @@ fn build_key_dir_roots() -> Vec<PathBuf> {
             roots.push(home.join("llama.cpp").join("build").join("bin"));
             roots.push(home.join("Documents").join("llama.cpp"));
             roots.push(home.join("scoop").join("apps").join("llama.cpp"));
-            roots.push(
-                home.join("scoop")
-                    .join("apps")
-                    .join("llama.cpp")
-                    .join("current"),
-            );
+            roots.push(home.join("scoop").join("apps").join("llama.cpp").join("current"));
         }
     } else {
         roots.push(PathBuf::from("/usr/local/bin"));

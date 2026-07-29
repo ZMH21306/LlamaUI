@@ -20,8 +20,8 @@ const SAVE_DEBOUNCE_MS = 300;
 const DEFAULT_PORT = 10897;
 const DEFAULT_PROGRAM = 'llama-server';
 const MIN_PANE_W = 240;
-const MAX_PANE_LEFT_W = 560;
-const MAX_PANE_RIGHT_W = 640;
+const MAX_PANE_LEFT_W = 720;
+const MAX_PANE_RIGHT_W = 800;
 
 // ============= 状态 =============
 const state = {

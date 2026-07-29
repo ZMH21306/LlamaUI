@@ -200,10 +200,7 @@ pub fn check_models_dir(path: String) -> ModelsDirCheck {
                 "已找到 {} 个 .gguf 模型文件{}",
                 gguf_count,
                 if subdir_with_gguf > 0 {
-                    format!(
-                        "（另发现 {} 个子目录也含 .gguf，建议进入具体模型目录确认）",
-                        subdir_with_gguf
-                    )
+                    format!("（另发现 {} 个子目录也含 .gguf，建议进入具体模型目录确认）", subdir_with_gguf)
                 } else {
                     String::new()
                 }

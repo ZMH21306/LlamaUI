@@ -75,10 +75,11 @@ pub fn expand_pro_vars(text: &str, cfg: &AppConfig) -> String {
     let program = resolve_program(cfg);
     let program_q = quote_path(&program);
     let models_q = quote_path(&cfg.models_dir);
-    text.replace("%%llama_server%%", &program_q) // 默认加引号
-        .replace("%%llama_server_quote%%", &program_q) // 兼容旧模板
-        .replace("%%models_dir%%", &models_q) // 默认加引号
-        .replace("%%models_dir_quote%%", &models_q) // 兼容旧模板
+    text
+        .replace("%%llama_server%%", &program_q)         // 默认加引号
+        .replace("%%llama_server_quote%%", &program_q)  // 兼容旧模板
+        .replace("%%models_dir%%", &models_q)           // 默认加引号
+        .replace("%%models_dir_quote%%", &models_q)     // 兼容旧模板
         .replace("%%port%%", &cfg.port.to_string())
         .replace("%%host%%", "127.0.0.1")
 }
@@ -130,16 +131,8 @@ pub fn validate_pro_program(prog: &str, cfg: &AppConfig) -> anyhow::Result<Strin
     // 1) 与用户配置的路径一致（大小写不敏感、反斜杠归一）
     if let Some(custom) = &cfg.llama_server_path {
         if !custom.is_empty() {
-            let a = prog
-                .to_lowercase()
-                .replace('/', "\\")
-                .trim_matches('"')
-                .to_string();
-            let b = custom
-                .to_lowercase()
-                .replace('/', "\\")
-                .trim_matches('"')
-                .to_string();
+            let a = prog.to_lowercase().replace('/', "\\").trim_matches('"').to_string();
+            let b = custom.to_lowercase().replace('/', "\\").trim_matches('"').to_string();
             if a == b {
                 return Ok(prog.to_string());
             }
@@ -152,13 +145,7 @@ pub fn validate_pro_program(prog: &str, cfg: &AppConfig) -> anyhow::Result<Strin
         .unwrap_or(prog)
         .to_lowercase();
     let stem = file_name.trim_end_matches(".exe");
-    const ALLOWED_STEMS: &[&str] = &[
-        "llama-server",
-        "llama-cli",
-        "llama-bench",
-        "llama-embedding",
-        "llama-export",
-    ];
+    const ALLOWED_STEMS: &[&str] = &["llama-server", "llama-cli", "llama-bench", "llama-embedding", "llama-export"];
     if ALLOWED_STEMS.contains(&stem) {
         return Ok(prog.to_string());
     }
@@ -204,10 +191,7 @@ mod tests {
     #[test]
     fn validate_pro_program_rejects_powershell() {
         let cfg = empty_cfg();
-        let r = validate_pro_program(
-            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            &cfg,
-        );
+        let r = validate_pro_program("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", &cfg);
         assert!(r.is_err(), "powershell.exe 必须被拒绝");
     }
 
@@ -273,11 +257,7 @@ mod tests {
         let v = split_command_line(r#""C:\Program Files\llama.cpp\llama-server.exe" -ngl 99"#);
         assert_eq!(
             v,
-            vec![
-                "C:\\Program Files\\llama.cpp\\llama-server.exe",
-                "-ngl",
-                "99"
-            ]
+            vec!["C:\\Program Files\\llama.cpp\\llama-server.exe", "-ngl", "99"]
         );
     }
 
@@ -319,10 +299,7 @@ mod tests {
         );
         // 整个被替换后的 models_dir 部分应在一个引号对内（防止分号分隔）。
         // 修正：quote_path 会把所有内部 `"` 转义为 `\"`，故期望串也必须带此转义。
-        assert!(
-            expanded.contains(r#""D:\data\"; --api-key ATTACKER_KEY \"pwn""#),
-            "models_dir 必须被完整引号包裹：got {}",
-            expanded
-        );
+        assert!(expanded.contains(r#""D:\data\"; --api-key ATTACKER_KEY \"pwn""#),
+                "models_dir 必须被完整引号包裹：got {}", expanded);
     }
 }

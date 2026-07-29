@@ -147,16 +147,9 @@ mod tests {
         assert!(inner.child.is_none(), "新进程 child 必须为 None");
         assert!(inner.pid.is_none(), "新进程 pid 必须为 None");
         assert!(inner.started_at.is_none(), "新进程 started_at 必须为 None");
-        assert!(
-            inner.active_port.is_none(),
-            "新进程 active_port 必须为 None"
-        );
+        assert!(inner.active_port.is_none(), "新进程 active_port 必须为 None");
         assert!(inner.job.is_none(), "新进程 job 必须为 None");
-        assert_eq!(
-            inner.status,
-            ServerStatus::Stopped,
-            "新进程 status 必须为 Stopped"
-        );
+        assert_eq!(inner.status, ServerStatus::Stopped, "新进程 status 必须为 Stopped");
         assert!(inner.logs.is_empty(), "新进程 logs 必须为空");
     }
 
