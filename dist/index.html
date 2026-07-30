@@ -193,6 +193,10 @@
             </div>
           </div>
         </div>
+        <!-- WebView 工具条：在浏览器打开 -->
+        <div class="webview-toolbar">
+          <button class="btn-secondary btn-small" id="openInBrowser">在浏览器打开</button>
+        </div>
         <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI" style="display:none;"></iframe>
       </div>
     </main>
@@ -278,6 +282,8 @@
     </aside>
   </div>
 
+  <!-- 主题引擎：基于 Oklab 色彩空间的丝滑主题切换 -->
+  <script src="theme-engine.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
