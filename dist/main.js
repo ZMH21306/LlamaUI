@@ -434,17 +434,25 @@ function syncIframeTheme() {
 }
 
 function toggleTheme() {
+  // 立即更新状态（用于 UI 响应）
   state.lightTheme = !state.lightTheme;
-  document.body.classList.toggle('light-theme', state.lightTheme);
+  const isLight = state.lightTheme;
+
+  // 更新按钮图标（立即响应）
   const btn = els.themeToggle;
   if (btn) {
-    btn.innerHTML = state.lightTheme
+    btn.innerHTML = isLight
       ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>'
       : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>';
   }
-  // 同步 iframe 主题（color-scheme 透传 + 暗色下 filter 反相）
+
+  // 同步 iframe 主题（立即响应）
   syncIframeTheme();
-  showNotification(state.lightTheme ? '已切换到亮色主题' : '已切换到暗色主题', 'info', 1500);
+
+  // 使用主题引擎执行颜色动画过渡（带 300ms 防抖）
+  themeManager.setLightTheme(isLight);
+
+  showNotification(isLight ? '已切换到亮色主题' : '已切换到暗色主题', 'info', 1500);
 }
 
 // ============= 配置预设 =============
@@ -1509,8 +1517,10 @@ function attachUIListeners() {
     const url = `http://127.0.0.1:${state.activePort || state.port}`;
     try {
       await invoke('open_external_url', { url });
+      showNotification('已在浏览器中打开', 'success', 1500);
     } catch (e) {
       appendLog({ timestamp: now(), stream: 'system', text: `无法打开浏览器：${e}` });
+      showNotification('打开浏览器失败，请检查是否已安装默认浏览器', 'error', 2500);
     }
   });
   els.reloadWebview?.addEventListener('click', () => {
