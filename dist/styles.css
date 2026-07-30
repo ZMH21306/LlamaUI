@@ -179,7 +179,7 @@ code {
   display: flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, var(--accent), #8b5cf6);
   border-radius: var(--r-md);
-  color: white;
+  color: var(--text-on-accent);
   box-shadow: var(--shadow-1);
 }
 .brand-text h1 {
@@ -539,7 +539,7 @@ input[type="checkbox"]:checked::after {
   position: absolute;
   left: 4px; top: 1px;
   width: 5px; height: 9px;
-  border: solid white;
+  border: solid var(--text-on-accent);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -715,6 +715,12 @@ input[type="checkbox"]:checked::after {
   height: 100%;
   min-width: 0;
   min-height: 0;
+}
+.webview-toolbar {
+  position: absolute;
+  top: var(--s-3);
+  right: var(--s-3);
+  z-index: 10;
 }
 .webview-iframe {
   width: 100%;
@@ -948,7 +954,7 @@ input[type="checkbox"]:checked::after {
   font-weight: 700;
   font-size: 12px;
   flex-shrink: 0;
-  color: white;
+  color: var(--text-on-accent);
 }
 .toast.success .toast-icon { background: var(--success); }
 .toast.error   .toast-icon { background: var(--danger); }
@@ -1263,34 +1269,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 
 /* =========================================================
    亮色主题
+   注：颜色变量现在由 theme-engine.js 动态计算，
+   此处仅保留非颜色相关的样式覆盖
    ========================================================= */
-body.light-theme {
-  --bg-0: #f5f6fa;
-  --bg-1: #ffffff;
-  --bg-2: #f0f1f5;
-  --bg-3: #e8eaf0;
-  --bg-input: #ffffff;
-  --bg-elevated: #ffffff;
-
-  --border: #dce0e8;
-  --border-strong: #cdd1da;
-  --border-subtle: #eef0f4;
-
-  --text-1: #1a1d26;
-  --text-2: #4e5668;
-  --text-3: #8a92a3;
-  --text-on-accent: #ffffff;
-
-  --accent: #4a7cff;
-  --accent-2: #6a96ff;
-  --accent-soft: rgba(74, 124, 255, 0.12);
-
-  --success: #2f855a; /* darker green for readability */
-  --success-soft: rgba(47, 133, 90, 0.15);
-
-  --shadow-1: 0 1px 3px rgba(0,0,0,0.10);
-  --shadow-2: 0 8px 30px rgba(0,0,0,0.12);
-}
 body.light-theme .topbar { border-bottom-color: var(--border); }
 body.light-theme code { background: var(--bg-2); color: var(--accent); }
 body.light-theme .meter { background: var(--bg-3); }
