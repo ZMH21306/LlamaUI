@@ -10,13 +10,16 @@
 'use strict';
 
 // ============= 基础色板定义（HSL） =============
-// 色相 H：主色调固定为 225（蓝紫色系）
+// 设计理念：深空紫 + 霓虹青 — 科技感、专业、现代
+// 色相 H：主色调为 192（青色系）
 // 饱和度 S：暗色模式提高饱和度，浅色模式降低饱和度
 // 明度 L：暗色模式降低明度，浅色模式提高明度
 
 const BASE_PALETTE = {
-  // 主色相（蓝紫系）
-  primaryH: 225,
+  // 主色相（霓虹青）
+  primaryH: 192,
+  // 次要强调色色相（电光紫）
+  secondaryH: 265,
   // 状态色色相
   successH: 150,
   warningH: 37,
@@ -70,40 +73,40 @@ function generatePalette(isLight) {
       infoSoft: { h: infoH, s: 90, l: 60, a: 0.15 },
     };
   } else {
-    // 暗色模式：低明度、高饱和度
+    // 暗色模式：低明度、高饱和度，深空紫主题
     return {
-      bg0: { h: primaryH, s: 20, l: 4 },     // --bg-0: 最外层背景（最深）
-      bg1: { h: primaryH, s: 16, l: 7 },     // --bg-1: 卡片背景
-      bg2: { h: primaryH, s: 14, l: 10 },    // --bg-2: 输入框/按钮
-      bg3: { h: primaryH, s: 12, l: 14 },    // --bg-3: hover 状态
-      bgInput: { h: primaryH, s: 16, l: 7 },
-      bgElevated: { h: primaryH, s: 18, l: 11 },
+      bg0: { h: primaryH, s: 20, l: 4 },       // --bg-0: 深空黑
+      bg1: { h: primaryH, s: 18, l: 7 },       // --bg-1: 卡片背景
+      bg2: { h: primaryH, s: 16, l: 10 },      // --bg-2: 输入框/按钮
+      bg3: { h: primaryH, s: 14, l: 14 },      // --bg-3: hover 状态
+      bgInput: { h: primaryH, s: 18, l: 7 },
+      bgElevated: { h: primaryH, s: 20, l: 11 },
 
-      // 边框
-      border: { h: primaryH, s: 16, l: 17 },
-      borderStrong: { h: primaryH, s: 16, l: 22 },
-      borderSubtle: { h: primaryH, s: 14, l: 12 },
+      // 边框（微妙的紫色倾向）
+      border: { h: primaryH, s: 18, l: 18 },
+      borderStrong: { h: primaryH, s: 18, l: 24 },
+      borderSubtle: { h: primaryH, s: 16, l: 12 },
 
-      // 文本（暗色背景上用浅色文本）
-      text1: { h: primaryH, s: 12, l: 92 },  // 主文本
-      text2: { h: primaryH, s: 10, l: 68 },  // 次要文本
-      text3: { h: primaryH, s: 8,  l: 48 },  // 弱化文本
-      textOnAccent: { h: 0, s: 0, l: 100 },  // 强调色上的文本（白色）
+      // 文本（高对比度，易读）
+      text1: { h: primaryH, s: 14, l: 93 },    // 主文本 - 冷白
+      text2: { h: primaryH, s: 14, l: 62 },    // 次要文本
+      text3: { h: primaryH, s: 12, l: 42 },    // 弱化文本
+      textOnAccent: { h: 0, s: 0, l: 100 },
 
-      // 强调色（暗色模式下更鲜艳）
-      accent: { h: primaryH, s: 85, l: 62 },
-      accent2: { h: primaryH, s: 85, l: 72 },
-      accentSoft: { h: primaryH, s: 85, l: 62, a: 0.16 },
+      // 强调色（霓虹青 - 更鲜艳）
+      accent: { h: primaryH, s: 85, l: 58 },
+      accent2: { h: primaryH, s: 85, l: 70 },
+      accentSoft: { h: primaryH, s: 85, l: 58, a: 0.12 },
 
       // 状态色
       success: { h: successH, s: 70, l: 60 },
-      successSoft: { h: successH, s: 70, l: 60, a: 0.15 },
+      successSoft: { h: successH, s: 70, l: 60, a: 0.12 },
       warning: { h: warningH, s: 90, l: 55 },
-      warningSoft: { h: warningH, s: 90, l: 55, a: 0.16 },
+      warningSoft: { h: warningH, s: 90, l: 55, a: 0.12 },
       danger: { h: dangerH, s: 90, l: 62 },
-      dangerSoft: { h: dangerH, s: 90, l: 62, a: 0.16 },
+      dangerSoft: { h: dangerH, s: 90, l: 62, a: 0.12 },
       info: { h: infoH, s: 90, l: 68 },
-      infoSoft: { h: infoH, s: 90, l: 68, a: 0.15 },
+      infoSoft: { h: infoH, s: 90, l: 68, a: 0.12 },
     };
   }
 }
@@ -268,7 +271,7 @@ function easeInOutCubic(t) {
 
 // ============= ThemeManager =============
 
-const ANIMATION_DURATION = 400; // 动画时长 400ms
+const ANIMATION_DURATION = 350; // 动画时长 350ms
 
 class ThemeManager {
   constructor() {

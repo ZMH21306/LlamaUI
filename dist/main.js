@@ -130,6 +130,7 @@ const els = {
   webviewLoading: $('webviewLoading'),
   loadingUrl: $('loadingUrl'),
   openInBrowser: $('openInBrowser'),
+  openInBrowserToolbar: $('openInBrowserToolbar'),
   reloadWebview: $('reloadWebview'),
   stopFromLoading: $('stopFromLoading'),
   webview: $('webview'),
@@ -1513,7 +1514,7 @@ function attachUIListeners() {
   els.autoScroll?.addEventListener('change', scheduleSave);
 
   // WebView 加载遮罩操作按钮
-  els.openInBrowser?.addEventListener('click', async () => {
+  const handleOpenInBrowser = async () => {
     const url = `http://127.0.0.1:${state.activePort || state.port}`;
     try {
       await invoke('open_external_url', { url });
@@ -1522,7 +1523,9 @@ function attachUIListeners() {
       appendLog({ timestamp: now(), stream: 'system', text: `无法打开浏览器：${e}` });
       showNotification('打开浏览器失败，请检查是否已安装默认浏览器', 'error', 2500);
     }
-  });
+  };
+  els.openInBrowser?.addEventListener('click', handleOpenInBrowser);
+  els.openInBrowserToolbar?.addEventListener('click', handleOpenInBrowser);
   els.reloadWebview?.addEventListener('click', () => {
     if (!els.webview) return;
     if (els.webview) delete els.webview.dataset.loaded;
