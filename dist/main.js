@@ -123,7 +123,13 @@ const els = {
   // 日志
   logs: $('logs'),
   clearLogs: $('clearLogs'),
+  exportLogs: $('exportLogs'),
   autoScroll: $('autoScroll'),
+
+  // 配置备份
+  createBackup: $('createBackup'),
+  refreshBackups: $('refreshBackups'),
+  backupList: $('backupList'),
 
   // WebView
   webviewPlaceholder: $('webviewPlaceholder'),
@@ -1511,6 +1517,9 @@ function attachUIListeners() {
     }
   });
   els.clearLogs?.addEventListener('click', clearAllLogs);
+  els.exportLogs?.addEventListener('click', handleExportLogs);
+  els.createBackup?.addEventListener('click', handleCreateBackup);
+  els.refreshBackups?.addEventListener('click', refreshBackupList);
   els.autoScroll?.addEventListener('change', scheduleSave);
 
   // WebView 加载遮罩操作按钮
@@ -2052,6 +2061,11 @@ async function init() {
   safeCall(async () => {
     await invoke('run_initialization');
   }, '初始化失败');
+
+  // 加载备份列表
+  safeCall(async () => {
+    await refreshBackupList();
+  }, '加载备份列表失败');
 }
 
 /**
@@ -2108,5 +2122,142 @@ function buildLogFragment(line) {
   return div;
 }
 
+// ============================================================
+// 日志导出功能
+// ============================================================
+
+/**
+ * 导出日志到文件。
+ * 支持 txt/json/csv 三种格式。
+ */
+async function handleExportLogs() {
+  // 简单格式选择
+  const format = prompt('导出格式（txt/json/csv）：', 'txt');
+  if (!format || !['txt', 'json', 'csv'].includes(format)) {
+    showNotification('请选择有效的导出格式（txt、json 或 csv）', 'warning');
+    return;
+  }
+
+  const { save } = window.__TAURI__.dialog;
+  const path = await save({
+    defaultPath: `llamaui-logs-${Date.now()}.${format}`,
+    filters: [{
+      name: `日志文件 (*.${format})`,
+      extensions: [format]
+    }]
+  });
+
+  if (!path) return; // 用户取消
+
+  try {
+    await invoke('export_logs', {
+      req: {
+        format: format,
+        path: path,
+        scope: 'all'
+      }
+    });
+    showNotification('日志导出成功', 'success');
+  } catch (e) {
+    showNotification('导出失败：' + e, 'error');
+  }
+}
+
+// ============================================================
+// 配置备份功能
+// ============================================================
+
+/**
+ * 渲染备份列表
+ */
+function renderBackupList(backups) {
+  const listEl = els.backupList;
+  if (!listEl) return;
+
+  if (!backups || backups.length === 0) {
+    listEl.innerHTML = '<p class="hint">暂无备份</p>';
+    return;
+  }
+
+  const html = backups.map(b => {
+    const date = new Date(b.timestamp);
+    const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
+    return `<div class="backup-item" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-color);">
+      <div>
+        <div style="font-size:12px;color:var(--text-secondary);">${dateStr}</div>
+        <div style="font-size:11px;color:var(--text-hint);">v${b.config_version}</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn-secondary btn-small" onclick="restoreBackup('${b.filename}')" title="恢复此备份">恢复</button>
+        <button class="btn-danger btn-small" onclick="deleteBackup('${b.filename}')" title="删除此备份">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  listEl.innerHTML = html;
+}
+
+/**
+ * 创建配置备份
+ */
+async function handleCreateBackup() {
+  try {
+    const resp = await invoke('create_config_backup');
+    showNotification(`备份已创建：${resp.filename}`, 'success');
+    // 刷新列表
+    await refreshBackupList();
+  } catch (e) {
+    showNotification('备份失败：' + e, 'error');
+  }
+}
+
+/**
+ * 刷新备份列表
+ */
+async function refreshBackupList() {
+  try {
+    const backups = await invoke('list_config_backups');
+    renderBackupList(backups);
+  } catch (e) {
+    showNotification('获取备份列表失败：' + e, 'error');
+  }
+}
+
+/**
+ * 恢复配置备份（全局函数，供 onclick 调用）
+ */
+async function restoreBackup(filename) {
+  if (!confirm(`确定要恢复备份 "${filename}" 吗？当前配置将被覆盖。`)) return;
+  try {
+    await invoke('restore_config_backup', { filename });
+    showNotification('配置已恢复', 'success');
+    // 刷新配置显示
+    await loadConfigToForm();
+  } catch (e) {
+    showNotification('恢复失败：' + e, 'error');
+  }
+}
+
+/**
+ * 删除配置备份（全局函数，供 onclick 调用）
+ */
+async function deleteBackup(filename) {
+  if (!confirm(`确定要删除备份 "${filename}" 吗？此操作不可撤销。`)) return;
+  try {
+    await invoke('delete_config_backup', { filename });
+    showNotification('备份已删除', 'success');
+    await refreshBackupList();
+  } catch (e) {
+    showNotification('删除失败：' + e, 'error');
+  }
+}
+
+// 暴露到全局作用域供 onclick 调用
+window.restoreBackup = restoreBackup;
+window.deleteBackup = deleteBackup;
+
+// ============================================================
 // 启动
+// ============================================================
+
 init().catch((e) => console.error('init error:', e));

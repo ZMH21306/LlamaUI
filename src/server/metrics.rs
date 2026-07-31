@@ -25,7 +25,7 @@ struct CachedGpu {
 static GPU_CACHE: Mutex<Option<CachedGpu>> = Mutex::new(None);
 
 /// 周期性的进程指标快照（发给前端）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metrics {
     pub pid: u32,
     pub cpu_percent: f32,

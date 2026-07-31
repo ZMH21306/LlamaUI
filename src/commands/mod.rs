@@ -34,11 +34,15 @@ use parking_lot::Mutex;
 
 use crate::detect::CancelFlag;
 
+pub mod backup_cmd;
 pub mod config_cmd;
 pub mod detect_cmd;
+pub mod export_cmd;
 pub mod init_cmd;
+pub mod recovery_cmd;
 pub mod server_cmd;
 pub mod system_cmd;
+pub mod update_cmd;
 
 /// Shared application state — managed by Tauri.
 ///

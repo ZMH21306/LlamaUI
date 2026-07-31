@@ -157,6 +157,22 @@
           </div>
         </section>
 
+        <!-- 配置备份 -->
+        <section class="card" id="backupSection">
+          <header class="card-header">
+            <h2>配置备份</h2>
+          </header>
+          <div class="card-body">
+            <div class="backup-actions" style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <button class="btn-primary btn-small" id="createBackup" type="button">立即备份</button>
+              <button class="btn-secondary btn-small" id="refreshBackups" type="button">刷新列表</button>
+            </div>
+            <div class="backup-list" id="backupList" style="max-height: 200px; overflow-y: auto;">
+              <p class="hint">暂无备份</p>
+            </div>
+          </div>
+        </section>
+
       </div>
     </aside>
 
@@ -272,6 +288,7 @@
                 <input type="checkbox" id="autoScroll" checked />
                 <span>自动滚动</span>
               </label>
+              <button class="btn-secondary btn-small" id="exportLogs" type="button" title="导出日志">导出</button>
               <button class="btn-secondary btn-small" id="clearLogs" type="button">清空</button>
             </div>
           </header>

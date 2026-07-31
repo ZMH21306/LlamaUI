@@ -30,6 +30,7 @@
     )
 )]
 
+mod backup;
 mod commands;
 mod config;
 mod detect;
@@ -37,7 +38,10 @@ mod error;
 mod events;
 mod init;
 mod log;
+mod metrics_enhanced;
+mod recovery;
 mod server;
+mod update_check;
 mod util;
 
 pub use error::{AppError, ConfigError, DetectError, ProcessError};
@@ -58,20 +62,35 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            // 服务进程控制
             commands::server_cmd::start_server,
             commands::server_cmd::stop_server,
             commands::server_cmd::restart_server,
             commands::server_cmd::get_status,
             commands::server_cmd::get_logs,
             commands::server_cmd::clear_logs,
+            // 配置读写
             commands::config_cmd::save_config,
             commands::config_cmd::load_config,
+            // 自动检测
             commands::detect_cmd::detect_llama_server,
             commands::detect_cmd::detect_models_dir,
             commands::detect_cmd::cancel_detection,
             commands::detect_cmd::check_models_dir,
+            // 启动初始化
             commands::init_cmd::run_initialization,
+            // 杂项
             commands::system_cmd::open_external_url,
+            // 新增功能
+            commands::export_cmd::export_logs,
+            commands::backup_cmd::create_config_backup,
+            commands::backup_cmd::list_config_backups,
+            commands::backup_cmd::restore_config_backup,
+            commands::backup_cmd::delete_config_backup,
+            commands::recovery_cmd::get_diagnosis,
+            commands::recovery_cmd::auto_fix_issues,
+            commands::update_cmd::check_updates,
+            commands::update_cmd::cleanup_old_version,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

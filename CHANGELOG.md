@@ -2,6 +2,26 @@
 
 本文件记录 LlamaUI 项目的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-07-31
+
+### 新增
+- **日志导出**：支持将运行日志导出为 txt/json/csv 格式
+- **配置备份**：手动备份、自动保留最近 5 个备份、一键恢复/删除
+- **错误自动恢复**：诊断配置问题并提供修复建议（端口占用自动顺延）
+- **性能监控增强**：滑动平均（5 次采样窗口）、趋势指示箭头、历史峰值追踪
+- **自动更新检查**：通过 GitHub Releases API 检查最新版本，检测旧版本残留并提示清理
+
+### 改进
+- `Metrics` 结构体实现 `Default` trait，支持默认值初始化
+- 前端备份面板集成到左侧配置面板底部
+- 诊断结果支持序列化，可通过 IPC 传递给前端
+
+### 技术变更
+- 新增模块：`backup`（配置备份管理）、`recovery`（错误诊断）、`metrics_enhanced`（增强指标）、`update_check`（自动更新检查）
+- 新增 IPC 命令：`export_logs`、`create_config_backup`、`list_config_backups`、`restore_config_backup`、`delete_config_backup`、`get_diagnosis`、`auto_fix_issues`、`check_updates`、`cleanup_old_version`
+- 单元测试从 115 个增加到 139 个
+- 新增依赖：`ureq`（HTTP 客户端，用于检查更新）
+
 ## [0.3.0] - 2026-07-31
 
 ### 新增
