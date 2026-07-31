@@ -118,7 +118,6 @@ const els = {
   metricVramBar: $('metricVramBar'),
   metricGpuText: $('metricGpuText'),
   metricGpuBar: $('metricGpuBar'),
-  metricAppMem: $('metricAppMem'),
 
   // 日志
   logs: $('logs'),
@@ -520,7 +519,10 @@ function updateWebviewVisibility() {
 
   const isRunning = state.status === 'Running';
   const hasPort = !!state.activePort;
+  const wrapper = document.querySelector('.webview-wrapper');
   if (isRunning && hasPort) {
+    // 运行中：显示 webview 区域
+    if (wrapper) wrapper.style.display = '';
     // 仅当 iframe 还在加载时显示遮罩
     if (els.webview?.dataset.loaded !== '1') {
       showWebviewLoading();
@@ -538,8 +540,9 @@ function updateWebviewVisibility() {
   } else {
     hideWebviewLoading();
     if (els.webview) els.webview.style.display = 'none';
-    if (els.webviewPlaceholder) els.webviewPlaceholder.style.display = 'flex';
-    if (els.placeholderUrl) els.placeholderUrl.textContent = url;
+    if (els.webviewPlaceholder) els.webviewPlaceholder.style.display = 'none';
+    // 未启动时隐藏整个 webview 区域
+    if (wrapper) wrapper.style.display = 'none';
     if (els.webview) {
       els.webview.src = 'about:blank';
       delete els.webview.dataset.loaded;
@@ -1061,15 +1064,6 @@ function applyMetrics(m) {
   setText(els.metricCpuText, `${cpuPct.toFixed(1)}%`);
   safeSetMeter(els.metricCpuBar, cpuPct, { warn: 70, danger: 90 });
 
-  // 本应用内存占用
-  const appMem = m.app_memory_bytes || 0;
-  if (appMem > 0) {
-    const appMemMb = appMem / (1024 * 1024);
-    setText(els.metricAppMem, `${appMemMb.toFixed(0)} MB`);
-  } else {
-    setText(els.metricAppMem, '—');
-  }
-
   // 虚拟地址空间：完整虚拟地址空间（含 mmap 映射的模型文件）
   // 仅用于显示加载了多大模型，不用于反映实际内存压力
   const virtBytes = m.virtual_size_bytes || 0;
@@ -1111,8 +1105,8 @@ function applyMetrics(m) {
 /** 批量 appendLog 队列：把高频日志合并到 rAF 一次性写入 DOM，避免卡顿 */
 const logQueue = [];
 let logFlushScheduled = false;
-const LOG_BATCH_MAX = 200; // 单次 flush 最多处理行数
-const LOG_QUEUE_MAX = 5000; // 队列上限：极端情况下丢弃最旧日志
+const LOG_BATCH_MAX = 500; // 单次 flush 最多处理行数（提升性能）
+const LOG_QUEUE_MAX = 3000; // 队列上限：极端情况下丢弃最旧日志（降低内存占用）
 
 function flushLogQueue() {
   logFlushScheduled = false;
@@ -1133,6 +1127,7 @@ function flushLogQueue() {
     }
     const div = document.createElement('div');
     div.className = `log-line stream-${line.stream || 'stdout'}`;
+    // 时间戳换行显示，防止内容挤压
     const ts = document.createElement('span');
     ts.className = 'log-time';
     ts.textContent = line.timestamp || '';
@@ -1283,9 +1278,11 @@ function setupSplitter(el, side /* 'left' | 'right' */) {
   let dragging = false;
   let startX = 0;
   let startW = 0;
+  // 按键追踪：确保只有按下左键时才保持拖拽
+  let mouseDownOnSplitter = false;
 
   const onMove = (e) => {
-    if (!dragging) return;
+    if (!dragging || !mouseDownOnSplitter) return;
     const dx = e.clientX - startX;
     const totalW = window.innerWidth;
     if (side === 'left') {
@@ -1299,21 +1296,33 @@ function setupSplitter(el, side /* 'left' | 'right' */) {
   const onUp = () => {
     if (!dragging) return;
     dragging = false;
+    mouseDownOnSplitter = false;
     el.classList.remove('active');
     document.body.style.cursor = '';
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    // 释放 pointer capture 防止焦点丢失后事件泄漏
+    try { el.releasePointerCapture?.(0); } catch {}
+  };
+  // 在 document 上监听 mousedown 防止失焦后继续跟随
+  const onGlobalUp = () => {
+    if (dragging) onUp();
   };
   el.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // 仅左键
     dragging = true;
+    mouseDownOnSplitter = true;
     startX = e.clientX;
     const cs = getComputedStyle(document.documentElement);
     startW = parseInt(side === 'left' ? cs.getPropertyValue('--pane-left-w') : cs.getPropertyValue('--pane-right-w'), 10) || 0;
     el.classList.add('active');
     document.body.style.cursor = 'col-resize';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    // 在捕获阶段监听，确保即使 iframe 抢焦点也能收到事件
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('mouseup', onUp, true);
+    document.addEventListener('mouseup', onGlobalUp, { once: true, capture: true });
     e.preventDefault();
+    e.stopPropagation();
   });
 }
 
@@ -1523,18 +1532,19 @@ function attachUIListeners() {
   els.autoScroll?.addEventListener('change', scheduleSave);
 
   // WebView 加载遮罩操作按钮
-  const handleOpenInBrowser = async () => {
-    const url = `http://127.0.0.1:${state.activePort || state.port}`;
+  const handleRefreshWebview = () => {
+    if (!els.webview) return;
+    if (els.webview) delete els.webview.dataset.loaded;
     try {
-      await invoke('open_external_url', { url });
-      showNotification('已在浏览器中打开', 'success', 1500);
+      const url = `http://127.0.0.1:${state.activePort || state.port}?t=${Date.now()}`;
+      els.webview.src = url;
+      showWebviewLoading();
     } catch (e) {
-      appendLog({ timestamp: now(), stream: 'system', text: `无法打开浏览器：${e}` });
-      showNotification('打开浏览器失败，请检查是否已安装默认浏览器', 'error', 2500);
+      appendLog({ timestamp: now(), stream: 'system', text: `重新加载失败：${e}` });
     }
   };
-  els.openInBrowser?.addEventListener('click', handleOpenInBrowser);
-  els.openInBrowserToolbar?.addEventListener('click', handleOpenInBrowser);
+  els.openInBrowser?.addEventListener('click', handleRefreshWebview);
+  els.openInBrowserToolbar?.addEventListener('click', handleRefreshWebview);
   els.reloadWebview?.addEventListener('click', () => {
     if (!els.webview) return;
     if (els.webview) delete els.webview.dataset.loaded;
@@ -2001,6 +2011,22 @@ async function init() {
     listen('server-metrics', (e) => applyMetrics(e.payload)),
     listen('server-step', (e) => handleStep(e.payload)),
     listen('detect-progress', (e) => onDetectProgressInline(e.payload)),
+    // 关闭窗口时若 llama 仍在运行，弹出确认提示
+    listen('close-requested', async () => {
+      const confirmed = await showConfirm({
+        title: 'Llama 仍在运行',
+        body: 'Llama 服务正在运行中，关闭应用将同时停止服务。确定要关闭吗？',
+        confirmText: '关闭并退出',
+        cancelText: '取消',
+      });
+      if (confirmed) {
+        try {
+          await invoke('force_close');
+        } catch (e) {
+          appendLog({ timestamp: now(), stream: 'system', text: `关闭失败：${e}` });
+        }
+      }
+    }),
   ];
   await Promise.all(subs);
 

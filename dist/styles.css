@@ -357,11 +357,7 @@ code {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background var(--dur) var(--ease), border-color var(--dur) var(--ease);
-}
-.card:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-2);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .card-flex { flex: 1 1 auto; min-height: 220px; }
 
@@ -921,9 +917,9 @@ input[type="checkbox"]:checked::after {
   max-height: 60vh;
 }
 
-.log-line { padding: 1px 0; display: flex; gap: 8px; word-break: break-all; }
-.log-time { color: var(--text-3); flex-shrink: 0; }
-.log-text { flex: 1 1 auto; }
+.log-line { padding: 1px 0; display: block; word-break: break-all; }
+.log-time { color: var(--text-3); font-size: 11px; display: block; margin-bottom: 1px; white-space: nowrap; }
+.log-text { display: block; word-break: break-all; white-space: pre-wrap; }
 .log-line.stream-stdout .log-text { color: var(--text-1); }
 .log-line.stream-stderr .log-text { color: #fcd34d; }
 .log-line.stream-system .log-text { color: var(--info); }

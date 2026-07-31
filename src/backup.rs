@@ -99,10 +99,22 @@ pub fn restore_backup(filename: &str) -> anyhow::Result<AppConfig> {
 
 /// 删除指定备份
 pub fn delete_backup(filename: &str) -> anyhow::Result<()> {
-    let path = backup_dir().join(filename);
-    if path.exists() {
-        fs::remove_file(path)?;
+    // 安全校验：防止路径穿越攻击
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err(anyhow::anyhow!("非法文件名：{}", filename));
     }
+    let path = backup_dir().join(filename);
+    if !path.exists() {
+        return Err(anyhow::anyhow!("备份文件不存在：{}", filename));
+    }
+    // 确保文件在备份目录内（防止符号链接逃逸）
+    let canonical_backup = backup_dir().canonicalize().unwrap_or_else(|_| backup_dir().clone());
+    let canonical_path = path.canonicalize().map_err(|e| anyhow::anyhow!("无法解析路径：{}", e))?;
+    if !canonical_path.starts_with(&canonical_backup) {
+        return Err(anyhow::anyhow!("路径不在备份目录内：{}", filename));
+    }
+    fs::remove_file(&canonical_path)
+        .map_err(|e| anyhow::anyhow!("删除文件失败 ({}): {}", canonical_path.display(), e))?;
     Ok(())
 }
 

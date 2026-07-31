@@ -49,6 +49,8 @@ pub use events::{LogLine, ServerStatus, StepStatus};
 pub use log::{emit_log, emit_log_to, emit_status, emit_step};
 
 use commands::AppState;
+use tauri::Emitter;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::print_stderr)] // Tauri 启动失败时 WebView 不可用，stderr 是唯一输出通道
@@ -61,6 +63,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let status = state.server.status();
+                if status == crate::events::ServerStatus::Running
+                    || status == crate::events::ServerStatus::Starting
+                {
+                    // 拦截关闭请求，提示用户先停止服务
+                    api.prevent_close();
+                    let _ = window.emit("close-requested", true);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // 服务进程控制
             commands::server_cmd::start_server,
@@ -69,6 +84,7 @@ pub fn run() {
             commands::server_cmd::get_status,
             commands::server_cmd::get_logs,
             commands::server_cmd::clear_logs,
+            commands::server_cmd::force_close,
             // 配置读写
             commands::config_cmd::save_config,
             commands::config_cmd::load_config,

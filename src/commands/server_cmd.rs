@@ -127,6 +127,18 @@ pub fn clear_logs(state: State<'_, AppState>) {
     state.server.clear_logs();
 }
 
+/// 立即关闭应用（用户确认后调用）。先停止服务再退出。
+#[tauri::command]
+pub async fn force_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    // 停止服务（忽略错误，尽力而为）
+    let _ = state.server.stop(&app).await;
+    // 等待子进程完全退出
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // 退出应用
+    app.exit(0);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! 单元测试覆盖：状态响应字段顺序、序列化格式。

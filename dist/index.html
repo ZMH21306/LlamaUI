@@ -203,7 +203,7 @@
             <p>首次启动需要把模型读入显存/内存，耗时取决于模型大小和磁盘速度（30 秒 ~ 数分钟）。</p>
             <p class="hint">如果长时间不出现，请检查 <code id="loadingUrl">http://127.0.0.1:10897</code> 是否可访问，或重启服务。</p>
             <div class="loading-actions">
-              <button class="btn-secondary" id="openInBrowser">在浏览器打开</button>
+              <button class="btn-secondary" id="openInBrowser">刷新页面</button>
               <button class="btn-secondary" id="reloadWebview">重新加载</button>
               <button class="btn-secondary" id="stopFromLoading">停止服务</button>
             </div>
@@ -211,7 +211,7 @@
         </div>
         <!-- WebView 工具条：在浏览器打开 -->
         <div class="webview-toolbar">
-          <button class="btn-secondary btn-small" id="openInBrowserToolbar">在浏览器打开</button>
+          <button class="btn-secondary btn-small" id="openInBrowserToolbar">刷新</button>
         </div>
         <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI" style="display:none;"></iframe>
       </div>
@@ -238,12 +238,6 @@
             </div>
             <div class="metric-row">
               <div class="metric-head">
-                <span class="metric-label">应用内存（本程序）</span>
-                <span class="metric-value" id="metricAppMem">—</span>
-              </div>
-            </div>
-            <div class="metric-row">
-              <div class="metric-head">
                 <span class="metric-label">Llama 启动时长</span>
                 <span class="metric-value" id="metricUptime">—</span>
               </div>
@@ -254,13 +248,6 @@
                 <span class="metric-value" id="metricCpuText">—</span>
               </div>
               <div class="meter"><div class="meter-fill" id="metricCpuBar"></div></div>
-            </div>
-            <div class="metric-row">
-              <div class="metric-head" title="完整虚拟地址空间，含 mmap 映射的 GGUF 模型文件。llama.cpp 装 4GB 模型时此项约 4GB，但提交大小可能只有 200MB">
-                <span class="metric-label">虚拟地址空间</span>
-                <span class="metric-value" id="metricMemVirtText">—</span>
-              </div>
-              <div class="meter"><div class="meter-fill" id="metricMemVirtBar"></div></div>
             </div>
             <div class="metric-row">
               <div class="metric-head">
