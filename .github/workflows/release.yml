@@ -55,33 +55,50 @@ jobs:
         run: |
           mkdir -p artifacts
           VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_DIR="target/${{ matrix.rust_target }}/release"
+
+          # 列出 release 目录内容，便于调试
+          echo "=== Release directory contents ==="
+          ls -la "$RELEASE_DIR/" | head -20
 
           # Windows: NSIS installer + MSI
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            cp target/${{ matrix.rust_target }}/release/bundle/nsis/*.exe artifacts/ || true
-            cp target/${{ matrix.rust_target }}/release/bundle/msi/*.msi artifacts/ || true
-            # 便携版（zip）
-            7z a "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.zip" \
-              target/${{ matrix.rust_target }}/release/llama_ui.exe \
-              target/${{ matrix.rust_target }}/release/llama_ui_lib.dll || true
+            cp "$RELEASE_DIR"/bundle/nsis/*.exe artifacts/ || true
+            cp "$RELEASE_DIR"/bundle/msi/*.msi artifacts/ || true
+            # 便携版（zip）：打包 exe + dll + dist 目录
+            mkdir -p portable
+            cp "$RELEASE_DIR"/llama-ui.exe portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui.exe portable/ 2>/dev/null || true
+            cp "$RELEASE_DIR"/llama_ui_lib.dll portable/ || true
+            cp -r dist/ portable/dist/ || true
+            7z a "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.zip" portable/ || true
+            rm -rf portable
           fi
 
           # Linux: AppImage + deb
           if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
-            cp target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage artifacts/ || true
-            cp target/${{ matrix.rust_target }}/release/bundle/deb/*.deb artifacts/ || true
-            # 便携版（tar.gz）
-            tar czf "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.tar.gz" \
-              -C target/${{ matrix.rust_target }}/release llama_ui || true
+            cp "$RELEASE_DIR"/bundle/appimage/*.AppImage artifacts/ || true
+            cp "$RELEASE_DIR"/bundle/deb/*.deb artifacts/ || true
+            # 便携版（tar.gz）：打包可执行文件 + dist 目录
+            mkdir -p portable
+            cp "$RELEASE_DIR"/llama-ui portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui portable/ 2>/dev/null || true
+            cp -r dist/ portable/dist/ || true
+            tar czf "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.tar.gz" -C portable . || true
+            rm -rf portable
           fi
 
           # macOS: DMG + app
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
-            cp target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg artifacts/ || true
-            # 便携版（tar.gz）
-            tar czf "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.tar.gz" \
-              -C target/${{ matrix.rust_target }}/release/bundle/macos LlamaUI.app || true
+            cp "$RELEASE_DIR"/bundle/dmg/*.dmg artifacts/ || true
+            # 便携版（tar.gz）：打包 .app + dist 目录
+            mkdir -p portable
+            cp -r "$RELEASE_DIR"/bundle/macos/LlamaUI.app portable/ 2>/dev/null || true
+            cp -r dist/ portable/dist/ || true
+            tar czf "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.tar.gz" -C portable . || true
+            rm -rf portable
           fi
+
+          echo "=== Artifacts ==="
+          ls -la artifacts/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
