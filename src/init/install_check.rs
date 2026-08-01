@@ -171,7 +171,7 @@ async fn check_driver(app: &AppHandle) {
             Command::new("nvidia-smi").output(),
         )
         .await;
-        let has_nvidia = matches!(probe, Ok(Ok(o)) if o.status.success());
+        let has_nvidia = matches!(probe, Ok(Ok(ref o)) if o.status.success());
         if has_nvidia {
             emit_log_to(
                 app,

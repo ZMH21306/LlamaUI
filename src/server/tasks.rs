@@ -42,6 +42,7 @@ use super::log_channel::{try_send_or_count, DROPPED_LOG_LINES, LOG_CHANNEL_CAPAC
 use super::log_truncate::truncate_log_line;
 use super::metrics::{query_gpu_stats, Metrics, METRICS_INTERVAL_MS};
 use super::state::{ServerInner, MAX_LOG_LINES};
+#[cfg(windows)]
 use super::winapi::query_windows_virtual_size;
 
 use sysinfo::{ProcessesToUpdate, System};

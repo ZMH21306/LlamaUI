@@ -15,12 +15,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x64
+          # Linux
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x64
+          # macOS
           - platform: macos-latest
             rust_target: aarch64-apple-darwin
+            artifact_suffix: macos-arm64
 
     runs-on: ${{ matrix.platform }}
 
@@ -44,34 +50,44 @@ jobs:
       - name: Build
         run: cargo tauri build --target ${{ matrix.rust_target }}
 
-      - name: Upload Windows artifacts
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-x64
-          path: |
-            target/${{ matrix.rust_target }}/release/bundle/msi/*.msi
-            target/${{ matrix.rust_target }}/release/bundle/nsis/*.exe
-          if-no-files-found: warn
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          VERSION="${GITHUB_REF_NAME#v}"
 
-      - name: Upload Linux artifacts
-        if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-x64
-          path: |
-            target/${{ matrix.rust_target }}/release/bundle/deb/*.deb
-            target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage
-          if-no-files-found: warn
+          # Windows: NSIS installer + MSI
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            cp target/${{ matrix.rust_target }}/release/bundle/nsis/*.exe artifacts/ || true
+            cp target/${{ matrix.rust_target }}/release/bundle/msi/*.msi artifacts/ || true
+            # 便携版（zip）
+            7z a "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.zip" \
+              target/${{ matrix.rust_target }}/release/llama_ui.exe \
+              target/${{ matrix.rust_target }}/release/llama_ui_lib.dll || true
+          fi
 
-      - name: Upload macOS artifacts
-        if: matrix.platform == 'macos-latest'
+          # Linux: AppImage + deb
+          if [ "${{ matrix.platform }}" = "ubuntu-22.04" ]; then
+            cp target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage artifacts/ || true
+            cp target/${{ matrix.rust_target }}/release/bundle/deb/*.deb artifacts/ || true
+            # 便携版（tar.gz）
+            tar czf "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.tar.gz" \
+              -C target/${{ matrix.rust_target }}/release llama_ui || true
+          fi
+
+          # macOS: DMG + app
+          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
+            cp target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg artifacts/ || true
+            # 便携版（tar.gz）
+            tar czf "artifacts/llama-ui-${VERSION}-${{ matrix.artifact_suffix }}.tar.gz" \
+              -C target/${{ matrix.rust_target }}/release/bundle/macos LlamaUI.app || true
+          fi
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: |
-            target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg
-            target/${{ matrix.rust_target }}/release/bundle/macos/*.app
+          name: ${{ matrix.artifact_suffix }}
+          path: artifacts/*
           if-no-files-found: warn
 
   release:
@@ -86,7 +102,51 @@ jobs:
           path: artifacts
 
       - name: List all downloaded files
-        run: find artifacts -type f
+        run: find artifacts -type f | sort
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.dmg" -o -name "*.zip" -o -name "*.tar.gz" \) \
+            -exec sha256sum {} \; | sed 's| \./| |' | sed 's|^./||' | sort -k2 > ../SHA256SUMS.txt
+          cd ..
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS.txt
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          {
+            echo "body<<EOF"
+            echo "## LlamaUI ${TAG}"
+            echo ""
+            echo "### 下载说明"
+            echo ""
+            echo "| 平台 | 文件 | 说明 |"
+            echo "|------|------|------|"
+            echo "| Windows x64 | \`.exe\` | NSIS 安装程序 |"
+            echo "| Windows x64 | \`.msi\` | MSI 安装程序 |"
+            echo "| Windows x64 | \`.zip\` | 便携版（免安装） |"
+            echo "| Linux x64 | \`.deb\` | Debian/Ubuntu 包 |"
+            echo "| Linux x64 | \`.AppImage\` | 通用 Linux 应用 |"
+            echo "| Linux x64 | \`.tar.gz\` | 便携版（免安装） |"
+            echo "| macOS arm64 | \`.dmg\` | macOS 磁盘映像 |"
+            echo "| macOS arm64 | \`.tar.gz\` | 便携版（免安装） |"
+            echo ""
+            echo "### SHA256 校验"
+            echo ""
+            echo "\`\`\`"
+            cat SHA256SUMS.txt
+            echo "\`\`\`"
+            echo ""
+            echo "### 变更日志"
+            echo ""
+            echo "详见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -96,4 +156,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: artifacts/**/*
+          body: ${{ steps.notes.outputs.body }}
+          files: |
+            artifacts/**/*
+            SHA256SUMS.txt

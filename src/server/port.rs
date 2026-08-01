@@ -95,8 +95,8 @@ fn port_holder_is_killable(pid: Option<u32>) -> bool {
     }
 }
 
-/// 用 taskkill 杀进程。先优雅（Ctrl+C 等），再强杀。
-/// 返回 true 表示调用了 taskkill（不论是否成功）。
+/// 用 taskkill 杀进程（仅 Windows）。
+#[cfg(target_os = "windows")]
 pub async fn kill_pid_with_taskkill(pid: u32) {
     use std::process::Stdio;
     // 1. 优雅终止
@@ -109,7 +109,8 @@ pub async fn kill_pid_with_taskkill(pid: u32) {
         .await;
 }
 
-/// 强杀（/F /PID）。
+/// 强杀（/F /PID，仅 Windows）。
+#[cfg(target_os = "windows")]
 pub async fn force_kill_pid(pid: u32) {
     use std::process::Stdio;
     let _ = tokio::process::Command::new("taskkill")
@@ -117,6 +118,30 @@ pub async fn force_kill_pid(pid: u32) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(0x08000000)
+        .output()
+        .await;
+}
+
+/// 用 kill 命令杀进程（仅 Linux/macOS）。
+#[cfg(not(target_os = "windows"))]
+pub async fn kill_pid_with_taskkill(pid: u32) {
+    use std::process::Stdio;
+    let _ = tokio::process::Command::new("kill")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+}
+
+/// 强杀（SIGKILL，仅 Linux/macOS）。
+#[cfg(not(target_os = "windows"))]
+pub async fn force_kill_pid(pid: u32) {
+    use std::process::Stdio;
+    let _ = tokio::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .output()
         .await;
 }
