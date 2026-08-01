@@ -157,18 +157,15 @@
           </div>
         </section>
 
-        <!-- 配置备份 -->
+        <!-- 配置导入/导出 -->
         <section class="card" id="backupSection">
           <header class="card-header">
-            <h2>配置备份</h2>
+            <h2>配置管理</h2>
           </header>
           <div class="card-body">
-            <div class="backup-actions" style="display: flex; gap: 8px; margin-bottom: 12px;">
-              <button class="btn-primary btn-small" id="createBackup" type="button">立即备份</button>
-              <button class="btn-secondary btn-small" id="refreshBackups" type="button">刷新列表</button>
-            </div>
-            <div class="backup-list" id="backupList" style="max-height: 200px; overflow-y: auto;">
-              <p class="hint">暂无备份</p>
+            <div class="backup-actions" style="display: flex; gap: 8px;">
+              <button class="btn-primary btn-small" id="exportConfig" type="button">导出配置</button>
+              <button class="btn-secondary btn-small" id="importConfig" type="button">导入配置</button>
             </div>
           </div>
         </section>
@@ -203,7 +200,7 @@
             <p>首次启动需要把模型读入显存/内存，耗时取决于模型大小和磁盘速度（30 秒 ~ 数分钟）。</p>
             <p class="hint">如果长时间不出现，请检查 <code id="loadingUrl">http://127.0.0.1:10897</code> 是否可访问，或重启服务。</p>
             <div class="loading-actions">
-              <button class="btn-secondary" id="openInBrowser">刷新页面</button>
+              <button class="btn-secondary" id="openInBrowser">在浏览器打开</button>
               <button class="btn-secondary" id="reloadWebview">重新加载</button>
               <button class="btn-secondary" id="stopFromLoading">停止服务</button>
             </div>
@@ -211,7 +208,7 @@
         </div>
         <!-- WebView 工具条：在浏览器打开 -->
         <div class="webview-toolbar">
-          <button class="btn-secondary btn-small" id="openInBrowserToolbar">刷新</button>
+          <button class="btn-secondary btn-small" id="openInBrowserToolbar">在浏览器打开</button>
         </div>
         <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI" style="display:none;"></iframe>
       </div>

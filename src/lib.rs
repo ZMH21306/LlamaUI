@@ -30,9 +30,9 @@
     )
 )]
 
-mod backup;
 mod commands;
 mod config;
+mod config_io;
 mod detect;
 mod error;
 mod events;
@@ -99,10 +99,10 @@ pub fn run() {
             commands::system_cmd::open_external_url,
             // 新增功能
             commands::export_cmd::export_logs,
-            commands::backup_cmd::create_config_backup,
-            commands::backup_cmd::list_config_backups,
-            commands::backup_cmd::restore_config_backup,
-            commands::backup_cmd::delete_config_backup,
+            // 配置导入导出
+            commands::config_io_cmd::export_config_json,
+            commands::config_io_cmd::export_config_to_file,
+            commands::config_io_cmd::import_config_from_file,
             commands::recovery_cmd::get_diagnosis,
             commands::recovery_cmd::auto_fix_issues,
             commands::update_cmd::check_updates,

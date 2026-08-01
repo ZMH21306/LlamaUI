@@ -125,10 +125,9 @@ const els = {
   exportLogs: $('exportLogs'),
   autoScroll: $('autoScroll'),
 
-  // 配置备份
-  createBackup: $('createBackup'),
-  refreshBackups: $('refreshBackups'),
-  backupList: $('backupList'),
+  // 配置导入/导出
+  exportConfig: $('exportConfig'),
+  importConfig: $('importConfig'),
 
   // WebView
   webviewPlaceholder: $('webviewPlaceholder'),
@@ -1278,13 +1277,11 @@ function setupSplitter(el, side /* 'left' | 'right' */) {
   let dragging = false;
   let startX = 0;
   let startW = 0;
-  // 按键追踪：确保只有按下左键时才保持拖拽
   let mouseDownOnSplitter = false;
 
   const onMove = (e) => {
     if (!dragging || !mouseDownOnSplitter) return;
     const dx = e.clientX - startX;
-    const totalW = window.innerWidth;
     if (side === 'left') {
       const w = Math.max(MIN_PANE_W, Math.min(MAX_PANE_LEFT_W, startW + dx));
       document.documentElement.style.setProperty('--pane-left-w', `${w}px`);
@@ -1293,23 +1290,20 @@ function setupSplitter(el, side /* 'left' | 'right' */) {
       document.documentElement.style.setProperty('--pane-right-w', `${w}px`);
     }
   };
-  const onUp = () => {
+  const cleanup = () => {
     if (!dragging) return;
     dragging = false;
     mouseDownOnSplitter = false;
     el.classList.remove('active');
     document.body.style.cursor = '';
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    // 释放 pointer capture 防止焦点丢失后事件泄漏
-    try { el.releasePointerCapture?.(0); } catch {}
-  };
-  // 在 document 上监听 mousedown 防止失焦后继续跟随
-  const onGlobalUp = () => {
-    if (dragging) onUp();
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('mouseup', cleanup, true);
+    window.removeEventListener('blur', cleanup);
+    // 恢复 iframe 交互
+    if (els.webview) els.webview.style.pointerEvents = '';
   };
   el.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return; // 仅左键
+    if (e.button !== 0) return;
     dragging = true;
     mouseDownOnSplitter = true;
     startX = e.clientX;
@@ -1317,10 +1311,13 @@ function setupSplitter(el, side /* 'left' | 'right' */) {
     startW = parseInt(side === 'left' ? cs.getPropertyValue('--pane-left-w') : cs.getPropertyValue('--pane-right-w'), 10) || 0;
     el.classList.add('active');
     document.body.style.cursor = 'col-resize';
-    // 在捕获阶段监听，确保即使 iframe 抢焦点也能收到事件
+    // 禁用 iframe 的 pointer-events，防止 WebView2 在鼠标移入时抢占事件
+    if (els.webview) els.webview.style.pointerEvents = 'none';
+    // capture 阶段监听，确保 iframe 上方的鼠标事件也能被父文档收到
     document.addEventListener('mousemove', onMove, true);
-    document.addEventListener('mouseup', onUp, true);
-    document.addEventListener('mouseup', onGlobalUp, { once: true, capture: true });
+    document.addEventListener('mouseup', cleanup, true);
+    // 兜底：应用失焦时结束拖拽（切到其他窗口）
+    window.addEventListener('blur', cleanup);
     e.preventDefault();
     e.stopPropagation();
   });
@@ -1527,24 +1524,23 @@ function attachUIListeners() {
   });
   els.clearLogs?.addEventListener('click', clearAllLogs);
   els.exportLogs?.addEventListener('click', handleExportLogs);
-  els.createBackup?.addEventListener('click', handleCreateBackup);
-  els.refreshBackups?.addEventListener('click', refreshBackupList);
+  els.exportConfig?.addEventListener('click', handleExportConfig);
+  els.importConfig?.addEventListener('click', handleImportConfig);
   els.autoScroll?.addEventListener('change', scheduleSave);
 
   // WebView 加载遮罩操作按钮
-  const handleRefreshWebview = () => {
-    if (!els.webview) return;
-    if (els.webview) delete els.webview.dataset.loaded;
+  const handleOpenInBrowser = async () => {
+    const url = `http://127.0.0.1:${state.activePort || state.port}`;
     try {
-      const url = `http://127.0.0.1:${state.activePort || state.port}?t=${Date.now()}`;
-      els.webview.src = url;
-      showWebviewLoading();
+      await invoke('open_external_url', { url });
+      showNotification('已在浏览器中打开', 'success', 1500);
     } catch (e) {
-      appendLog({ timestamp: now(), stream: 'system', text: `重新加载失败：${e}` });
+      appendLog({ timestamp: now(), stream: 'system', text: `无法打开浏览器：${e}` });
+      showNotification('打开浏览器失败，请检查是否已安装默认浏览器', 'error', 2500);
     }
   };
-  els.openInBrowser?.addEventListener('click', handleRefreshWebview);
-  els.openInBrowserToolbar?.addEventListener('click', handleRefreshWebview);
+  els.openInBrowser?.addEventListener('click', handleOpenInBrowser);
+  els.openInBrowserToolbar?.addEventListener('click', handleOpenInBrowser);
   els.reloadWebview?.addEventListener('click', () => {
     if (!els.webview) return;
     if (els.webview) delete els.webview.dataset.loaded;
@@ -2087,11 +2083,6 @@ async function init() {
   safeCall(async () => {
     await invoke('run_initialization');
   }, '初始化失败');
-
-  // 加载备份列表
-  safeCall(async () => {
-    await refreshBackupList();
-  }, '加载备份列表失败');
 }
 
 /**
@@ -2190,97 +2181,47 @@ async function handleExportLogs() {
 }
 
 // ============================================================
-// 配置备份功能
+// 配置导入/导出功能
 // ============================================================
 
 /**
- * 渲染备份列表
+ * 导出配置到文件
  */
-function renderBackupList(backups) {
-  const listEl = els.backupList;
-  if (!listEl) return;
-
-  if (!backups || backups.length === 0) {
-    listEl.innerHTML = '<p class="hint">暂无备份</p>';
-    return;
-  }
-
-  const html = backups.map(b => {
-    const date = new Date(b.timestamp);
-    const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
-    return `<div class="backup-item" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-color);">
-      <div>
-        <div style="font-size:12px;color:var(--text-secondary);">${dateStr}</div>
-        <div style="font-size:11px;color:var(--text-hint);">v${b.config_version}</div>
-      </div>
-      <div style="display:flex;gap:6px;">
-        <button class="btn-secondary btn-small" onclick="restoreBackup('${b.filename}')" title="恢复此备份">恢复</button>
-        <button class="btn-danger btn-small" onclick="deleteBackup('${b.filename}')" title="删除此备份">删除</button>
-      </div>
-    </div>`;
-  }).join('');
-
-  listEl.innerHTML = html;
-}
-
-/**
- * 创建配置备份
- */
-async function handleCreateBackup() {
+async function handleExportConfig() {
+  const { save } = window.__TAURI__.dialog;
+  const path = await save({
+    defaultPath: `llamaui-config-${new Date().toISOString().slice(0,10)}.json`,
+    filters: [{ name: 'JSON 配置文件', extensions: ['json'] }]
+  });
+  if (!path) return;
   try {
-    const resp = await invoke('create_config_backup');
-    showNotification(`备份已创建：${resp.filename}`, 'success');
-    // 刷新列表
-    await refreshBackupList();
+    await invoke('export_config_to_file', { path });
+    showNotification('配置已导出', 'success');
   } catch (e) {
-    showNotification('备份失败：' + e, 'error');
+    showNotification('导出失败：' + e, 'error');
   }
 }
 
 /**
- * 刷新备份列表
+ * 从文件导入配置
  */
-async function refreshBackupList() {
+async function handleImportConfig() {
+  const ok = await showConfirm({ title: '导入配置', body: '导入配置将覆盖当前设置，确定继续？', confirmText: '继续', cancelText: '取消' });
+  if (!ok) return;
+  const { open } = window.__TAURI__.dialog;
+  const path = await open({
+    multiple: false,
+    filters: [{ name: 'JSON 配置文件', extensions: ['json'] }]
+  });
+  if (!path) return;
   try {
-    const backups = await invoke('list_config_backups');
-    renderBackupList(backups);
-  } catch (e) {
-    showNotification('获取备份列表失败：' + e, 'error');
-  }
-}
-
-/**
- * 恢复配置备份（全局函数，供 onclick 调用）
- */
-async function restoreBackup(filename) {
-  if (!confirm(`确定要恢复备份 "${filename}" 吗？当前配置将被覆盖。`)) return;
-  try {
-    await invoke('restore_config_backup', { filename });
-    showNotification('配置已恢复', 'success');
-    // 刷新配置显示
+    await invoke('import_config_from_file', { path: typeof path === 'string' ? path : path[0] });
+    showNotification('配置已导入，正在刷新...', 'success');
     await loadConfigToForm();
   } catch (e) {
-    showNotification('恢复失败：' + e, 'error');
+    showNotification('导入失败：' + e, 'error');
   }
 }
-
-/**
- * 删除配置备份（全局函数，供 onclick 调用）
- */
-async function deleteBackup(filename) {
-  if (!confirm(`确定要删除备份 "${filename}" 吗？此操作不可撤销。`)) return;
-  try {
-    await invoke('delete_config_backup', { filename });
-    showNotification('备份已删除', 'success');
-    await refreshBackupList();
-  } catch (e) {
-    showNotification('删除失败：' + e, 'error');
-  }
-}
-
-// 暴露到全局作用域供 onclick 调用
-window.restoreBackup = restoreBackup;
-window.deleteBackup = deleteBackup;
 
 // ============================================================
 // 启动

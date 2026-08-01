@@ -34,7 +34,7 @@ use parking_lot::Mutex;
 
 use crate::detect::CancelFlag;
 
-pub mod backup_cmd;
+pub mod config_io_cmd;
 pub mod config_cmd;
 pub mod detect_cmd;
 pub mod export_cmd;

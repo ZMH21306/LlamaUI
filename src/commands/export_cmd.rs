@@ -79,7 +79,7 @@ pub fn export_logs(
 
 fn format_as_text(logs: &[LogLine]) -> String {
     logs.iter()
-        .map(|l| format!("{} [{}] {}", l.timestamp, l.stream, l.text))
+        .map(|l| format!("{}\n[{}] {}", l.timestamp, l.stream, l.text))
         .collect::<Vec<_>>()
         .join("\n")
 }
