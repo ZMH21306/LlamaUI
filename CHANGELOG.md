@@ -2,7 +2,7 @@
 
 本文件记录 LlamaUI 项目的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.4.0] - 2026-07-31
+## [0.4.0] - 2026-08-02
 
 ### 新增
 - **日志导出**：支持将运行日志导出为 txt/json/csv 格式
@@ -21,6 +21,7 @@
 - 新增 IPC 命令：`export_logs`、`create_config_backup`、`list_config_backups`、`restore_config_backup`、`delete_config_backup`、`get_diagnosis`、`auto_fix_issues`、`check_updates`、`cleanup_old_version`
 - 单元测试从 115 个增加到 139 个
 - 新增依赖：`ureq`（HTTP 客户端，用于检查更新）
+- CI/CD 工作流升级：构建矩阵扩展至 7 平台（Windows x64/x86/arm64、Linux x64/arm64、macOS x64/arm64），产物统一命名为 `LlamaUI_<版本>_<系统>_<架构>.<后缀>`，Release Notes 按标准格式自动生成
 
 ## [0.3.0] - 2026-07-31
 
