@@ -1,13 +1,16 @@
 # Rust 构建产物
 target/
 
+# Tauri 自动生成文件
+gen/
+
 # 环境变量文件
 .env
 .env.*
 
 # IDE 配置
 .idea/
-.vscode/settings.json
+.vscode/
 .trae/
 *.swp
 *.swo
@@ -24,11 +27,17 @@ node_modules/
 # 日志文件
 *.log
 
+# Rust 编译中间产物（非 target/ 下的散落文件）
+*.pdb
+*.d
+*.exp
+
 # 临时文件
 *.tmp
 *.temp
 portable/
 artifacts/
+release/
 
 # 签名密钥（安全敏感）
 *.pem
