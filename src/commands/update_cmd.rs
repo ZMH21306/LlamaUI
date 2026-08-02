@@ -26,7 +26,7 @@ mod tests {
             update_available: true,
             latest_version: "v0.4.0".to_string(),
             current_version: "v0.3.0".to_string(),
-            download_url: "https://github.com/LlamaUI/LlamaUI/releases/tag/v0.4.0".to_string(),
+            download_url: "https://github.com/ZMH21306/LlamaUI/releases/tag/v0.4.0".to_string(),
             release_notes: "New features".to_string(),
             old_installations: vec![],
         };

@@ -2,9 +2,8 @@
 
 > LLM Desktop Console for managing llama-server
 
-[![Release](https://img.shields.io/github/v/release/LlamaUI/LlamaUI?label=version&sort=semver)](https://github.com/LlamaUI/LlamaUI/releases)
-[![License](https://img.shields.io/github/license/LlamaUI/LlamaUI)](LICENSE)
-[![Tests](https://img.shields.io/github/actions/workflow/status/LlamaUI/LlamaUI/ci.yml?label=tests)](https://github.com/LlamaUI/LlamaUI/actions)
+[![Release](https://img.shields.io/github/v/release/ZMH21306/LlamaUI?label=version&sort=semver)](https://github.com/ZMH21306/LlamaUI/releases)
+[![License](https://img.shields.io/github/license/ZMH21306/LlamaUI)](LICENSE)
 
 LlamaUI 是一个基于 Tauri 2.x 的桌面应用程序，为 llama-server（llama.cpp）提供图形化控制界面。它支持自动检测 llama-server 可执行文件和模型目录、服务进程管理、实时日志查看、性能监控等功能。
 
@@ -27,7 +26,7 @@ LlamaUI 是一个基于 Tauri 2.x 的桌面应用程序，为 llama-server（lla
 
 ### 安装
 
-1. 从 [Releases](https://github.com/LlamaUI/LlamaUI/releases) 下载最新版本的安装包
+1. 从 [Releases](https://github.com/ZMH21306/LlamaUI/releases) 下载最新版本的安装包
 2. 运行安装程序完成安装
 3. 首次启动时，应用会自动检测系统中的 llama-server 和模型目录
 
@@ -106,7 +105,7 @@ llama-server --models-dir <目录> --port <端口> -ngl 99 --host 127.0.0.1
 | `detect` | 自动检测（4 阶段优先级链） |
 | `init` | 启动初始化（环境检查 → 驱动检查 → 自动加载） |
 | `config` | 配置持久化（JSON + schema 版本迁移） |
-| `backup` | 配置备份管理（创建/列出/恢复/删除） |
+| `config_io` | 配置导入/导出（JSON 格式） |
 | `recovery` | 错误诊断与恢复建议 |
 | `metrics_enhanced` | 增强版性能指标（滑动平均/趋势/峰值） |
 | `error` | 统一错误类型（AppError + 子错误） |
@@ -167,7 +166,7 @@ llama-server --models-dir <目录> --port <端口> -ngl 99 --host 127.0.0.1
 
 ```bash
 # 克隆仓库
-git clone https://github.com/LlamaUI/LlamaUI.git
+git clone https://github.com/ZMH21306/LlamaUI.git
 cd LlamaUI
 
 # 调试构建

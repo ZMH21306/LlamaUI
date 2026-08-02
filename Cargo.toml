@@ -6,8 +6,8 @@ authors = ["LlamaUI"]
 edition = "2021"
 rust-version = "1.70"
 license = "MIT"
-homepage = ""
-repository = ""
+homepage = "https://github.com/ZMH21306/LlamaUI"
+repository = "https://github.com/ZMH21306/LlamaUI"
 keywords = ["llm", "llama", "desktop", "tauri", "gui"]
 
 [lints.rust]
