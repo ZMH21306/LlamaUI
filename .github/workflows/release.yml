@@ -40,7 +40,7 @@ jobs:
             os_name: Linux
             arch: x64
           # Linux arm64 - use native ARM runner
-          - platform: ubuntu-24.04-arm
+          - platform: ubuntu-22.04-arm
             rust_target: aarch64-unknown-linux-gnu
             os_name: Linux
             arch: arm64
