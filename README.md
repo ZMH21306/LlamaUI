@@ -188,25 +188,34 @@ cargo clippy --all-targets --release
 LlamaUI/
 ├── src/
 │   ├── commands/          # Tauri IPC 命令
-│   ├── server/            # 进程管理（9 个子模块）
-│   ├── detect/            # 自动检测（5 个子模块）
-│   ├── init/              # 启动初始化
+│   ├── server/            # 进程管理（子模块：lifecycle/job/cmdline/port/state/metrics/log_channel/winapi/log_truncate/tasks）
+│   ├── detect/            # 自动检测（4 阶段：env→venv→key_dirs→full_disk）
+│   ├── init/              # 启动初始化（环境检查 → 驱动检查 → 自动加载）
+│   ├── util/              # 通用工具（路径/时间/URL 白名单）
 │   ├── config.rs          # 配置持久化
+│   ├── config_io.rs       # 配置导入/导出
 │   ├── error.rs           # 统一错误类型
 │   ├── events.rs          # 事件名 + payload
 │   ├── log.rs             # 日志发射
-│   ├── util/              # 通用工具
+│   ├── recovery.rs        # 错误诊断与恢复
+│   ├── update_check.rs    # 版本更新检查
+│   ├── metrics_enhanced.rs# 增强版性能指标
 │   ├── main.rs            # 二进制入口
 │   └── lib.rs             # Crate 根
 ├── dist/                  # 前端静态资源（零构建）
 │   ├── index.html
 │   ├── main.js
-│   └── styles.css
+│   ├── styles.css
+│   └── theme-engine.js
 ├── icons/                 # 应用图标
 ├── capabilities/          # Tauri 权限配置
 ├── gen/schemas/           # Tauri 生成的 schema
 ├── Cargo.toml
+├── Cargo.lock
 ├── tauri.conf.json
+├── build.rs
+├── rust-toolchain.toml
+├── CHANGELOG.md
 └── docs/
     ├── CODE_REVIEW_REPORT.md   # 代码审查报告
     └── REFACTORING.md          # 重构说明
@@ -214,11 +223,11 @@ LlamaUI/
 
 ## 测试
 
-项目包含 115 个单元测试，覆盖关键安全逻辑：
+项目包含 142 个单元测试，覆盖关键安全逻辑：
 
 ```bash
 cargo test --lib
-# test result: ok. 115 passed; 0 failed
+# test result: ok. 142 passed; 0 failed
 ```
 
 **测试覆盖**：
