@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.4.0)'
+        required: true
 
 permissions:
   contents: write
@@ -35,13 +39,13 @@ jobs:
             rust_target: x86_64-unknown-linux-gnu
             os_name: Linux
             arch: x64
-          # Linux arm64
-          - platform: ubuntu-22.04
+          # Linux arm64 - use native ARM runner
+          - platform: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             os_name: Linux
             arch: arm64
-          # macOS x64
-          - platform: macos-latest
+          # macOS x64 - macos-13 is x86_64
+          - platform: macos-13
             rust_target: x86_64-apple-darwin
             os_name: macOS
             arch: x64
@@ -62,7 +66,7 @@ jobs:
           targets: ${{ matrix.rust_target }}
 
       - name: Install dependencies (ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
@@ -70,67 +74,98 @@ jobs:
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2"
 
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: TAG=${TAG} VERSION=${VERSION}"
+
       - name: Build
         run: cargo tauri build --target ${{ matrix.rust_target }}
 
-      - name: Collect artifacts
+      - name: Collect artifacts (Windows)
+        if: matrix.os_name == 'Windows'
         shell: bash
         run: |
           mkdir -p artifacts
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.version.outputs.version }}"
           NAME="LlamaUI_${VERSION}_${{ matrix.os_name }}_${{ matrix.arch }}"
           RELEASE_DIR="target/${{ matrix.rust_target }}/release"
 
-          echo "=== Release directory contents ==="
-          ls -la "$RELEASE_DIR/" | head -20
+          # NSIS installer
+          for f in "$RELEASE_DIR"/bundle/nsis/*.exe; do
+            cp "$f" "artifacts/${NAME}.exe" && break
+          done
+          # MSI installer
+          for f in "$RELEASE_DIR"/bundle/msi/*.msi; do
+            cp "$f" "artifacts/${NAME}.msi" && break
+          done
+          # Portable zip (include exe + dist/)
+          mkdir -p portable
+          cp "$RELEASE_DIR"/llama-ui.exe portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui.exe portable/ 2>/dev/null || true
+          cp -r dist/ portable/dist/ || true
+          7z a "artifacts/${NAME}.zip" portable/ || true
+          rm -rf portable
 
-          # Windows: NSIS installer + MSI + portable zip
-          if [ "${{ matrix.os_name }}" = "Windows" ]; then
-            # 安装包：NSIS exe
-            for f in "$RELEASE_DIR"/bundle/nsis/*.exe; do
-              cp "$f" "artifacts/${NAME}.exe" && break
-            done
-            # 安装包：MSI
-            for f in "$RELEASE_DIR"/bundle/msi/*.msi; do
-              cp "$f" "artifacts/${NAME}.msi" && break
-            done
-            # 便携版（zip）
-            mkdir -p portable
-            cp "$RELEASE_DIR"/llama-ui.exe portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui.exe portable/ 2>/dev/null || true
-            cp "$RELEASE_DIR"/llama_ui_lib.dll portable/ || true
-            cp -r dist/ portable/dist/ || true
-            7z a "artifacts/${NAME}.zip" portable/ || true
-            rm -rf portable
-          fi
+          echo "=== Collected artifacts ==="
+          ls -la artifacts/
 
-          # Linux: deb + AppImage + portable tar.gz
-          if [ "${{ matrix.os_name }}" = "Linux" ]; then
-            for f in "$RELEASE_DIR"/bundle/deb/*.deb; do
-              cp "$f" "artifacts/${NAME}.deb" && break
-            done
-            for f in "$RELEASE_DIR"/bundle/appimage/*.AppImage; do
-              cp "$f" "artifacts/${NAME}.AppImage" && break
-            done
-            mkdir -p portable
-            cp "$RELEASE_DIR"/llama-ui portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui portable/ 2>/dev/null || true
-            cp -r dist/ portable/dist/ || true
-            tar czf "artifacts/${NAME}.tar.gz" -C portable . || true
-            rm -rf portable
-          fi
+      - name: Collect artifacts (Linux)
+        if: matrix.os_name == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          VERSION="${{ steps.version.outputs.version }}"
+          NAME="LlamaUI_${VERSION}_${{ matrix.os_name }}_${{ matrix.arch }}"
+          RELEASE_DIR="target/${{ matrix.rust_target }}/release"
 
-          # macOS: dmg + portable tar.gz
-          if [ "${{ matrix.os_name }}" = "macOS" ]; then
-            for f in "$RELEASE_DIR"/bundle/dmg/*.dmg; do
-              cp "$f" "artifacts/${NAME}.dmg" && break
-            done
-            mkdir -p portable
-            cp -r "$RELEASE_DIR"/bundle/macos/LlamaUI.app portable/ 2>/dev/null || true
-            cp -r dist/ portable/dist/ || true
-            tar czf "artifacts/${NAME}.tar.gz" -C portable . || true
-            rm -rf portable
-          fi
+          # deb package
+          for f in "$RELEASE_DIR"/bundle/deb/*.deb; do
+            cp "$f" "artifacts/${NAME}.deb" && break
+          done
+          # AppImage
+          for f in "$RELEASE_DIR"/bundle/appimage/*.AppImage; do
+            cp "$f" "artifacts/${NAME}.AppImage" && break
+          done
+          # Portable tar.gz
+          mkdir -p portable
+          cp "$RELEASE_DIR"/llama-ui portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui portable/ 2>/dev/null || true
+          cp -r dist/ portable/dist/ || true
+          tar czf "artifacts/${NAME}.tar.gz" -C portable . || true
+          rm -rf portable
 
-          echo "=== Artifacts ==="
+          echo "=== Collected artifacts ==="
+          ls -la artifacts/
+
+      - name: Collect artifacts (macOS)
+        if: matrix.os_name == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          VERSION="${{ steps.version.outputs.version }}"
+          NAME="LlamaUI_${VERSION}_${{ matrix.os_name }}_${{ matrix.arch }}"
+          RELEASE_DIR="target/${{ matrix.rust_target }}/release"
+
+          # DMG installer
+          for f in "$RELEASE_DIR"/bundle/dmg/*.dmg; do
+            cp "$f" "artifacts/${NAME}.dmg" && break
+          done
+          # Portable tar.gz
+          mkdir -p portable
+          cp -r "$RELEASE_DIR"/bundle/macos/LlamaUI.app portable/ 2>/dev/null || true
+          cp -r dist/ portable/dist/ || true
+          tar czf "artifacts/${NAME}.tar.gz" -C portable . || true
+          rm -rf portable
+
+          echo "=== Collected artifacts ==="
           ls -la artifacts/
 
       - name: Upload artifacts
@@ -142,9 +177,22 @@ jobs:
 
   release:
     needs: build
+    if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -169,9 +217,11 @@ jobs:
       - name: Generate release notes
         id: notes
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
           DATE=$(date -u +%Y-%m-%d)
+          REPO="${{ github.repository }}"
+          BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
           {
             echo "body<<EOF"
             echo "## LlamaUI ${TAG}"
@@ -182,35 +232,41 @@ jobs:
             echo ""
             echo "### 修复说明"
             echo ""
-            echo "详见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+            echo "- 修复 Linux arm64 交叉编译构建失败"
+            echo "- 修复 macOS x64 在 ARM runner 上构建失败"
             echo ""
             echo "### 新增说明"
             echo ""
-            echo "详见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+            echo "- 新增日志导出功能（txt/json/csv 格式）"
+            echo "- 新增配置备份管理（手动/自动备份、一键恢复/删除）"
+            echo "- 新增错误自动恢复机制（诊断+修复建议）"
+            echo "- 新增性能监控增强（滑动平均、趋势箭头、历史峰值）"
+            echo "- 新增自动更新检查（GitHub Releases API）"
+            echo "- 改进 CI/CD 构建矩阵扩展至 7 平台，产物统一命名"
             echo ""
             echo "### 下载说明"
             echo ""
             echo "| 平台 | 架构 | 文件 | 说明 |"
             echo "|------|------|------|------|"
-            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.exe\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_x64.exe) | NSIS 安装程序 |"
-            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.msi\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_x64.msi) | MSI 安装程序 |"
-            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.zip\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_x64.zip) | 免安装版（便携版） |"
-            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.exe\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_x86.exe) | NSIS 安装程序 |"
-            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.msi\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_x86.msi) | MSI 安装程序 |"
-            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.zip\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_x86.zip) | 免安装版（便携版） |"
-            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.exe\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_arm64.exe) | NSIS 安装程序 |"
-            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.msi\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_arm64.msi) | MSI 安装程序 |"
-            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.zip\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Windows_arm64.zip) | 免安装版（便携版） |"
-            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.deb\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Linux_x64.deb) | Debian/Ubuntu 安装包 |"
-            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.AppImage\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Linux_x64.AppImage) | 通用 Linux 应用 |"
-            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.tar.gz\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Linux_x64.tar.gz) | 免安装版（便携版） |"
-            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.deb\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Linux_arm64.deb) | Debian/Ubuntu 安装包 |"
-            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.AppImage\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Linux_arm64.AppImage) | 通用 Linux 应用 |"
-            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.tar.gz\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_Linux_arm64.tar.gz) | 免安装版（便携版） |"
-            echo "| macOS | x64 | [\`LlamaUI_${VERSION}_macOS_x64.dmg\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_macOS_x64.dmg) | 磁盘映像 |"
-            echo "| macOS | x64 | [\`LlamaUI_${VERSION}_macOS_x64.tar.gz\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_macOS_x64.tar.gz) | 免安装版（便携版） |"
-            echo "| macOS | arm64 | [\`LlamaUI_${VERSION}_macOS_arm64.dmg\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_macOS_arm64.dmg) | 磁盘映像 |"
-            echo "| macOS | arm64 | [\`LlamaUI_${VERSION}_macOS_arm64.tar.gz\`](https://github.com/${{ github.repository }}/releases/download/${TAG}/LlamaUI_${VERSION}_macOS_arm64.tar.gz) | 免安装版（便携版） |"
+            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.exe\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x64.exe) | NSIS 安装程序 |"
+            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.msi\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x64.msi) | MSI 安装程序 |"
+            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.zip\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x64.zip) | 便携版 |"
+            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.exe\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x86.exe) | NSIS 安装程序 |"
+            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.msi\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x86.msi) | MSI 安装程序 |"
+            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.zip\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x86.zip) | 便携版 |"
+            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.exe\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_arm64.exe) | NSIS 安装程序 |"
+            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.msi\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_arm64.msi) | MSI 安装程序 |"
+            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.zip\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_arm64.zip) | 便携版 |"
+            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.deb\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_x64.deb) | Debian/Ubuntu |"
+            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.AppImage\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_x64.AppImage) | 通用应用 |"
+            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_x64.tar.gz) | 便携版 |"
+            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.deb\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_arm64.deb) | Debian/Ubuntu |"
+            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.AppImage\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_arm64.AppImage) | 通用应用 |"
+            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_arm64.tar.gz) | 便携版 |"
+            echo "| macOS | x64 | [\`LlamaUI_${VERSION}_macOS_x64.dmg\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_x64.dmg) | 磁盘映像 |"
+            echo "| macOS | x64 | [\`LlamaUI_${VERSION}_macOS_x64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_x64.tar.gz) | 便携版 |"
+            echo "| macOS | arm64 | [\`LlamaUI_${VERSION}_macOS_arm64.dmg\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_arm64.dmg) | 磁盘映像 |"
+            echo "| macOS | arm64 | [\`LlamaUI_${VERSION}_macOS_arm64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_arm64.tar.gz) | 便携版 |"
             echo ""
             echo "### 哈希校验"
             echo ""
@@ -222,26 +278,35 @@ jobs:
             echo "\`\`\`"
             echo ""
             echo "**校验方法：**"
-            echo "- **Windows**：\`Get-FileHash <文件名> -Algorithm SHA256\`"
-            echo "- **Linux/macOS**：\`sha256sum <文件名>\`"
+            echo "- Windows：\`Get-FileHash <文件名> -Algorithm SHA256\`"
+            echo "- Linux/macOS：\`sha256sum <文件名>\`"
             echo ""
             echo "</details>"
             echo ""
             echo "---"
             echo ""
-            echo "**完整变更日志**：[CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+            echo "**完整变更日志**：[CHANGELOG.md](https://github.com/${REPO}/blob/main/CHANGELOG.md)"
             echo ""
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Delete existing release (if any)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: LlamaUI ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: LlamaUI ${{ steps.version.outputs.tag }}
           draft: false
           prerelease: false
           body: ${{ steps.notes.outputs.body }}
           files: |
             release_files/*
             SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
