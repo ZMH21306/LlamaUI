@@ -44,8 +44,8 @@ jobs:
             rust_target: aarch64-unknown-linux-gnu
             os_name: Linux
             arch: arm64
-          # macOS x64 - macos-13 is x86_64
-          - platform: macos-13
+          # macOS x64 - cross-compile on ARM runner
+          - platform: macos-latest
             rust_target: x86_64-apple-darwin
             os_name: macOS
             arch: x64
