@@ -9,6 +9,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// 日志文件目录（`~/.llamaui/logs/`）
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -78,7 +81,8 @@ pub fn init() {
     tracing_subscriber::registry()
         .with(console_layer)
         .with(file_layer)
-        .init();
+        .try_init()
+        .ok();
 
     // 桥接 log crate（log::info! 等可被捕获到 tracing）
     let _ = tracing_log::LogTracer::init();
