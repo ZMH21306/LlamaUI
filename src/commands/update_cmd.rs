@@ -29,6 +29,7 @@ mod tests {
             download_url: "https://github.com/ZMH21306/LlamaUI/releases/tag/v0.4.0".to_string(),
             release_notes: "New features".to_string(),
             old_installations: vec![],
+            platform: "windows-x64".to_string(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: UpdateCheckResult = serde_json::from_str(&json).unwrap();

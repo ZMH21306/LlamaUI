@@ -71,6 +71,7 @@ const els = {
   startBtn: $('startBtn'),
   stopBtn: $('stopBtn'),
   restartBtn: $('restartBtn'),
+  checkUpdateBtn: $('checkUpdateBtn'),
 
   // 通用确认弹窗
   modal: $('modal'),
@@ -86,6 +87,13 @@ const els = {
   modelsDir: $('modelsDir'),
   browseModelsDir: $('browseModelsDir'),
   detectModelsDir: $('detectModelsDir'),
+  // 下载 & GPU
+  downloadLlamaBtn: $('downloadLlamaBtn'),
+  downloadProgress: $('downloadProgress'),
+  downloadBar: $('downloadBar'),
+  downloadStatus: $('downloadStatus'),
+  refreshGpuBtn: $('refreshGpuBtn'),
+  gpuInfoBody: $('gpuInfoBody'),
 
   // 模式
   modeTabs: $$('.mode-tab'),
@@ -1522,11 +1530,151 @@ function attachUIListeners() {
       }
     }
   });
+  els.checkUpdateBtn?.addEventListener('click', async () => {
+    showNotification('正在检查更新...', 'info', 2000);
+    try {
+      const result = await invoke('check_updates');
+      if (result && result.update_available) {
+        showNotification(
+          `发现新版本 ${result.latest_version}（当前 ${result.current_version}），前往 GitHub 下载？`,
+          'info',
+          8000
+        );
+        setTimeout(() => {
+          const toasts = els.toastContainer?.querySelectorAll('.toast');
+          if (toasts?.length) {
+            const lastToast = toasts[toasts.length - 1];
+            lastToast.style.cursor = 'pointer';
+            lastToast.addEventListener('click', () => {
+              invoke('open_external_url', { url: result.download_url });
+            });
+          }
+        }, 100);
+      } else {
+        showNotification('当前已是最新版本', 'info', 3000);
+      }
+      console.log('[UpdateCheck] result:', JSON.stringify(result));
+    } catch (e) {
+      showNotification(`检查更新失败：${e}`, 'error', 4000);
+    }
+  });
   els.clearLogs?.addEventListener('click', clearAllLogs);
   els.exportLogs?.addEventListener('click', handleExportLogs);
   els.exportConfig?.addEventListener('click', handleExportConfig);
   els.importConfig?.addEventListener('click', handleImportConfig);
   els.autoScroll?.addEventListener('change', scheduleSave);
+
+  // ============ 自动下载 llama-server（实时进度） ============
+  els.downloadLlamaBtn?.addEventListener('click', async () => {
+    els.downloadLlamaBtn.disabled = true;
+    els.downloadLlamaBtn.textContent = '⏳ 下载中...';
+    els.downloadProgress.style.display = 'block';
+    els.downloadBar.style.width = '5%';
+    els.downloadStatus.textContent = '正在检测 GPU 并选择最佳版本...';
+
+    // 订阅后端实时进度事件
+    let smoothProgress = 0;
+    const unlisten = await listen('download-progress', (e) => {
+      const p = e.payload;
+      // 平滑插值目标进度，避免跳跃
+      const target = Math.min(Math.max(p.progress * 100, 0), 100);
+      if (target > smoothProgress) {
+        // 渐进式逼近（每帧最多前进 2%）
+        smoothProgress = Math.min(target, smoothProgress + 2);
+      }
+      els.downloadBar.style.width = smoothProgress + '%';
+
+      // 根据阶段设置不同描述
+      const stageLabels = {
+        init: '初始化...',
+        fetching_version: '获取版本信息...',
+        downloading: '下载文件...',
+        extracting: '解压中...',
+        complete: '完成！',
+      };
+      const label = stageLabels[p.stage] || p.message;
+      if (p.stage === 'downloading' && p.total > 0) {
+        const dlMB = (p.downloaded / 1048576).toFixed(1);
+        const totalMB = (p.total / 1048576).toFixed(1);
+        els.downloadStatus.textContent = `下载中... ${dlMB} / ${totalMB} MB`;
+      } else {
+        els.downloadStatus.textContent = label;
+      }
+    });
+
+    // 额外：每 100ms 补间平滑动画
+    const smoothInterval = setInterval(() => {
+      const bar = els.downloadBar;
+      if (!bar) return;
+      const target = parseFloat(bar.dataset.target || '0');
+      const current = smoothProgress;
+      if (current < target) {
+        smoothProgress = Math.min(target, current + 0.5);
+        bar.style.width = smoothProgress + '%';
+      }
+    }, 100);
+
+    try {
+      // 自动检测 GPU 后端
+      const backend = await invoke('detect_gpu');
+      els.downloadStatus.textContent = `检测到后端: ${backend}，开始下载...`;
+      els.downloadBar.style.width = '10%';
+
+      const result = await invoke('download_llama_server', { backend });
+      smoothProgress = 100;
+      els.downloadBar.style.width = '100%';
+      els.downloadStatus.textContent = `下载完成！文件: ${result.path}`;
+      showNotification(`llama-server 安装成功！耗时 ${result.elapsed_ms}ms`, 'success', 5000);
+      // 自动填入路径
+      els.llamaServerPath.value = result.path;
+      try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}
+    } catch (e) {
+      els.downloadStatus.textContent = `错误: ${e}`;
+      showNotification(`下载失败: ${e}`, 'error', 5000);
+    }
+
+    clearInterval(smoothInterval);
+    unlisten();
+    els.downloadLlamaBtn.disabled = false;
+    els.downloadLlamaBtn.textContent = '🚀 自动下载 llama-server';
+    setTimeout(() => { els.downloadProgress.style.display = 'none'; }, 5000);
+  });
+
+  // ============ GPU 信息刷新 ============
+  async function refreshGpuInfo() {
+    if (!els.gpuInfoBody) return;
+    els.gpuInfoBody.innerHTML = '<p style="color:var(--text-3);font-size:12px;">检测中...</p>';
+    try {
+      const gpus = await invoke('detect_gpus');
+      if (!gpus || gpus.length === 0) {
+        els.gpuInfoBody.innerHTML = '<p style="color:var(--text-3);font-size:12px;">未检测到 GPU</p>';
+        return;
+      }
+      let html = '';
+      for (const gpu of gpus) {
+        const color = gpu.vendor === 'NVIDIA' ? 'var(--success)' : gpu.vendor === 'AMD' ? 'var(--danger)' : 'var(--info)';
+        html += `<div style="margin-bottom:8px;padding:8px;background:var(--bg-2);border-radius:6px;border-left:3px solid ${color};">`;
+        html += `<div style="font-size:12px;font-weight:600;color:var(--text-1);">${gpu.vendor} ${gpu.model}</div>`;
+        if (gpu.memory_mb) html += `<div style="font-size:11px;color:var(--text-2);">显存: ${gpu.memory_mb} MB</div>`;
+        if (gpu.cuda_version) html += `<div style="font-size:11px;color:var(--text-2);">CUDA: ${gpu.cuda_version}</div>`;
+        if (gpu.driver_version) html += `<div style="font-size:11px;color:var(--text-2);">驱动: ${gpu.driver_version}</div>`;
+        html += `<div style="font-size:11px;color:var(--accent);">推荐: ${gpu.recommended_backend}</div>`;
+        if (gpu.issues && gpu.issues.length > 0) {
+          for (const issue of gpu.issues) {
+            const ic = issue.severity === 'error' ? 'var(--danger)' : issue.severity === 'warning' ? 'var(--warning)' : 'var(--info)';
+            html += `<div style="font-size:10px;color:${ic};margin-top:2px;">⚠ ${issue.message}</div>`;
+          }
+        }
+        html += `</div>`;
+      }
+      els.gpuInfoBody.innerHTML = html;
+    } catch (e) {
+      els.gpuInfoBody.innerHTML = `<p style="color:var(--danger);font-size:12px;">检测失败: ${e}</p>`;
+    }
+  }
+  els.refreshGpuBtn?.addEventListener('click', refreshGpuInfo);
+  // 启动时自动检测 GPU
+  refreshGpuInfo();
 
   // WebView 加载遮罩操作按钮
   const handleOpenInBrowser = async () => {
@@ -2083,6 +2231,33 @@ async function init() {
   safeCall(async () => {
     await invoke('run_initialization');
   }, '初始化失败');
+
+  // 自动检查更新（异步，不阻塞启动，静默失败）
+  (async () => {
+    try {
+      const result = await invoke('check_updates');
+      if (result && result.update_available) {
+        showNotification(
+          `发现新版本 ${result.latest_version}（当前 ${result.current_version}），前往 GitHub 下载？`,
+          'info',
+          8000
+        );
+        setTimeout(() => {
+          const toasts = els.toastContainer?.querySelectorAll('.toast');
+          if (toasts?.length) {
+            const lastToast = toasts[toasts.length - 1];
+            lastToast.style.cursor = 'pointer';
+            lastToast.addEventListener('click', () => {
+              invoke('open_external_url', { url: result.download_url });
+            });
+          }
+        }, 100);
+      }
+      console.log('[UpdateCheck] result:', JSON.stringify(result));
+    } catch (e) {
+      console.log('[UpdateCheck] 检查失败，静默忽略:', e);
+    }
+  })();
 }
 
 /**

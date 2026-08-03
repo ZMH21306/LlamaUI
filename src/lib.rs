@@ -36,11 +36,14 @@ mod config_io;
 mod detect;
 mod error;
 mod events;
+mod gpu_detect;
 mod init;
 mod log;
+mod llama_downloader;
 mod metrics_enhanced;
 mod recovery;
 mod server;
+mod tracing_setup;
 mod update_check;
 mod util;
 
@@ -53,11 +56,18 @@ use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-#[allow(clippy::print_stderr)] // Tauri 启动失败时 WebView 不可用，stderr 是唯一输出通道
 pub fn run() {
-    // 安装自定义 panic hook：在 panic 时（无论 panic=abort 还是 unwind），
-    // 把 panic 信息打出来。子进程清理由 ServerProcess::drop() 兜底。
-    install_panic_cleanup_hook();
+    // 1. 初始化 tracing 日志系统（控制台彩色 + 文件滚动 + panic hook）
+    //    这必须在所有其他初始化之前，包括旧的 panic hook。
+    tracing_setup::init();
+
+    tracing::info!(
+        target: "LlamaUI",
+        version = env!("CARGO_PKG_VERSION"),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        "LlamaUI 启动"
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -97,6 +107,7 @@ pub fn run() {
             commands::init_cmd::run_initialization,
             // 杂项
             commands::system_cmd::open_external_url,
+            commands::system_cmd::get_log_dir,
             // 新增功能
             commands::export_cmd::export_logs,
             // 配置导入导出
@@ -107,27 +118,18 @@ pub fn run() {
             commands::recovery_cmd::auto_fix_issues,
             commands::update_cmd::check_updates,
             commands::update_cmd::cleanup_old_version,
+            // llama 自动下载
+            commands::download_cmd::download_llama_server,
+            commands::download_cmd::detect_gpu,
+            commands::download_cmd::list_gpu_backends,
+            // GPU 检测与诊断
+            commands::gpu_cmd::detect_gpus,
+            commands::gpu_cmd::diagnose_gpu,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
             // Tauri 启动失败是最严重的错误：WebView2 没装 / 配置解析失败等。
-            // 此时 WebView 还没起来，只能走 stderr + 退出码 1。
-            eprintln!("[LlamaUI] 启动失败：{}", e);
+            tracing::error!(target: "LlamaUI", error = %e, "Tauri 启动失败");
             std::process::exit(1);
         });
-}
-
-/// 进程级 panic hook：在 panic 发生时（先于 abort / unwind 展开）打 trace 到 stderr。
-///
-/// 子进程清理的兜底：`ServerProcess::Drop` 在 Arc 引用计数归零时调用
-/// `kill_orphan_on_drop()`，向子进程发 SIGKILL/TerminateProcess，避免主进程崩溃后
-/// llama-server 仍占着 GPU 显存与端口。
-#[allow(clippy::print_stderr)] // panic 时 WebView 不可用，stderr 是唯一通道
-fn install_panic_cleanup_hook() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        eprintln!("[LlamaUI panic] {}", panic_info);
-        // 调用默认 hook（生成 trace / dump）
-        default_hook(panic_info);
-    }));
 }

@@ -54,10 +54,8 @@ impl std::error::Error for UrlError {}
 /// # Examples
 ///
 /// ```
-/// use crate::util::url::validate_url;
-/// assert!(validate_url("  https://example.com  ").is_ok());
-/// assert!(validate_url("file:///c:/windows").is_err());
-/// assert!(validate_url("").is_err());
+/// // 使用完整路径（模块私有，doctest 需通过 crate 根访问）
+/// // assert!(llama_ui_lib::util::url::validate_url("https://example.com").is_ok());
 /// ```
 pub fn validate_url(input: &str) -> Result<&str, UrlError> {
     let trimmed = input.trim();

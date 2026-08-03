@@ -79,7 +79,16 @@ thiserror = "1"
 futures = "0.3"
 sysinfo = "0.31"
 ureq = { version = "2", features = ["json"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_Foundation", "Wdk_System_Threading", "Wdk_System_SystemServices", "Win32_System_JobObjects", "Win32_Security"] }
+
+# 结构化日志：tracing 生态（控制台彩色 + 文件滚动输出）
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "registry", "tracing-log"] }
+tracing-appender = "0.2"
+tracing-error = "0.2"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

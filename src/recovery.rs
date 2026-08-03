@@ -186,7 +186,7 @@ mod tests {
         cfg.port = 1; // 端口 1 通常被占用或保留
         let result = diagnose(&cfg);
         // 可能有问题也可能没问题，取决于系统状态
-        assert!(result.issues.len() >= 0);
+        let _ = result.issues;
     }
 
     #[test]
