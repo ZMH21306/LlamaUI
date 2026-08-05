@@ -47,11 +47,15 @@ pub async fn start_server(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let cfg = state.config.get();
+    tracing::info!(target: "ServerCmd", mode = %cfg.mode, port = cfg.port, "收到启动服务请求");
     state
         .server
         .start(app, cfg)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            tracing::error!(target: "ServerCmd", error = %e, "启动服务失败");
+            e.to_string()
+        })
 }
 
 /// 停止 llama-server 子进程。
@@ -68,7 +72,11 @@ pub async fn stop_server(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.server.stop(&app).await.map_err(|e| e.to_string())
+    tracing::info!(target: "ServerCmd", "收到停止服务请求");
+    state.server.stop(&app).await.map_err(|e| {
+        tracing::error!(target: "ServerCmd", error = %e, "停止服务失败");
+        e.to_string()
+    })
 }
 
 /// 重启 llama-server。
@@ -81,6 +89,7 @@ pub async fn restart_server(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    tracing::info!(target: "ServerCmd", "收到重启服务请求");
     // Stop first (ignore error if not running)
     let _ = state.server.stop(&app).await;
     // Small delay so the port is released
@@ -90,7 +99,10 @@ pub async fn restart_server(
         .server
         .start(app, cfg)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            tracing::error!(target: "ServerCmd", error = %e, "重启服务失败");
+            e.to_string()
+        })
 }
 
 /// 获取当前服务状态、配置端口、实际绑定端口。
