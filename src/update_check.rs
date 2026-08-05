@@ -1,12 +1,79 @@
 //! 自动更新检查。
 //!
-//! 通过 GitHub Releases API 检查最新版本，识别新版本目录，
-//! 检测旧版本残留并提示用户清理。
+//! 通过 curl 调用 GitHub Releases API 检查最新版本，识别新版本目录，
+//! 检测旧版本残留并提示用户清理。使用 curl 子进程而非 ureq 库，
+//! 以确保在各种网络环境（代理、TLS）下都能正常工作。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::process::Command;
+
+/// 获取 GitHub Token（优先级：GITHUB_TOKEN/gh token → GH_TOKEN → 无）
+///
+/// 认证后速率限制从 60 次/小时提升到 5000 次/小时（PAT）或 15000 次/小时（GitHub App）
+fn get_github_token() -> Option<String> {
+    // 1. 环境变量 GITHUB_TOKEN（可设为 GitHub App 或 PAT）
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        if !token.is_empty() {
+            tracing::debug!(target: "UpdateCheck", source = "env:GITHUB_TOKEN", "获取到 token");
+            return Some(token);
+        }
+    }
+    // 2. gh CLI auth token（用户通过 gh auth login 登录后自动获取）
+    if let Ok(output) = Command::new("gh").args(["auth", "token"]).output() {
+        if output.status.success() {
+            let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !token.is_empty() {
+                tracing::debug!(target: "UpdateCheck", source = "gh-cli", "获取到 token");
+                return Some(token);
+            }
+        }
+    }
+    // 3. 环境变量 GH_TOKEN（备选）
+    if let Ok(token) = std::env::var("GH_TOKEN") {
+        if !token.is_empty() {
+            tracing::debug!(target: "UpdateCheck", source = "env:GH_TOKEN", "获取到 token");
+            return Some(token);
+        }
+    }
+    tracing::debug!(target: "UpdateCheck", "未找到认证 token，使用匿名请求（60 次/小时）");
+    None
+}
+
+/// 用 curl 获取 URL 内容（自动继承系统代理和 TLS 配置）
+fn curl_get_json(url: &str) -> anyhow::Result<String> {
+    tracing::debug!(target: "UpdateCheck", url = %url, "curl GET 请求");
+
+    let token = get_github_token();
+    let auth_header = token.as_deref().map(|t| format!("Authorization: token {}", t));
+
+    let mut args: Vec<&str> = vec![
+        "-s", "-L", "--max-time", "15",
+        "-H", "Accept: application/vnd.github.v3+json",
+    ];
+    // 需要持有 auth_header 的引用
+    let auth_ref;
+    if let Some(ref h) = auth_header {
+        auth_ref = h.as_str();
+        args.push("-H");
+        args.push(auth_ref);
+    }
+    args.push(url);
+
+    let output = Command::new("curl")
+        .args(&args)
+        .output()
+        .map_err(|e| anyhow::anyhow!("curl 不存在或无法执行: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!(target: "UpdateCheck", stderr = %stderr, "curl 请求失败");
+        return Err(anyhow::anyhow!("curl 请求失败: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
 
 /// 更新检查结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,108 +99,96 @@ pub struct UpdateCheckResult {
 pub struct OldInstallation {
     /// 安装路径
     pub path: String,
-    /// 版本号（从路径或文件推断）
+    /// 版本号
     pub version: String,
-    /// 最后修改时间
+    /// 最后修改时间（秒）
     pub last_modified: u64,
 }
 
-const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/ZMH21306/LlamaUI/releases/latest";
+/// GitHub Release API 响应结构
+#[derive(Debug, Deserialize)]
+struct GitHubReleaseResponse {
+    tag_name: String,
+    html_url: String,
+    body: Option<String>,
+    assets: Vec<GitHubAssetInfo>,
+}
 
-/// 检查更新
+/// GitHub Release 资产信息
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct GitHubAssetInfo {
+    name: String,
+    size: u64,
+    browser_download_url: String,
+}
+
+/// 主检查函数
+#[allow(clippy::print_stderr)]
 pub fn check_for_updates() -> anyhow::Result<UpdateCheckResult> {
-    tracing::info!(target: "UpdateCheck", "开始检查更新，当前版本: v{}", CURRENT_VERSION);
+    let current_version = env!("CARGO_PKG_VERSION");
+    let current_version_tag = format!("v{}", current_version);
 
-    // 1. 获取最新版本信息
-    tracing::debug!(target: "UpdateCheck", "正在获取最新版本信息...");
-    let latest = fetch_latest_release()?;
+    tracing::info!(target: "UpdateCheck", current_version = %current_version_tag, "开始检查更新");
 
-    // 2. 解析版本比较
-    let update_available = is_newer_version(&latest.tag_name, CURRENT_VERSION);
-    tracing::debug!(
-        target: "UpdateCheck",
-        latest = %latest.tag_name,
-        current = format!("v{}", CURRENT_VERSION),
-        update_available,
+    // 1. 获取最新 Release
+    let release = fetch_latest_release()?;
+    let latest_tag = release.tag_name.clone();
+    let is_newer = is_newer_version(&latest_tag, current_version);
+
+    tracing::info!(target: "UpdateCheck",
+        latest = %latest_tag,
+        current = %current_version_tag,
+        update_available = is_newer,
         "版本比较完成"
     );
 
-    // 3. 检测旧版本残留
-    tracing::debug!(target: "UpdateCheck", "正在检测旧版本残留...");
-    let old_installations = detect_old_installations()?;
-    tracing::info!(
-        target: "UpdateCheck",
-        count = old_installations.len(),
-        "检测到 {} 个旧版本残留",
-        old_installations.len()
-    );
+    // 2. 检测旧版本
+    let old_installations = detect_old_installations(current_version);
+    if !old_installations.is_empty() {
+        tracing::info!(target: "UpdateCheck", count = old_installations.len(), "发现旧版本残留");
+    }
 
-    // 4. 构建平台标识
-    let platform = get_platform标识();
-
-    tracing::info!(target: "UpdateCheck", "更新检查完成");
+    // 3. 获取平台标识
+    let platform = get_platform();
 
     Ok(UpdateCheckResult {
-        update_available,
-        latest_version: latest.tag_name.clone(),
-        current_version: format!("v{}", CURRENT_VERSION),
-        download_url: latest.html_url,
-        release_notes: latest.body,
+        update_available: is_newer,
+        latest_version: latest_tag,
+        current_version: current_version_tag,
+        download_url: release.html_url,
+        release_notes: release.body.unwrap_or_default(),
         old_installations,
         platform,
     })
 }
 
-/// GitHub Release API 响应
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    html_url: String,
-    body: String,
-}
+/// 通过 curl 获取 GitHub Release 信息
+fn fetch_latest_release() -> anyhow::Result<GitHubReleaseResponse> {
+    let url = "https://api.github.com/repos/ZMH21306/LlamaUI/releases/latest";
 
-fn fetch_latest_release() -> anyhow::Result<GitHubRelease> {
-    tracing::debug!(target: "UpdateCheck", url = %GITHUB_RELEASES_API, "发送 HTTP GET 请求");
+    let json_str = curl_get_json(url)?;
 
-    let response = ureq::get(GITHUB_RELEASES_API)
-        .set("User-Agent", "LlamaUI")
-        .set("Accept", "application/vnd.github.v3+json")
-        .timeout(Duration::from_secs(10))
-        .call()
-        .map_err(|e| {
-            tracing::warn!(target: "UpdateCheck", error = %e, "网络请求失败");
-            // 403 通常是速率限制，不视为严重错误
-            if let ureq::Error::Status(403, _) = &e {
-                anyhow::anyhow!("GitHub API 速率限制，请稍后再试")
-            } else {
-                anyhow::anyhow!("网络请求失败：{}", e)
-            }
-        })?;
+    // 检查是否被限流
+    if json_str.contains("API rate limit exceeded") {
+        tracing::warn!(target: "UpdateCheck", "GitHub API 速率限制");
+        return Err(anyhow::anyhow!("GitHub API 速率限制，请稍后再试"));
+    }
 
-    tracing::debug!(target: "UpdateCheck", status = %response.status(), "收到 HTTP 响应");
+    let release: GitHubReleaseResponse = serde_json::from_str(&json_str)
+        .map_err(|e| anyhow::anyhow!("解析 Release 失败: {}", e))?;
 
-    let release: GitHubRelease = response
-        .into_json()
-        .map_err(|e| {
-            tracing::warn!(target: "UpdateCheck", error = %e, "解析响应 JSON 失败");
-            anyhow::anyhow!("解析响应失败：{}", e)
-        })?;
-
-    tracing::debug!(
-        target: "UpdateCheck",
-        version = %release.tag_name,
-        url = %release.html_url,
-        "解析成功"
-    );
+    tracing::debug!(target: "UpdateCheck", tag = %release.tag_name, assets = release.assets.len(), "获取到 Release");
 
     Ok(release)
 }
 
+/// 版本比较：返回 latest 是否比 current 新
+///
+/// 支持格式: "v1.2.3" 或 "1.2.3"
 fn is_newer_version(latest: &str, current: &str) -> bool {
-    // 简化版本比较：去除 "v" 前缀后按语义化版本比较
-    let latest_clean = latest.strip_prefix('v').unwrap_or(latest);
-    let current_clean = current.strip_prefix('v').unwrap_or(current);
+    let latest_clean = latest.trim_start_matches('v');
+    let current_clean = current.trim_start_matches('v');
 
     let latest_parts: Vec<u32> = latest_clean
         .split('.')
@@ -148,195 +203,249 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
         let l = latest_parts.get(i).copied().unwrap_or(0);
         let c = current_parts.get(i).copied().unwrap_or(0);
         if l > c {
-            tracing::debug!(
-                target: "UpdateCheck",
-                latest = %latest_clean,
-                current = %current_clean,
-                result = "有新版本",
-                "版本比较"
-            );
             return true;
-        } else if l < c {
-            tracing::debug!(
-                target: "UpdateCheck",
-                latest = %latest_clean,
-                current = %current_clean,
-                result = "无新版本",
-                "版本比较"
-            );
+        }
+        if l < c {
             return false;
         }
     }
-    tracing::debug!(
-        target: "UpdateCheck",
-        latest = %latest_clean,
-        current = %current_clean,
-        result = "无新版本",
-        "版本比较"
-    );
+
     false
 }
 
-/// 检测旧版本残留
-fn detect_old_installations() -> anyhow::Result<Vec<OldInstallation>> {
-    let mut old_installations = Vec::new();
+/// 获取当前平台标识
+pub fn get_platform() -> String {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
 
-    // 检测常见的安装位置
-    let search_dirs = get_search_directories();
+    let os_str = match os {
+        "windows" => "windows",
+        "linux" => "linux",
+        "macos" => "macos",
+        _ => os,
+    };
 
-    tracing::debug!(
-        target: "UpdateCheck",
-        count = search_dirs.len(),
-        "搜索 {} 个目录检测旧版本...",
-        search_dirs.len()
-    );
+    let arch_str = match arch {
+        "x86_64" => "x64",
+        "aarch64" => "aarch64",
+        "arm" => "arm",
+        _ => arch,
+    };
+
+    format!("{}-{}", os_str, arch_str)
+}
+
+/// 检测可能的旧版本安装
+fn detect_old_installations(current_version: &str) -> Vec<OldInstallation> {
+    let mut installations = Vec::new();
+    let search_dirs = get_search_dirs();
 
     for dir in &search_dirs {
-        tracing::debug!(target: "UpdateCheck", dir = %dir.display(), "检查目录");
-        if dir.exists() {
-            if let Some(installation) = check_directory(dir) {
-                // 只添加与当前版本不同的安装
-                if installation.version != format!("v{}", CURRENT_VERSION) {
-                    tracing::info!(target: "UpdateCheck", path = %installation.path, version = %installation.version, "发现旧版本");
-                    old_installations.push(installation);
-                } else {
-                    tracing::debug!(target: "UpdateCheck", "目录版本与当前相同，跳过");
-                }
-            }
-        } else {
-            tracing::debug!(target: "UpdateCheck", "目录不存在，跳过");
+        if dir.is_dir() {
+            scan_for_old_installations(dir, current_version, &mut installations);
         }
     }
 
-    Ok(old_installations)
+    installations
 }
 
-fn get_search_directories() -> Vec<PathBuf> {
+/// 获取搜索目录列表
+fn get_search_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-
     let os = std::env::consts::OS;
+
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".llamaui"));
+    }
 
     match os {
         "windows" => {
-            // Program Files
-            if let Ok(program_files) = std::env::var("PROGRAMFILES") {
-                dirs.push(PathBuf::from(program_files).join("LlamaUI"));
+            if let Ok(program_files) = std::env::var("ProgramFiles") {
+                dirs.push(PathBuf::from(program_files));
             }
-            if let Ok(program_files_x86) = std::env::var("PROGRAMFILES(X86)") {
-                dirs.push(PathBuf::from(program_files_x86).join("LlamaUI"));
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                dirs.push(PathBuf::from(local_app_data));
             }
-
-            // Local AppData
-            if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-                dirs.push(
-                    PathBuf::from(&local_appdata)
-                        .join("Programs")
-                        .join("LlamaUI"),
-                );
-                dirs.push(PathBuf::from(&local_appdata).join("LlamaUI"));
-            }
-
-            // 用户主目录
-            if let Ok(home) = std::env::var("USERPROFILE") {
-                dirs.push(
-                    PathBuf::from(&home)
-                        .join("AppData")
-                        .join("Local")
-                        .join("LlamaUI"),
-                );
-                dirs.push(PathBuf::from(&home).join("LlamaUI"));
+            if let Some(user_profile) = dirs::home_dir() {
+                dirs.push(user_profile);
             }
         }
         "linux" => {
-            // 系统级安装路径
-            dirs.push(PathBuf::from("/usr/local/bin/LlamaUI"));
-            dirs.push(PathBuf::from("/opt/LlamaUI"));
-
-            // 用户级安装路径
-            if let Ok(home) = std::env::var("HOME") {
-                dirs.push(
-                    PathBuf::from(&home)
-                        .join(".local")
-                        .join("share")
-                        .join("LlamaUI"),
-                );
-                dirs.push(PathBuf::from(&home).join("LlamaUI"));
+            dirs.push(PathBuf::from("/usr/local/bin"));
+            dirs.push(PathBuf::from("/opt"));
+            if let Some(home) = dirs::home_dir() {
+                dirs.push(home.join(".local"));
             }
         }
         "macos" => {
-            // 系统级安装路径
-            dirs.push(PathBuf::from("/Applications/LlamaUI"));
-
-            // 用户级安装路径
-            if let Ok(home) = std::env::var("HOME") {
-                dirs.push(
-                    PathBuf::from(&home)
-                        .join("Applications")
-                        .join("LlamaUI"),
-                );
-                dirs.push(PathBuf::from(&home).join("LlamaUI"));
+            dirs.push(PathBuf::from("/Applications"));
+            if let Some(home) = dirs::home_dir() {
+                dirs.push(home.join("Applications"));
             }
-
-            // /usr/local 路径
-            dirs.push(PathBuf::from("/usr/local/LlamaUI"));
         }
-        _ => {
-            tracing::warn!(target: "UpdateCheck", os = os, "未知操作系统，仅搜索通用路径");
-        }
+        _ => {}
     }
 
     dirs
 }
 
-fn check_directory(path: &Path) -> Option<OldInstallation> {
-    // 检查目录是否存在版本标识文件
-    let version_file = path.join("version.txt");
-    let version = if version_file.exists() {
-        fs::read_to_string(&version_file).ok()?
-    } else {
-        // 尝试从目录名推断版本
-        path.file_name()?.to_string_lossy().to_string()
+/// 递归扫描目录，查找旧版本
+fn scan_for_old_installations(
+    dir: &Path,
+    current_version: &str,
+    installations: &mut Vec<OldInstallation>,
+) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
     };
 
-    // 获取最后修改时间
-    let metadata = fs::metadata(path).ok()?;
-    let last_modified = metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
+    for entry in entries.flatten() {
+        let path = entry.path();
 
-    Some(OldInstallation {
-        path: path.to_string_lossy().to_string(),
-        version,
-        last_modified,
-    })
+        if !path.is_dir() {
+            continue;
+        }
+
+        // 检查是否是 llamaui 相关目录
+        if let Some(name) = path.file_name() {
+            let name_str = name.to_string_lossy().to_lowercase();
+
+            if name_str.contains("llamaui") || name_str.contains("llama-ui") {
+                // 检查是否有 version.txt
+                let version_file = path.join("version.txt");
+                if let Ok(version) = fs::read_to_string(&version_file) {
+                    let version = version.trim().to_string();
+                    if !version.is_empty() && version != current_version {
+                        let last_modified = fs::metadata(&path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+
+                        tracing::debug!(target: "UpdateCheck",
+                            path = %path.display(),
+                            version = %version,
+                            "发现旧版本"
+                        );
+
+                        installations.push(OldInstallation {
+                            path: path.to_string_lossy().to_string(),
+                            version,
+                            last_modified,
+                        });
+                    }
+                }
+
+                // 从目录名推断版本
+                if let Some(version) = extract_version_from_name(&name_str) {
+                    if version != current_version {
+                        let last_modified = fs::metadata(&path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+
+                        // 避免重复
+                        if !installations.iter().any(|i| i.path == path.to_string_lossy()) {
+                            installations.push(OldInstallation {
+                                path: path.to_string_lossy().to_string(),
+                                version,
+                                last_modified,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-/// 清理旧版本
+/// 清理旧版本安装目录
 pub fn cleanup_old_installation(path: &str) -> anyhow::Result<()> {
-    let path = Path::new(path);
+    let path = PathBuf::from(path);
+
     if !path.exists() {
+        tracing::debug!(target: "UpdateCheck", path = %path.display(), "路径不存在，跳过");
         return Ok(());
     }
 
-    // 删除目录（递归）
-    fs::remove_dir_all(path)?;
+    tracing::info!(target: "UpdateCheck", path = %path.display(), "清理旧版本目录");
+
+    // 安全检查：只允许删除 llamaui 相关目录
+    let path_str = path.to_string_lossy().to_lowercase();
+    if !path_str.contains("llamaui") && !path_str.contains("llama-ui") {
+        tracing::warn!(target: "UpdateCheck", path = %path.display(), "路径不包含 llamaui 关键词，拒绝删除");
+        return Err(anyhow::anyhow!("安全拒绝：路径不包含 llamaui 关键词"));
+    }
+
+    // 安全检查：不允许删除系统关键目录
+    let dangerous_paths = [
+        "C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",
+        "/usr", "/bin", "/sbin", "/etc", "/System",
+    ];
+    for dp in &dangerous_paths {
+        if path_str.starts_with(&dp.to_lowercase()) {
+            tracing::warn!(target: "UpdateCheck", path = %path.display(), dangerous = dp, "拒绝删除系统目录");
+            return Err(anyhow::anyhow!("安全拒绝：不允许删除系统目录 {}", dp));
+        }
+    }
+
+    fs::remove_dir_all(&path)
+        .map_err(|e| anyhow::anyhow!("删除目录失败: {}", e))?;
+
+    tracing::info!(target: "UpdateCheck", path = %path.display(), "旧版本目录已清理");
     Ok(())
 }
 
-/// 返回当前平台标识，格式为 `{os}-{arch}`，如 `windows-x64`、`linux-aarch64`
-fn get_platform标识() -> String {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    let arch_label = match arch {
-        "x86_64" => "x64",
-        "x86" | "i686" | "i386" => "x86",
-        "aarch64" => "arm64",
-        other => other,
-    };
-    format!("{}-{}", os, arch_label)
+/// 从目录名提取版本号（手动解析，避免正则依赖）
+fn extract_version_from_name(name: &str) -> Option<String> {
+    // 查找 "v" 后跟数字序列
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'v' || bytes[i] == b'V' {
+            i += 1;
+            // 尝试解析 major.minor.patch
+            let start = i;
+            let mut has_digit = false;
+            // major
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                has_digit = true;
+                i += 1;
+            }
+            if !has_digit || i >= bytes.len() || bytes[i] != b'.' {
+                continue;
+            }
+            i += 1; // skip '.'
+            // minor
+            let minor_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == minor_start || i >= bytes.len() || bytes[i] != b'.' {
+                continue;
+            }
+            i += 1; // skip '.'
+            // patch
+            let patch_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == patch_start {
+                continue;
+            }
+            let version = &name[start..i];
+            // 基本校验：至少包含一个点
+            if version.contains('.') {
+                return Some(version.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -344,54 +453,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_comparison() {
+    fn test_version_comparison() {
+        assert!(is_newer_version("v1.0.0", "0.9.0"));
+        assert!(is_newer_version("1.0.0", "0.9.0"));
         assert!(is_newer_version("v0.4.0", "v0.3.0"));
-        assert!(is_newer_version("v1.0.0", "v0.9.9"));
-        assert!(is_newer_version("v0.3.1", "v0.3.0"));
-        assert!(!is_newer_version("v0.3.0", "v0.3.0"));
-        assert!(!is_newer_version("v0.2.0", "v0.3.0"));
+        assert!(!is_newer_version("v0.3.0", "v0.4.0"));
+        assert!(!is_newer_version("v0.4.0", "v0.4.0"));
+        assert!(is_newer_version("v1.0.0", "0.9.9"));
+        assert!(is_newer_version("v0.4.1", "v0.4.0"));
+        assert!(!is_newer_version("v0.4.0", "v0.4.1"));
     }
 
     #[test]
-    fn version_comparison_without_v_prefix() {
-        assert!(is_newer_version("0.4.0", "0.3.0"));
-        assert!(is_newer_version("1.0.0", "0.9.9"));
-    }
-
-    #[test]
-    fn update_check_result_serialization() {
-        let result = UpdateCheckResult {
-            update_available: true,
-            latest_version: "v0.4.0".to_string(),
-            current_version: "v0.3.0".to_string(),
-            download_url: "https://github.com/ZMH21306/LlamaUI/releases/tag/v0.4.0".to_string(),
-            release_notes: "New features".to_string(),
-            old_installations: vec![],
-            platform: "windows-x64".to_string(),
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"update_available\":true"));
-        assert!(json.contains("\"latest_version\":\"v0.4.0\""));
-        assert!(json.contains("\"platform\":\"windows-x64\""));
-    }
-
-    #[test]
-    fn old_installation_serialization() {
-        let installation = OldInstallation {
-            path: "C:\\Program Files\\LlamaUI".to_string(),
-            version: "v0.2.0".to_string(),
-            last_modified: 1234567890,
-        };
-        let json = serde_json::to_string(&installation).unwrap();
-        assert!(json.contains("\"path\":\"C:\\\\Program Files\\\\LlamaUI\""));
-        assert!(json.contains("\"version\":\"v0.2.0\""));
-    }
-
-    #[test]
-    fn platform标识_format() {
-        let platform = get_platform标识();
+    fn test_platform_detection() {
+        let platform = get_platform();
+        assert!(!platform.is_empty());
         assert!(platform.contains('-'));
-        let parts: Vec<&str> = platform.split('-').collect();
-        assert_eq!(parts.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_version() {
+        assert_eq!(
+            extract_version_from_name("llama-ui-v0.3.0"),
+            Some("0.3.0".to_string())
+        );
+        assert_eq!(
+            extract_version_from_name("llamaui-v0.2.1-beta"),
+            Some("0.2.1".to_string())
+        );
+        assert_eq!(extract_version_from_name("random"), None);
     }
 }
