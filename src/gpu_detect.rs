@@ -158,7 +158,7 @@ fn detect_nvidia_gpu() -> Option<GpuInfo> {
 
     // nvidia-smi 查询成功即证明 NVIDIA 驱动已安装，CUDA 后端可用。
     // 不应依赖 CUDA 版本字符串解析结果来决定是否推荐 CUDA。
-    let mut available_backends = vec!["cpu".to_string(), "cuda".to_string()];
+    let available_backends = vec!["cpu".to_string(), "cuda".to_string()];
 
     Some(GpuInfo {
         model: name,
