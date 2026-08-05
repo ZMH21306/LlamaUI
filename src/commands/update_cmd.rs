@@ -5,8 +5,12 @@ use crate::update_check::{check_for_updates, cleanup_old_installation, UpdateChe
 /// 检查更新
 #[tauri::command]
 pub fn check_updates() -> Result<UpdateCheckResult, String> {
+    tracing::info!(target: "UpdateCmd", "收到检查更新请求");
     check_for_updates()
-        .map_err(|e| format!("检查更新失败：{}", e))
+        .map_err(|e| {
+            tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
+            format!("检查更新失败：{}", e)
+        })
 }
 
 /// 清理旧版本
