@@ -53,16 +53,35 @@ pub async fn download_llama_server(
     // 执行下载，实时推送进度
     let result = tokio::task::spawn_blocking(move || {
         download_and_install(gpu_backend, &dir, Some(&|progress| {
+            tracing::debug!(
+                target: "DownloadCmd",
+                stage = %progress.stage,
+                progress = progress.progress,
+                downloaded = progress.downloaded,
+                total = progress.total,
+                message = %progress.message,
+                "下载进度"
+            );
             let _ = app_clone.emit("download-progress", &progress);
         }))
     })
     .await
-    .map_err(|e| format!("下载任务执行失败: {}", e))?
-    .map_err(|e| format!("下载失败: {}", e))?;
+    .map_err(|e| {
+        let msg = format!("下载任务执行失败: {}", e);
+        tracing::error!(target: "DownloadCmd", error = %e, "spawn_blocking 失败");
+        msg
+    })?
+    .map_err(|e| {
+        let msg = format!("{}", e);
+        tracing::error!(target: "DownloadCmd", error = %e, "下载安装失败");
+        msg
+    })?;
 
     tracing::info!(
         target: "DownloadCmd",
         path = ?result.path,
+        file_size = result.file_size,
+        elapsed_ms = result.elapsed_ms,
         "下载完成"
     );
 
