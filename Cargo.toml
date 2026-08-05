@@ -78,7 +78,6 @@ anyhow = "1"
 thiserror = "1"
 futures = "0.3"
 sysinfo = "0.31"
-ureq = { version = "2", features = ["json"] }
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
