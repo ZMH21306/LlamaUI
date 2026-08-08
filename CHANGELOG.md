@@ -2,6 +2,17 @@
 
 本文件记录 LlamaUI 项目的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-08-08
+
+### 改进
+- **llama-server 下载重构**：改用 curl 子进程发起 HTTP 请求，自动继承系统代理和 TLS 配置
+- **GitHub Token 认证**：支持 GITHUB_TOKEN / gh CLI / GH_TOKEN 多来源认证，解决 API 限流
+- **更新检查优化**：重构 GitHub Releases API 调用，提升稳定性和错误处理
+- **下载命令优化**：改进下载进度与错误处理逻辑
+
+### 修复
+- 修复下载与更新检查相关的稳定性问题
+
 ## [0.5.0] - 2026-08-02
 
 ### 新增
