@@ -222,11 +222,11 @@ LlamaUI/
 
 ## 测试
 
-项目包含 142 个单元测试，覆盖关键安全逻辑：
+项目包含 161 个单元测试，覆盖关键安全逻辑：
 
 ```bash
 cargo test --lib
-# test result: ok. 142 passed; 0 failed
+# test result: ok. 161 passed; 0 failed
 ```
 
 **测试覆盖**：
