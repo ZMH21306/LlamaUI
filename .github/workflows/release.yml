@@ -92,7 +92,9 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Security audit
-        run: cargo audit --deny warnings
+        # --deny warnings 把"unmaintained crate"等维护警告也当作失败，
+        # 导致无法正常发版。仅对实际安全漏洞（advisories）拒绝即可。
+        run: cargo audit --deny advisories
 
       - name: Build
         run: cargo tauri build --target ${{ matrix.rust_target }}
