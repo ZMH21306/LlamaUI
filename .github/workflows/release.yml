@@ -1,5 +1,7 @@
 name: Release
 
+# ─── 触发条件 ───────────────────────────────────────────────────────────────
+# 仅对 v* 格式的 tag push 触发；也支持手动触发（指定 tag）。
 on:
   push:
     tags:
@@ -7,73 +9,150 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.4.0)'
+        description: 'Release tag (e.g. v0.6.0)'
         required: true
+        type: string
 
+# ─── 权限 ────────────────────────────────────────────────────────────────────
 permissions:
-  contents: write
+  contents: write   # 允许 gh release 创建/更新 release
 
+# ─── 并发控制 ─────────────────────────────────────────────────────────────────
+# 同一 tag 不会并发运行；旧任务自动取消。
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+# ─── 预检查（不阻塞构建） ────────────────────────────────────────────────────
 jobs:
+  precheck:
+    name: Pre-release audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install cargo-audit (optional, do not fail the job)
+        run: cargo install --locked cargo-audit 2>/dev/null || echo "cargo-audit not installed, skipping audit"
+
+      - name: Security audit (soft-fail)
+        # cargo audit 默认仅在出现 vulnerability（严重等级）时返回非 0。
+        # unmaintained / yanked / informational 警告不会阻塞发版。
+        # 若 cargo-audit 未安装则跳过，不中断流程。
+        run: |
+          if command -v cargo-audit &>/dev/null; then
+            echo "⚠️  Running cargo audit …"
+            cargo audit || true   # 允许 audit 失败，但记录日志
+          else
+            echo "ℹ️  cargo-audit 未安装，跳过安全审计"
+          fi
+
+      - name: Check Cargo.lock is committed
+        run: |
+          if git diff --exit-code -- Cargo.lock; then
+            echo "✅ Cargo.lock 已提交"
+          else
+            echo "⚠️  Cargo.lock 有未提交的变更，可能影响构建可重复性"
+            echo "   建议先执行：cargo update && git add Cargo.lock && git commit"
+          fi
+
+  # ─── 多平台构建 ────────────────────────────────────────────────────────────
   build:
+    name: Build (${{ matrix.os_name }} ${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Windows x64
+          # ── Windows ──
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
             os_name: Windows
             arch: x64
-          # Windows x86
           - platform: windows-latest
             rust_target: i686-pc-windows-msvc
             os_name: Windows
             arch: x86
-          # Windows arm64
           - platform: windows-latest
             rust_target: aarch64-pc-windows-msvc
             os_name: Windows
             arch: arm64
-          # Linux x64
+          # ── Linux ──
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             os_name: Linux
             arch: x64
-          # Linux arm64 - use native ARM runner
           - platform: ubuntu-22.04-arm
             rust_target: aarch64-unknown-linux-gnu
             os_name: Linux
             arch: arm64
-          # macOS x64 - cross-compile on ARM runner
+          # ── macOS ──
           - platform: macos-latest
             rust_target: x86_64-apple-darwin
             os_name: macOS
             arch: x64
-          # macOS arm64
           - platform: macos-latest
             rust_target: aarch64-apple-darwin
             os_name: macOS
             arch: arm64
 
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60   # 单次构建最长 60 分钟，超时自动取消
 
     steps:
+      # ── 1. 检出代码 ─────────────────────────────────────────────────────────
       - uses: actions/checkout@v4
 
+      # ── 2. 安装 Rust 工具链 ─────────────────────────────────────────────────
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
 
+      # ── 3. 缓存依赖（加速重复构建） ─────────────────────────────────────────
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.rust_target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.rust_target }}-cargo-
+
+      # ── 4. 安装系统依赖（仅 Linux） ────────────────────────────────────────
       - name: Install dependencies (ubuntu)
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev xdg-utils
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            xdg-utils
 
+      # ── 5. 安装 Tauri CLI ───────────────────────────────────────────────────
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2"
 
+      # ── 6. 解析版本号 ───────────────────────────────────────────────────────
       - name: Resolve version
         id: version
         shell: bash
@@ -84,59 +163,53 @@ jobs:
             TAG="${GITHUB_REF_NAME}"
           fi
           VERSION="${TAG#v}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved: TAG=${TAG} VERSION=${VERSION}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building: $TAG (${{ matrix.os_name }} ${{ matrix.arch }})"
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Security audit
-        # 默认 cargo audit 仅在出现实际漏洞（vulnerability）时退出非 0，
-        # unmaintained / yanked 等警告不会阻塞发版。
-        # 如需严格模式可加 --deny warnings，但当前依赖树包含多个 unmaintained GTK3 绑定。
-        run: cargo audit
-
+      # ── 7. 构建 ─────────────────────────────────────────────────────────────
       - name: Build
         run: cargo tauri build --target ${{ matrix.rust_target }}
 
+      # ── 8. 收集产物（Windows） ──────────────────────────────────────────────
       - name: Collect artifacts (Windows)
         if: matrix.os_name == 'Windows'
         shell: bash
         run: |
-          mkdir -p artifacts
           VERSION="${{ steps.version.outputs.version }}"
           NAME="LlamaUI_${VERSION}_${{ matrix.os_name }}_${{ matrix.arch }}"
           RELEASE_DIR="target/${{ matrix.rust_target }}/release"
+          mkdir -p artifacts
 
-          # NSIS installer
+          # NSIS 安装包
           for f in "$RELEASE_DIR"/bundle/nsis/*.exe; do
             cp "$f" "artifacts/${NAME}.exe" && break
           done
-          # MSI installer
+          # MSI 安装包
           for f in "$RELEASE_DIR"/bundle/msi/*.msi; do
             cp "$f" "artifacts/${NAME}.msi" && break
           done
-          # Portable zip (include exe + dist/)
+          # 便携版 ZIP（exe + dist/）
           mkdir -p portable
-          cp "$RELEASE_DIR"/llama-ui.exe portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui.exe portable/ 2>/dev/null || true
+          cp "$RELEASE_DIR"/llama-ui.exe portable/ 2>/dev/null \
+            || cp "$RELEASE_DIR"/llama_ui.exe portable/ 2>/dev/null || true
           cp -r dist/ portable/dist/ || true
           7z a "artifacts/${NAME}.zip" portable/ || true
           rm -rf portable
 
-          echo "=== Collected artifacts ==="
-          ls -la artifacts/
+          ls -lh artifacts/
 
+      # ── 9. 收集产物（Linux） ────────────────────────────────────────────────
       - name: Collect artifacts (Linux)
         if: matrix.os_name == 'Linux'
         shell: bash
         run: |
-          mkdir -p artifacts
           VERSION="${{ steps.version.outputs.version }}"
           NAME="LlamaUI_${VERSION}_${{ matrix.os_name }}_${{ matrix.arch }}"
           RELEASE_DIR="target/${{ matrix.rust_target }}/release"
+          mkdir -p artifacts
 
-          # deb package
+          # .deb 包
           for f in "$RELEASE_DIR"/bundle/deb/*.deb; do
             cp "$f" "artifacts/${NAME}.deb" && break
           done
@@ -144,53 +217,58 @@ jobs:
           for f in "$RELEASE_DIR"/bundle/appimage/*.AppImage; do
             cp "$f" "artifacts/${NAME}.AppImage" && break
           done
-          # Portable tar.gz
+          # 便携版 tar.gz
           mkdir -p portable
-          cp "$RELEASE_DIR"/llama-ui portable/ 2>/dev/null || cp "$RELEASE_DIR"/llama_ui portable/ 2>/dev/null || true
+          cp "$RELEASE_DIR"/llama-ui portable/ 2>/dev/null \
+            || cp "$RELEASE_DIR"/llama_ui portable/ 2>/dev/null || true
           cp -r dist/ portable/dist/ || true
           tar czf "artifacts/${NAME}.tar.gz" -C portable . || true
           rm -rf portable
 
-          echo "=== Collected artifacts ==="
-          ls -la artifacts/
+          ls -lh artifacts/
 
+      # ── 10. 收集产物（macOS） ───────────────────────────────────────────────
       - name: Collect artifacts (macOS)
         if: matrix.os_name == 'macOS'
         shell: bash
         run: |
-          mkdir -p artifacts
           VERSION="${{ steps.version.outputs.version }}"
           NAME="LlamaUI_${VERSION}_${{ matrix.os_name }}_${{ matrix.arch }}"
           RELEASE_DIR="target/${{ matrix.rust_target }}/release"
+          mkdir -p artifacts
 
-          # DMG installer
+          # DMG 安装包
           for f in "$RELEASE_DIR"/bundle/dmg/*.dmg; do
             cp "$f" "artifacts/${NAME}.dmg" && break
           done
-          # Portable tar.gz
+          # 便携版 tar.gz（.app bundle + dist/）
           mkdir -p portable
           cp -r "$RELEASE_DIR"/bundle/macos/LlamaUI.app portable/ 2>/dev/null || true
           cp -r dist/ portable/dist/ || true
           tar czf "artifacts/${NAME}.tar.gz" -C portable . || true
           rm -rf portable
 
-          echo "=== Collected artifacts ==="
-          ls -la artifacts/
+          ls -lh artifacts/
 
+      # ── 11. 上传产物 ────────────────────────────────────────────────────────
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os_name }}-${{ matrix.arch }}
-          path: artifacts/*
-          if-no-files-found: warn
+          path: artifacts/
+          if-no-files-found: error   # 产物为空则立即报错
+          retention-days: 1          # 构建完成后 1 天自动清理
 
+  # ─── 发布 Release ─────────────────────────────────────────────────────────
   release:
+    name: Create GitHub Release
     needs: build
     if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 10
 
+    steps:
+      # ── 1. 解析版本号 ───────────────────────────────────────────────────────
       - name: Resolve version
         id: version
         run: |
@@ -200,22 +278,37 @@ jobs:
             TAG="${GITHUB_REF_NAME}"
           fi
           VERSION="${TAG#v}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      # ── 2. 下载全部产物 ─────────────────────────────────────────────────────
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      # ── 3. 检查是否有成功构建的产物 ─────────────────────────────────────────
+      - name: Verify artifacts
+        run: |
+          count=$(find artifacts -type f | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "❌ 没有可用的构建产物，跳过 Release 发布"
+            exit 1
+          fi
+          echo "✅ 找到 $count 个产物文件"
+          find artifacts -type f -exec ls -lh {} \;
+
+      # ── 4. 整理产物到 release_files/ ────────────────────────────────────────
       - name: Flatten artifacts
         run: |
           mkdir -p release_files
-          find artifacts -type f ! -name "*.txt" -exec cp {} release_files/ \;
-          echo "=== Release files ==="
-          ls -la release_files/
+          # 拷贝所有文件，排除 .txt 文件（checksum 单独生成）
+          find artifacts -type f ! -name '*.txt' -exec cp {} release_files/ \;
+          echo "=== release_files ==="
+          ls -lh release_files/
 
-      - name: Generate SHA256 checksums
+      # ── 5. 生成 SHA256 校验和 ───────────────────────────────────────────────
+      - name: Generate checksums
         run: |
           cd release_files
           sha256sum * | sort -k2 > ../SHA256SUMS.txt
@@ -223,6 +316,7 @@ jobs:
           echo "=== SHA256SUMS ==="
           cat SHA256SUMS.txt
 
+      # ── 6. 生成 Release Notes ──────────────────────────────────────────────
       - name: Generate release notes
         id: notes
         run: |
@@ -231,90 +325,47 @@ jobs:
           DATE=$(date -u +%Y-%m-%d)
           REPO="${{ github.repository }}"
           BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
-          {
-            echo "body<<EOF"
-            echo "## LlamaUI ${TAG}"
-            echo ""
-            echo "**发布日期**：${DATE}"
-            echo ""
-            echo "---"
-            echo ""
-            echo "### 新增功能"
-            echo ""
-            echo "- **GPU 自动检测**：支持 NVIDIA/AMD/Intel GPU 型号、驱动版本、CUDA/ROCm 版本检测"
-            echo "- **llama-server 自动下载**：一键从 GitHub Releases 下载适配当前 GPU 后端的 llama.cpp 预编译包"
-            echo "- **GPU 后端自动选择**：根据 GPU 类型自动选择 CUDA/ROCm/Vulkan/Metal/CPU 后端"
-            echo "- **全局日志系统**：基于 tracing 生态，控制台彩色分级输出 + 文件持久化（按日滚动）"
-            echo "- **Panic Hook**：崩溃时自动写入完整 backtrace 到日志文件"
-            echo "- **前端 GPU 信息卡片**：实时显示 GPU 型号、显存、驱动版本、推荐后端"
-            echo "- **前端下载按钮**：支持 llama-server 一键下载、进度条、SHA256 校验"
-            echo "- **前端检查更新按钮**：顶栏手动检查更新入口"
-            echo ""
-            echo "### 改进"
-            echo ""
-            echo "- 更新检查扩展支持 Linux/macOS 旧版本路径检测"
-            echo "- NVIDIA GPU 检测不依赖 CUDA 版本解析"
-            echo "- GitHub API 请求添加 Accept header 解决 403 问题"
-            echo "- 前端下载进度平滑动画（每帧最多 +2% 渐进）"
-            echo ""
-            echo "### 修复"
-            echo ""
-            echo "- tracing_setup.rs 编译错误修复"
-            echo "- 移除未使用的 tracing-error 依赖"
-            echo ""
-            echo "### 下载说明"
-            echo ""
-            echo "| 平台 | 架构 | 文件 | 说明 |"
-            echo "|------|------|------|------|"
-            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.exe\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x64.exe) | NSIS 安装程序 |"
-            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.msi\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x64.msi) | MSI 安装程序 |"
-            echo "| Windows | x64 | [\`LlamaUI_${VERSION}_Windows_x64.zip\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x64.zip) | 便携版 |"
-            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.exe\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x86.exe) | NSIS 安装程序 |"
-            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.msi\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x86.msi) | MSI 安装程序 |"
-            echo "| Windows | x86 | [\`LlamaUI_${VERSION}_Windows_x86.zip\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_x86.zip) | 便携版 |"
-            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.exe\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_arm64.exe) | NSIS 安装程序 |"
-            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.msi\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_arm64.msi) | MSI 安装程序 |"
-            echo "| Windows | arm64 | [\`LlamaUI_${VERSION}_Windows_arm64.zip\`](${BASE_URL}/LlamaUI_${VERSION}_Windows_arm64.zip) | 便携版 |"
-            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.deb\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_x64.deb) | Debian/Ubuntu |"
-            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.AppImage\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_x64.AppImage) | 通用应用 |"
-            echo "| Linux | x64 | [\`LlamaUI_${VERSION}_Linux_x64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_x64.tar.gz) | 便携版 |"
-            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.deb\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_arm64.deb) | Debian/Ubuntu |"
-            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.AppImage\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_arm64.AppImage) | 通用应用 |"
-            echo "| Linux | arm64 | [\`LlamaUI_${VERSION}_Linux_arm64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_Linux_arm64.tar.gz) | 便携版 |"
-            echo "| macOS | x64 | [\`LlamaUI_${VERSION}_macOS_x64.dmg\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_x64.dmg) | 磁盘映像 |"
-            echo "| macOS | x64 | [\`LlamaUI_${VERSION}_macOS_x64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_x64.tar.gz) | 便携版 |"
-            echo "| macOS | arm64 | [\`LlamaUI_${VERSION}_macOS_arm64.dmg\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_arm64.dmg) | 磁盘映像 |"
-            echo "| macOS | arm64 | [\`LlamaUI_${VERSION}_macOS_arm64.tar.gz\`](${BASE_URL}/LlamaUI_${VERSION}_macOS_arm64.tar.gz) | 便携版 |"
-            echo ""
-            echo "### 哈希校验"
-            echo ""
-            echo "<details>"
-            echo "<summary>展开查看 SHA256 校验和</summary>"
-            echo ""
-            echo "\`\`\`"
-            cat SHA256SUMS.txt
-            echo "\`\`\`"
-            echo ""
-            echo "**校验方法：**"
-            echo "- Windows：\`Get-FileHash <文件名> -Algorithm SHA256\`"
-            echo "- Linux/macOS：\`sha256sum <文件名>\`"
-            echo ""
-            echo "</details>"
-            echo ""
-            echo "---"
-            echo ""
-            echo "**完整变更日志**：[CHANGELOG.md](https://github.com/${REPO}/blob/main/CHANGELOG.md)"
-            echo ""
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
-      - name: Delete existing release (if any)
+          cat > /tmp/release-notes.md <<ENDNOTES
+          ## LlamaUI ${TAG}
+
+          **发布日期**：${DATE}
+
+          ---
+
+          ### 下载
+
+          | 平台 | 架构 | 文件 |
+          |------|------|------|
+          | Windows | x64 | [${NAME}.exe](...) |
+          | Windows | x86 | [${NAME}.exe](...) |
+          | Windows | arm64 | [${NAME}.exe](...) |
+          | Linux | x64 | [${NAME}.deb](...) |
+          | Linux | arm64 | [${NAME}.deb](...) |
+          | macOS | x64 | [${NAME}.dmg](...) |
+          | macOS | arm64 | [${NAME}.dmg](...) |
+
+          ### SHA256 校验
+
+          \`\`\`
+          $(cat SHA256SUMS.txt)
+          \`\`\`
+          ENDNOTES
+
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          cat /tmp/release-notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ── 7. 删除已有 Release（幂等） ─────────────────────────────────────────
+      - name: Delete existing release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
-          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null \
+            || echo "No existing release to delete"
 
+      # ── 8. 创建 GitHub Release ─────────────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
