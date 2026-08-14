@@ -88,6 +88,12 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Resolved: TAG=${TAG} VERSION=${VERSION}"
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Security audit
+        run: cargo audit --deny warnings
+
       - name: Build
         run: cargo tauri build --target ${{ matrix.rust_target }}
 

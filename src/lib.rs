@@ -35,13 +35,18 @@ mod config;
 mod config_io;
 mod detect;
 mod error;
+pub mod error_macros;
 mod events;
 mod gpu_detect;
 mod init;
 mod log;
+pub mod log_sanitizer;
 mod llama_downloader;
 mod metrics_enhanced;
+mod model_management;
+mod plugin_framework;
 mod recovery;
+mod remote_server;
 mod server;
 mod tracing_setup;
 mod update_check;
@@ -125,6 +130,20 @@ pub fn run() {
             // GPU 检测与诊断
             commands::gpu_cmd::detect_gpus,
             commands::gpu_cmd::diagnose_gpu,
+            // 多模型管理
+            commands::model_cmd::list_models,
+            commands::model_cmd::filter_models_by_tag,
+            commands::model_cmd::refresh_models,
+            commands::model_cmd::select_model,
+            commands::model_cmd::get_selected_model,
+            // 远程服务器管理
+            commands::remote_cmd::add_remote_server,
+            commands::remote_cmd::remove_remote_server,
+            commands::remote_cmd::list_remote_servers,
+            commands::remote_cmd::get_remote_server,
+            commands::remote_cmd::probe_remote_server,
+            // 插件管理
+            commands::plugin_cmd::list_plugins,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

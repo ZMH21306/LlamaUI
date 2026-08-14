@@ -181,7 +181,7 @@ fn curl_download(
 
         // 添加 User-Agent 和 TLS 配置
         cmd.args([
-            "-A", "LlamaUI/0.5.0",
+            "-A", "LlamaUI/0.6.0",
             "--tlsv1.2",
             "--keepalive-time", "30",
         ]);

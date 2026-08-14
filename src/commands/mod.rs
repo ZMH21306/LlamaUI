@@ -41,7 +41,10 @@ pub mod download_cmd;
 pub mod export_cmd;
 pub mod gpu_cmd;
 pub mod init_cmd;
+pub mod model_cmd;
+pub mod plugin_cmd;
 pub mod recovery_cmd;
+pub mod remote_cmd;
 pub mod server_cmd;
 pub mod system_cmd;
 pub mod update_cmd;
@@ -56,13 +59,22 @@ pub mod update_cmd;
 ///   详见 P0-1）。Vec 而非 Option 用来支持并发检测：检测启动时 push
 ///   一个新 flag，检测完成后 retain 移除自身；`cancel_detection` 会
 ///   遍历全部置 true 后清空。
+/// - `model_manager`：多模型管理（目录索引 + 快速切换）
+/// - `remote_server_manager`：远程服务器连接管理
+/// - `plugin_manager`：插件系统管理器
 pub struct AppState {
     /// 服务进程管理单例。
     pub server: std::sync::Arc<crate::server::ServerProcess>,
     /// 配置存储单例。
     pub config: std::sync::Arc<crate::config::ConfigStore>,
     /// 当前正在进行的检测的取消标志列表（支持并发检测场景）。
-    pub detect_cancels: Mutex<Vec<CancelFlag>>,
+    pub detect_cancels: Mutex<Vec<crate::detect::CancelFlag>>,
+    /// 多模型管理（目录索引 + 快速切换）。
+    pub model_manager: std::sync::Arc<crate::model_management::ModelManager>,
+    /// 远程服务器管理。
+    pub remote_server_manager: std::sync::Arc<crate::remote_server::RemoteServerManager>,
+    /// 插件系统管理器。
+    pub plugin_manager: std::sync::Arc<crate::plugin_framework::PluginManager>,
 }
 
 impl AppState {
@@ -71,6 +83,11 @@ impl AppState {
             server: std::sync::Arc::new(crate::server::ServerProcess::new()),
             config: std::sync::Arc::new(crate::config::ConfigStore::new()),
             detect_cancels: Mutex::new(Vec::new()),
+            model_manager: std::sync::Arc::new(crate::model_management::ModelManager::new()),
+            remote_server_manager: std::sync::Arc::new(
+                crate::remote_server::RemoteServerManager::new(),
+            ),
+            plugin_manager: std::sync::Arc::new(crate::plugin_framework::PluginManager::new()),
         }
     }
 }

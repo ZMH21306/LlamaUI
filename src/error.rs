@@ -105,6 +105,10 @@ pub enum ConfigError {
 
     #[error("路径不是目录：`{0}`")]
     NotADirectory(PathBuf),
+
+    /// 其他未分类配置错误。
+    #[error("{0}")]
+    Other(String),
 }
 
 /// 进程管理错误。

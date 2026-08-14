@@ -33,17 +33,17 @@ pub struct AppConfig {
     pub llama_server_path: Option<String>,
     /// 包含所有 .gguf 模型文件的目录（路由模式）
     pub models_dir: String,
-    /// 上下文大小（默认 8192）
+    /// 上下文大小（默认 8192，范围 128~1048576）
     pub ctx_size: u32,
-    /// GPU 卸载层数（-1 = 全部，0 = 不使用，n = 指定层数）
+    /// GPU 卸载层数（-1 = 全部，0 = 不使用，n = 指定层数，范围 -1~200）
     pub n_gpu_layers: i32,
     /// 是否启用 Flash Attention
     pub flash_attn: bool,
     /// 是否启用 MTP 多 token 预测
     pub mtp: bool,
-    /// MTP 草稿数量（--spec-draft-n-max）
+    /// MTP 草稿数量（--spec-draft-n-max，范围 0~16）
     pub mtp_draft_n_max: u32,
-    /// HTTP 端口（若被占用，根据 auto_port 自动切换）
+    /// HTTP 端口（若被占用，根据 auto_port 自动切换，范围 1~65535）
     pub port: u16,
     /// 端口被占用时是否自动寻找空闲端口
     pub auto_port: bool,
