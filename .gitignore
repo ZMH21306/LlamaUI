@@ -32,13 +32,18 @@ node_modules/
 *.d
 *.exp
 
-# 临时文件
+# 临时文件与本地构建目录
 *.tmp
 *.temp
 portable/
 artifacts/
 release/
 release_artifacts/
+.crate-cache/
+*.crate
+
+# Cargo audit 数据库（可选缓存）
+.cargo/advisories/
 
 # 签名密钥（安全敏感）
 *.pem

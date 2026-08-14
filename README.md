@@ -240,7 +240,7 @@ cargo test --lib
 
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request！
+欢迎提交 Issue 和 Pull Request！详细规范请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ### 开发流程
 
@@ -256,6 +256,11 @@ cargo test --lib
 - 生产代码禁止 `unwrap()` / `expect()` / `panic!`
 - 错误消息使用中文
 - 关键逻辑添加注释
+- 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)
+
+## 安全
+
+如发现安全漏洞，**请勿在公开 Issue 中披露**。请遵循 [SECURITY.md](SECURITY.md) 中的私下报告流程。
 
 ## 许可证
 
@@ -265,5 +270,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) - 底层 LLM 推理引擎
 - [Tauri](https://tauri.app/) - 桌面应用框架
-- [代码审查报告](docs/CODE_REVIEW_REPORT.md) - 完整技术审查
 - [重构说明](docs/REFACTORING.md) - 架构设计文档

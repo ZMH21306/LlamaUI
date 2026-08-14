@@ -2,6 +2,14 @@
 
 本文件记录 LlamaUI 项目的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+## [0.6.0] - 2026-08-14
+
+### 新增
+- 引入 CONTRIBUTING.md、SECURITY.md 等开源协作文档
+- 整理项目目录，移除冗余内部脚本
+
 ## [0.5.1] - 2026-08-08
 
 ### 改进
