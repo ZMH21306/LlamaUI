@@ -92,9 +92,10 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Security audit
-        # --deny warnings 把"unmaintained crate"等维护警告也当作失败，
-        # 导致无法正常发版。仅对实际安全漏洞（advisories）拒绝即可。
-        run: cargo audit --deny advisories
+        # 默认 cargo audit 仅在出现实际漏洞（vulnerability）时退出非 0，
+        # unmaintained / yanked 等警告不会阻塞发版。
+        # 如需严格模式可加 --deny warnings，但当前依赖树包含多个 unmaintained GTK3 绑定。
+        run: cargo audit
 
       - name: Build
         run: cargo tauri build --target ${{ matrix.rust_target }}
