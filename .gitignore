@@ -38,6 +38,7 @@ node_modules/
 portable/
 artifacts/
 release/
+release_artifacts/
 
 # 签名密钥（安全敏感）
 *.pem
