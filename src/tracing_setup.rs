@@ -19,6 +19,9 @@ static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// 获取日志文件目录
 pub fn log_dir() -> PathBuf {
     LOG_DIR.get_or_init(|| {
+        if let Ok(custom) = std::env::var("LLAMAUI_LOG_DIR") {
+            return PathBuf::from(custom);
+        }
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".llamaui")
