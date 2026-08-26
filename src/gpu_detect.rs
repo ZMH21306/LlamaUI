@@ -11,7 +11,7 @@ use std::process::Command;
 pub struct GpuInfo {
     /// GPU 型号
     pub model: String,
-    /// 制造商 (NVIDIA/AMD/Intel/Unknown)
+    /// 制造商 (NVIDIA/AMD/Intel/Unknown/Apple Silicon)
     pub vendor: String,
     /// 显存大小 (MB)
     pub memory_mb: Option<u64>,
@@ -21,9 +21,13 @@ pub struct GpuInfo {
     pub cuda_version: Option<String>,
     /// ROCm 版本（AMD）
     pub rocm_version: Option<String>,
+    /// Metal 版本（Apple Silicon）
+    pub metal_version: Option<String>,
+    /// M4/M3 Pro/M2等Apple Silicon的神经引擎版本
+    pub apple_neuron_version: Option<String>,
     /// Vulkan 支持
     pub vulkan_support: bool,
-    /// Metal 支持（macOS）
+    /// Metal 支持（macOS/Apple Silicon）
     pub metal_support: bool,
     /// 可用的 llama-server 后端
     pub available_backends: Vec<String>,
@@ -60,6 +64,9 @@ pub fn detect_all_gpus() -> Vec<GpuInfo> {
     if let Some(amd) = detect_amd_gpu() {
         gpus.push(amd);
     }
+    if let Some(apple) = detect_apple_silicon_gpu() {
+        gpus.push(apple);
+    }
 
     if gpus.is_empty() {
         tracing::info!(target: "GpuDetect", "未检测到独立 GPU，使用 CPU Only");
@@ -70,6 +77,8 @@ pub fn detect_all_gpus() -> Vec<GpuInfo> {
             driver_version: None,
             cuda_version: None,
             rocm_version: None,
+            metal_version: None,
+            apple_neuron_version: None,
             vulkan_support: false,
             metal_support: false,
             available_backends: vec!["cpu".to_string()],
@@ -78,19 +87,27 @@ pub fn detect_all_gpus() -> Vec<GpuInfo> {
                 issue_type: "no_gpu".to_string(),
                 severity: "info".to_string(),
                 message: "未检测到独立 GPU，将使用 CPU 推理".to_string(),
-                suggestion: "如需 GPU 加速，请安装 NVIDIA/AMD 独立显卡".to_string(),
+                suggestion: "如需 GPU 加速，请安装 NVIDIA/AMD/Apple Silicon 独立显卡".to_string(),
                 auto_fixable: false,
             }],
         });
     } else {
         for gpu in &gpus {
+            let cuda_str = gpu.cuda_version.as_deref().unwrap_or("?");
+            let rocm_str = gpu.rocm_version.as_deref().unwrap_or("?");
+            let metal_str = gpu.metal_version.as_deref().unwrap_or("?");
+            let apple_neuron_str = gpu.apple_neuron_version.as_deref().unwrap_or("?");
+            
             tracing::info!(
                 target: "GpuDetect",
                 vendor = %gpu.vendor,
                 model = %gpu.model,
                 memory_mb = ?gpu.memory_mb,
                 driver = ?gpu.driver_version,
-                cuda = ?gpu.cuda_version,
+                cuda = %cuda_str,
+                rocm = %rocm_str,
+                metal = %metal_str,
+                apple_neuron = %apple_neuron_str,
                 recommended = %gpu.recommended_backend,
                 "检测到 GPU"
             );
