@@ -45,6 +45,9 @@ release_artifacts/
 # Cargo audit 数据库（可选缓存）
 .cargo/advisories/
 
+# Cargo registry 缓存
+.cargo/registry/
+
 # 签名密钥（安全敏感）
 *.pem
 *.pfx
