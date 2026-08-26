@@ -90,7 +90,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "registry", "tracing-log"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
-swift-rs = "1.0.7"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

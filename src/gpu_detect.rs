@@ -344,34 +344,115 @@ fn detect_rocm_version() -> Option<String> {
     None
 }
 
-/// 诊断 GPU 问题并提供修复建议
-pub fn diagnose_gpu_issues() -> Vec<GpuIssue> {
-    tracing::debug!(target: "GpuDetect", "开始 GPU 诊断");
-    let gpus = detect_all_gpus();
-    let mut all_issues: Vec<GpuIssue> = gpus.iter().flat_map(|g| g.issues.clone()).collect();
+/// 检测 Apple Silicon GPU
+fn detect_apple_silicon_gpu() -> Option<GpuInfo> {
+    // macOS特有的检测逻辑
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
 
-    // 检查 Vulkan 支持
-    let has_vulkan = gpus.iter().any(|g| g.vulkan_support);
-    if !has_vulkan {
-        let vulkan_ok = Command::new("vulkaninfo")
-            .arg("--summary")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+    tracing::debug!(target: "GpuDetect", "检测 Apple Silicon GPU...");
 
-        if !vulkan_ok {
-            all_issues.push(GpuIssue {
-                issue_type: "no_vulkan".to_string(),
-                severity: "info".to_string(),
-                message: "未检测到 Vulkan 支持".to_string(),
-                suggestion: "安装 mesa-vulkan-drivers (Linux) 或 Vulkan SDK (Windows)".to_string(),
+    // 使用 system_profiler 检测 Apple Silicon GPU
+    let output = Command::new("system_profiler")
+        .args(["SPDisplaysDataType"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        tracing::debug!(target: "GpuDetect", "system_profiler 执行失败");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut model = String::new();
+    let mut memory_mb: Option<u64> = None;
+    let mut driver_version: Option<String> = None;
+    let mut metal_version: Option<String> = None;
+    let mut apple_neuron_version: Option<String> = None;
+
+    // 解析 system_profiler 输出
+    let mut current_chipset = false;
+    for line in stdout.lines() {
+        let line = line.trim();
+
+        // 检测到新的GPU条目开始
+        if line.contains("Chipset Model:") {
+            if let Some(name) = line.split(":").nth(1) {
+                model = name.trim().to_string();
+                current_chipset = true;
+            }
+        }
+
+        // 检测显存
+        if line.contains("VRAM:") && current_chipset {
+            if let Some(vram_str) = line.split(":").nth(1) {
+                let vram_clean = vram_str.trim().replace(" MB", "");
+                if let Ok(mem) = vram_clean.parse::<u64>() {
+                    memory_mb = Some(mem);
+                }
+            }
+        }
+
+        // 检测驱动版本
+        if line.contains("Driver Version:") && current_chipset {
+            if let Some(driver) = line.split(":").nth(1) {
+                driver_version = Some(driver.trim().to_string());
+            }
+        }
+
+        // 检测Metal版本
+        if line.contains("Metal") && line.contains("Supported") && current_chipset {
+            // Metal版本通常在其他字段中，这里简化处理
+            metal_version = Some("Supported".to_string());
+        }
+
+        // 检测神经引擎信息
+        if line.contains("Neural Engine") && current_chipset {
+            if let Some(neuron) = line.split(":").nth(1) {
+                apple_neuron_version = Some(neuron.trim().to_string());
+            }
+        }
+    }
+
+    if model.is_empty() {
+        return None;
+    }
+
+    // 设置问题列表
+    let mut issues = Vec::new();
+
+    // 检查显存大小
+    if let Some(mem) = memory_mb {
+        if mem < 8192 { // 8GB
+            issues.push(GpuIssue {
+                issue_type: "low_vram".to_string(),
+                severity: "warning".to_string(),
+                message: format!("显存较小: {} MB，可能无法加载大型模型", mem),
+                suggestion: "建议使用较小的模型或检查显存配置".to_string(),
                 auto_fixable: false,
             });
         }
     }
 
-    tracing::info!(target: "GpuDetect", issue_count = all_issues.len(), "GPU 诊断完成");
-    all_issues
+    // Apple Silicon GPU检测成功即证明Metal后端可用
+    let available_backends = vec!["cpu".to_string(), "metal".to_string()];
+
+    Some(GpuInfo {
+        model: if model.is_empty() { "Apple Silicon GPU".to_string() } else { model },
+        vendor: "Apple Silicon".to_string(),
+        memory_mb,
+        driver_version,
+        cuda_version: None,
+        rocm_version: None,
+        metal_version,
+        apple_neuron_version,
+        vulkan_support: false,
+        metal_support: true,
+        available_backends,
+        recommended_backend: "metal".to_string(),
+        issues,
+    })
 }
 
 /// 自动修复 GPU 问题
