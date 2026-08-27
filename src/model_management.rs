@@ -47,7 +47,7 @@ impl ModelInfo {
     /// 仅当文件扩展名是 `.gguf` 时才返回 `Some`。
     pub fn from_path(p: &Path) -> Option<Self> {
         let extension = p.extension()?.to_str()?;
-        if extension.to_ascii_lowercase() != "gguf" {
+        if !extension.eq_ignore_ascii_case("gguf") {
             return None;
         }
         let metadata = fs::metadata(p).ok()?;
@@ -76,20 +76,8 @@ impl ModelInfo {
             modified_at,
         })
     }
-
-    /// 计算文件的 SHA-256 哈希（耗时操作，应在后台线程执行）。
-    pub fn compute_sha256(&mut self) {
-        use sha2::{Sha256, Digest};
-        if let Ok(data) = fs::read(&self.path) {
-            let mut hasher = Sha256::new();
-            hasher.update(&data);
-            self.sha256 = Some(format!("{:x}", hasher.finalize()));
-        }
-    }
 }
 
-/// 模型目录索引。
-///
 /// 缓存了指定目录下所有 .gguf 文件的列表，支持快速查找和过滤。
 #[derive(Debug, Clone)]
 pub struct ModelCatalog {
@@ -141,41 +129,6 @@ impl ModelCatalog {
             .iter()
             .filter(|m| m.tags.iter().any(|t| t == tag))
             .collect()
-    }
-
-    /// 按文件大小过滤模型（返回 >= min_size 且 <= max_size 的模型）。
-    pub fn filter_by_size(&self, min_size: u64, max_size: u64) -> Vec<&ModelInfo> {
-        self.models
-            .iter()
-            .filter(|m| m.size_bytes >= min_size && m.size_bytes <= max_size)
-            .collect()
-    }
-
-    /// 按名称模糊匹配。
-    pub fn search_by_name(&self, query: &str) -> Vec<&ModelInfo> {
-        let q = query.to_lowercase();
-        self.models
-            .iter()
-            .filter(|m| m.name.to_lowercase().contains(&q))
-            .collect()
-    }
-
-    /// 获取按标签分组的模型索引（用于快速构建下拉列表）。
-    pub fn group_by_tag(&self) -> HashMap<String, Vec<&ModelInfo>> {
-        let mut groups: HashMap<String, Vec<&ModelInfo>> = HashMap::new();
-        for model in &self.models {
-            if model.tags.is_empty() {
-                groups
-                    .entry("未分类".to_string())
-                    .or_default()
-                    .push(model);
-            } else {
-                for tag in &model.tags {
-                    groups.entry(tag.clone()).or_default().push(model);
-                }
-            }
-        }
-        groups
     }
 }
 
@@ -287,7 +240,6 @@ impl ModelLaunchConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn temp_gguf_file(suffix: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -365,7 +317,7 @@ mod tests {
         fs::write(dir.join("llama3.gguf"), b"x").unwrap();
         fs::write(dir.join("qwen2.gguf"), b"y").unwrap();
         mgr.add_directory(&dir);
-        let results = mgr.filter_models_by_tag("llama");
+        let _results = mgr.filter_models_by_tag("llama");
         // 按名称过滤：所有模型都没有 llama 标签，所以为空
         // 这里测试的是空过滤
         let all = mgr.all_models();
