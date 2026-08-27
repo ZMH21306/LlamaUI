@@ -190,6 +190,32 @@ impl ConfigStore {
             cfg.custom_command = DEFAULT_PRO_CUSTOM_COMMAND.to_string();
             let _ = save_to_disk(&path, &cfg);
         }
+        // 一次性迁移：models_dir 为空时自动检测 WinGet 模型目录
+        if cfg.models_dir.is_empty() {
+            if let Some(local) = dirs::data_local_dir() {
+                let winget_models = local
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Packages");
+                // 查找 ggml.llamacpp_* 目录下的 models 子目录
+                if let Ok(entries) = std::fs::read_dir(&winget_models) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with("ggml.llamacpp_") && entry.path().join("models").is_dir() {
+                            cfg.models_dir = entry.path().join("models").to_string_lossy().to_string();
+                            let _ = save_to_disk(&path, &cfg);
+                            tracing::info!(
+                                target: "Config",
+                                path = %cfg.models_dir,
+                                "自动检测到 WinGet 模型目录"
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         Self {
             inner: Arc::new(Mutex::new(cfg)),
             path,
