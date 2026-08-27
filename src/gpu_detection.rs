@@ -212,48 +212,49 @@ impl CircuitBreaker {
 
     /// 检查是否需要重置状态
     fn should_reset(&self) -> bool {
-        let last_failure = *self.last_failure_time.try_lock().unwrap_or_else(|e| e.into_inner());
+        let last_failure = self.last_failure_time.try_lock().map(|g| *g).unwrap_or_else(|_| Instant::now());
         last_failure.elapsed().as_secs() > self.config.reset_timeout_secs
     }
 
     /// 检查是否处于半开状态
     fn is_half_open(&self) -> bool {
-        let last_failure = *self.last_failure_time.try_lock().unwrap_or_else(|e| e.into_inner());
+        let last_failure = self.last_failure_time.try_lock().map(|g| *g).unwrap_or_else(|_| Instant::now());
         last_failure.elapsed().as_secs() >= self.config.half_open_timeout_secs
     }
 }
 
-/// 全局断路器实例（延迟初始化）
-static NVIDIA_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("nvidia-smi")));
-
-static AMD_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("lspci")));
-
-static APPLE_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("system_profiler")));
-
-static ROCM_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("rocminfo")));
+/// 全局断路器实例（使用 OnceLock）
+static NVIDIA_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
+static AMD_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
+static APPLE_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
+static ROCM_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
 
 /// 获取全局 NVIDIA GPU 检测断路器
 pub fn nvidia_circuit_breaker() -> Arc<CircuitBreaker> {
-    Arc::clone(&NVIDIA_CIRCUIT_BREAKER)
+    NVIDIA_CIRCUIT_BREAKER
+        .get_or_init(|| Arc::new(CircuitBreaker::new("nvidia-smi")))
+        .clone()
 }
 
 /// 获取全局 AMD GPU 检测断路器
 pub fn amd_circuit_breaker() -> Arc<CircuitBreaker> {
-    Arc::clone(&AMD_CIRCUIT_BREAKER)
+    AMD_CIRCUIT_BREAKER
+        .get_or_init(|| Arc::new(CircuitBreaker::new("lspci")))
+        .clone()
 }
 
 /// 获取全局 Apple Silicon GPU 检测断路器
 pub fn apple_circuit_breaker() -> Arc<CircuitBreaker> {
-    Arc::clone(&APPLE_CIRCUIT_BREAKER)
+    APPLE_CIRCUIT_BREAKER
+        .get_or_init(|| Arc::new(CircuitBreaker::new("system_profiler")))
+        .clone()
 }
 
 /// 获取全局 ROCm 版本检测断路器
 pub fn rocm_circuit_breaker() -> Arc<CircuitBreaker> {
-    Arc::clone(&ROCM_CIRCUIT_BREAKER)
+    ROCM_CIRCUIT_BREAKER
+        .get_or_init(|| Arc::new(CircuitBreaker::new("rocminfo")))
+        .clone()
 }
 
 /// 异步锁存器，确保并发安全

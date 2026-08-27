@@ -35,7 +35,7 @@ impl GpuCache {
     pub async fn get(&self, platform_hash: u64) -> Option<GpuInfo> {
         let cache = self.cache.read().await;
         if let Some((gpu_info, expiry)) = cache.get(&platform_hash) {
-            if expiry > Instant::now() {
+            if *expiry > Instant::now() {
                 return Some(gpu_info.clone());
             }
         }
@@ -49,7 +49,7 @@ impl GpuCache {
         // 检查是否已存在相同平台
         let mut to_remove = Vec::new();
         for (hash, (_, expiry)) in cache.iter() {
-            if *hash != platform_hash && expiry < Instant::now() {
+            if *hash != platform_hash && *expiry < Instant::now() {
                 to_remove.push(*hash);
             }
         }
@@ -64,8 +64,8 @@ impl GpuCache {
             let mut oldest_time = Instant::now();
 
             for (hash, (_, expiry)) in cache.iter() {
-                if expiry < oldest_time {
-                    oldest_time = expiry;
+                if *expiry < oldest_time {
+                    oldest_time = *expiry;
                     oldest_hash = Some(*hash);
                 }
             }
@@ -94,11 +94,8 @@ impl GpuCache {
         // 计算缓存命中率（简化实现）
         // 实际应用中需要跟踪查询次数
         let hit_rate = if size > 0 { 
-            cache.values().filter(|(_, (_, expiry))| expiry > &Instant::now()).count() as f64 / size as f64 
-        } else { 
-            0.0 
-        };
-        
+            cache.values().filter(|(_, expiry)| *expiry > Instant::now()).count() as f64 / size as f64 
+        } else { 0.0 };
         (size, hit_rate)
     }
 }
@@ -222,23 +219,26 @@ impl CircuitBreaker {
     }
 }
 
-/// 全局断路器实例
-static GLOBAL_NVIDIA_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("nvidia-smi")));
-
-static GLOBAL_AMD_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("lspci")));
-
-static GLOBAL_APPLE_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
-    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("system_profiler")));
+/// 全局断路器实例（使用 OnceLock）
+static GLOBAL_NVIDIA_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
+static GLOBAL_AMD_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
+static GLOBAL_APPLE_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
 
 /// 获取断路器实例
 fn get_circuit_breaker(tool_name: &str) -> Arc<CircuitBreaker> {
     match tool_name {
-        "nvidia-smi" => Arc::clone(&GLOBAL_NVIDIA_BREAKER),
-        "lspci" => Arc::clone(&GLOBAL_AMD_BREAKER),
-        "system_profiler" => Arc::clone(&GLOBAL_APPLE_BREAKER),
-        _ => Arc::clone(&GLOBAL_NVIDIA_BREAKER),
+        "nvidia-smi" => GLOBAL_NVIDIA_BREAKER
+            .get_or_init(|| Arc::new(CircuitBreaker::new("nvidia-smi")))
+            .clone(),
+        "lspci" => GLOBAL_AMD_BREAKER
+            .get_or_init(|| Arc::new(CircuitBreaker::new("lspci")))
+            .clone(),
+        "system_profiler" => GLOBAL_APPLE_BREAKER
+            .get_or_init(|| Arc::new(CircuitBreaker::new("system_profiler")))
+            .clone(),
+        _ => GLOBAL_NVIDIA_BREAKER
+            .get_or_init(|| Arc::new(CircuitBreaker::new("nvidia-smi")))
+            .clone(),
     }
 }
 
@@ -246,7 +246,7 @@ fn get_circuit_breaker(tool_name: &str) -> Arc<CircuitBreaker> {
 async fn execute_command_with_breaker(
     command: String,
     tool_name: &'static str,
-) -> Result<tokio::process::Output, GpuDetectionError> {
+) -> Result<std::process::Output, GpuDetectionError> {
     let breaker = get_circuit_breaker(tool_name);
     
     let command_future = async move {
@@ -371,6 +371,22 @@ pub async fn diagnose_gpu_enhanced() -> Result<Vec<GpuIssue>, String> {
             Err(e.to_string())
         }
     }
+}
+
+/// GPU 检测命令（兼容旧版 API）
+///
+/// 使用增强版 GPU 检测，集成缓存和错误处理。
+#[tauri::command]
+pub async fn detect_gpus() -> Result<Vec<GpuInfo>, String> {
+    detect_gpus_enhanced().await
+}
+
+/// GPU 诊断命令（兼容旧版 API）
+///
+/// 使用增强版 GPU 诊断，集成断路器保护。
+#[tauri::command]
+pub async fn diagnose_gpu() -> Result<Vec<GpuIssue>, String> {
+    diagnose_gpu_enhanced().await
 }
 
 #[cfg(test)]

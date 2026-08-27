@@ -23,5 +23,5 @@ pub fn detect_all_gpus() -> Vec<GpuInfo> {
             return Vec::new();
         }
     };
-    runtime.block_on(crate::gpu_detection::detect_all_gpus_async())
+    runtime.block_on(crate::gpu_detection::detect_all_gpus_async()).unwrap_or_default()
 }
