@@ -18,6 +18,7 @@
 - 升级 `ring` 至 0.17.14（修复 RUSTSEC-2025-0009 AES panic）
 - 升级 `rustls` 至 0.23.43（修复 RUSTSEC-2024-0336 `complete_io` 死循环）
 - `event-listener` 锁定 5.4.2（修复 RUSTSEC-2026-0221 Send/Sync unsoundness）
+- 已知告警：`glib <0.20.0` 受 RUSTSEC-2024-0429 影响（`webkit2gtk-sys` 上游传递依赖），仅影响 Linux 平台，等待 Tauri 升级 GTK 4 工具链后再处理；详见 `SECURITY.md`
 
 ## [0.6.0] - 2026-08-14
 
