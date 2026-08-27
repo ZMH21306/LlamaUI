@@ -75,10 +75,8 @@ impl RemoteServerInfo {
         if !self.url.starts_with("http://") && !self.url.starts_with("https://") {
             return Err("URL 必须以 http:// 或 https:// 开头".to_string());
         }
-        // 本地开发模式：允许 127.0.0.1 / localhost
-        let is_local = self.url.contains("localhost")
-            || self.url.contains("127.0.0.1")
-            || self.url.starts_with("http://");
+        // 本地开发模式：允许 127.0.0.1 / localhost 使用 HTTP
+        let is_local = self.url.contains("localhost") || self.url.contains("127.0.0.1");
         // 远程必须使用 HTTPS
         if !is_local && !self.url.starts_with("https://") {
             return Err(
@@ -164,7 +162,7 @@ impl Default for RemoteServerManager {
 /// 通过 REST API 探测远程服务器可用性（HTTP GET /v1/models）。
 ///
 /// 返回 `Ok(true)` 表示服务器可访问，`Ok(false)` 表示不可用，`Err` 表示网络错误。
-pub async fn probe_remote_server(url: &str, api_key: Option<&str>) -> Result<bool, String> {
+pub fn probe_remote_server(url: &str, api_key: Option<&str>) -> Result<bool, String> {
     let client = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(10))
         .build();
