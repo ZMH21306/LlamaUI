@@ -185,6 +185,11 @@ impl ConfigStore {
             cfg.custom_command = DEFAULT_PRO_CUSTOM_COMMAND.to_string();
             let _ = save_to_disk(&path, &cfg);
         }
+        // 一次性迁移：清理旧命令中的 --models-dir 参数（llama-server b6240 不支持）
+        if cfg.custom_command.contains("--models-dir") {
+            cfg.custom_command = DEFAULT_PRO_CUSTOM_COMMAND.to_string();
+            let _ = save_to_disk(&path, &cfg);
+        }
         Self {
             inner: Arc::new(Mutex::new(cfg)),
             path,
