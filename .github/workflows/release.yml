@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve version
         id: ver
@@ -113,7 +113,7 @@ jobs:
 
     steps:
       # ── 1. 检出代码 ─────────────────────────────────────────────────────────
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ── 2. 安装 Rust 工具链 ─────────────────────────────────────────────────
       - name: Install Rust stable
@@ -123,7 +123,7 @@ jobs:
 
       # ── 3. 缓存依赖（加速重复构建） ─────────────────────────────────────────
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/cache
@@ -252,7 +252,7 @@ jobs:
 
       # ── 11. 上传产物 ────────────────────────────────────────────────────────
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.os_name }}-${{ matrix.arch }}
           path: artifacts/
@@ -283,7 +283,7 @@ jobs:
 
       # ── 2. 下载全部产物 ─────────────────────────────────────────────────────
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
 
@@ -434,7 +434,7 @@ jobs:
 
       # ── 8. 创建 GitHub Release ─────────────────────────────────────────────
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: LlamaUI ${{ steps.version.outputs.tag }}
