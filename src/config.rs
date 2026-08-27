@@ -21,7 +21,7 @@ pub const CURRENT_CONFIG_VERSION: u32 = 1;
 
 /// 专业模式默认启动命令（首次安装或新配置时使用）
 pub const DEFAULT_PRO_CUSTOM_COMMAND: &str =
-    "\"%%llama_server%%\" --models-dir \"%%models_dir%%\" --host %%host%% --port %%port%% -ngl all -c 32768 -fa on -ctk q5_0 -ctv q5_0 --spec-type draft-mtp --spec-draft-n-max 3 -tb 32";
+    "\"%%llama_server%%\" --host %%host%% --port %%port%% -ngl all -c 327680 -fa on -ctk q5_0 -ctv q5_0 --spec-type draft-mtp -tb 32";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
