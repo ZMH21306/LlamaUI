@@ -1,3 +1,0 @@
-2026-08-26T13:22:32.231124Z  INFO ThreadId(01) LlamaUI: src\tracing_setup.rs:96: 日志系统初始化完成 log_dir=d:\github\LlamaUI\logs
-2026-08-26T13:22:32.231227Z  INFO ThreadId(01) LlamaUI: src\lib.rs:71: LlamaUI 启动 version="0.6.0" os="windows" arch="x86_64"
-2026-08-26T13:22:32.819507Z ERROR ThreadId(01) tauri_runtime_wry: C:\Users\21306\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-wry-2.11.4\src\lib.rs:4082: failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x800700AA), message: "请求的资源在使用中。" })

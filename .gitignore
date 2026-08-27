@@ -27,6 +27,15 @@ node_modules/
 # 日志文件
 *.log
 
+# 构建输出（开发调试产物）
+build_output.txt
+
+# 误操作的脚本文件（开发者可能在命令行误执行保存）
+klist*
+
+# 浏览器/IDE 调试日志（与项目无关）
+debug.log
+
 # Rust 编译中间产物（非 target/ 下的散落文件）
 *.pdb
 *.d
