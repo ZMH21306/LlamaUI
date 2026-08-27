@@ -232,7 +232,10 @@ fn curl_download(
             .map_err(|e| anyhow::anyhow!("curl 启动失败: {}", e))?;
 
         // 逐行读取 stderr，解析 curl -# 进度
-        let stderr = child.stderr.take().unwrap();
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("无法获取 curl 子进程 stderr"))?;
         let reader = BufReader::new(stderr);
         let mut last_log = std::time::Instant::now();
         let mut last_pct: f64 = 0.0;
@@ -572,7 +575,7 @@ fn detect_cuda_version() -> Option<String> {
         if line.contains("CUDA Version:") {
             let parts: Vec<&str> = line.split("CUDA Version:").collect();
             if parts.len() > 1 {
-                let version = parts[1].trim().split_whitespace().next()?;
+                let version = parts[1].split_whitespace().next()?;
                 return Some(version.to_string());
             }
         }
@@ -655,7 +658,7 @@ pub fn extract_tar_gz(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf
         let path = entry.path()?;
         let out_path = dest.join(&path);
 
-        if path.file_name().map_or(false, |f| {
+        if path.file_name().is_some_and(|f| {
             let name = f.to_string_lossy();
             name == "llama-server" || name == "llama-server.exe"
         }) {
@@ -753,10 +756,10 @@ pub fn verify_sha256(file: &Path, expected: &str) -> anyhow::Result<bool> {
 /// 从 release 的资产列表中智能查找匹配当前系统的资产
 /// 支持多种命名变体，自动识别 OS/arch/backend
 /// **关键改进：验证 URL 可用性，确保下载成功**
-fn smart_find_asset<'a>(
-    release: &'a GitHubRelease,
+fn smart_find_asset(
+    release: &GitHubRelease,
     backend: GpuBackend,
-) -> Option<&'a GitHubAsset> {
+) -> Option<&GitHubAsset> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
@@ -927,11 +930,7 @@ fn build_candidate_asset_names(backend: GpuBackend, os: &str, arch: &str) -> Vec
         os_str, backend_part, arch_str, ext
     ));
 
-    candidates.into_iter().map(|s| {
-        // 用当前 release 的 tag 替换占位符（如果已知）
-        // 此处仅返回模式，具体 tag 在调用处替换
-        s
-    }).collect()
+    candidates.into_iter().collect()
 }
 
 /// 带重试的 GitHub API 调用
@@ -961,7 +960,7 @@ fn fetch_llama_latest_release_with_retry(max_retries: u32) -> anyhow::Result<Git
             }
         }
         if attempt < max_retries {
-            std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
+            std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(attempt)));
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("获取最新版本失败")))
@@ -1053,7 +1052,7 @@ pub fn download_and_install(
                 if download_attempt >= max_retries {
                     return Err(e);
                 }
-                std::thread::sleep(std::time::Duration::from_secs(2 * download_attempt as u64));
+                std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(download_attempt)));
             }
         }
     };
@@ -1088,7 +1087,7 @@ pub fn download_and_install(
     let llama_server_path = extracted
         .into_iter()
         .find(|p| {
-            p.file_name().map_or(false, |f| {
+            p.file_name().is_some_and(|f| {
                 let name = f.to_string_lossy();
                 name == "llama-server" || name == "llama-server.exe"
             })
@@ -1301,7 +1300,8 @@ mod tests {
     #[test]
     fn test_build_asset_name_windows_cuda() {
         let name = build_asset_name("b10238", GpuBackend::Cuda12_4);
-        assert_eq!(name, "llama-b10238-bin-win-cuda-12.4-x64.zip");
+        // CUDA 后端使用 cudart- 前缀
+        assert_eq!(name, "cudart-llama-b10238-bin-win-cuda-12.4-x64.zip");
     }
 
     #[test]
