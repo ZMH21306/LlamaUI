@@ -2,7 +2,22 @@
 
 本文件记录 LlamaUI 项目的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.7.0] - 2026-08-27
+
+### 改进
+- 清理仓库中的开发垃圾与调试产物，统一 .gitignore 规范
+- 移除未使用的 `metrics_enhanced` 模块及 `model_management` 死代码
+- 优化 `remote_server.validate_url` 判定逻辑，避免 HTTP 公网地址被误判为本地地址
+
+### 修复
+- 修复 `commands/mod.rs` 测试模块缺失 `CancelFlag` 导入导致的 E0425 编译错误
+- 解决 `gpu_cmd` / `llama_downloader` / `update_check` 等模块的 clippy 警告（unwrap/expect、冗余 match、平台依赖测试等）
+
+### 依赖与安全
+- 升级 `time` 至 0.3.53（修复 RUSTSEC-2026-0009 栈溢出 DoS）
+- 升级 `ring` 至 0.17.14（修复 RUSTSEC-2025-0009 AES panic）
+- 升级 `rustls` 至 0.23.43（修复 RUSTSEC-2024-0336 `complete_io` 死循环）
+- `event-listener` 锁定 5.4.2（修复 RUSTSEC-2026-0221 Send/Sync unsoundness）
 
 ## [0.6.0] - 2026-08-14
 
