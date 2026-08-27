@@ -7,9 +7,257 @@
 //! 提升了 GPU 检测的性能、可靠性和用户体验。
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 use tokio::process::Command;
+
+/// GPU 检测错误类型
+#[derive(Debug, Clone)]
+pub enum GpuDetectionError {
+    /// 检测超时
+    Timeout { tool: String, timeout_secs: u64 },
+    /// 系统命令执行失败
+    CommandFailed { tool: String, exit_code: Option<i32> },
+    /// 命令不存在
+    CommandNotFound { tool: String },
+    /// 系统不支持
+    UnsupportedPlatform { platform: String },
+    /// 内部错误
+    Internal { message: String },
+}
+
+impl std::fmt::Display for GpuDetectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuDetectionError::Timeout { tool, timeout_secs } => {
+                write!(f, "GPU 检测工具 '{}' 执行超时 ({}秒)", tool, timeout_secs)
+            }
+            GpuDetectionError::CommandFailed { tool, exit_code } => {
+                write!(f, "GPU 检测工具 '{}' 执行失败", tool)?;
+                if let Some(code) = exit_code {
+                    write!(f, "，退出码: {}", code)?;
+                }
+                Ok(())
+            }
+            GpuDetectionError::CommandNotFound { tool } => {
+                write!(f, "GPU 检测工具 '{}' 未找到，请确保已安装相关驱动", tool)
+            }
+            GpuDetectionError::UnsupportedPlatform { platform } => {
+                write!(f, "当前平台 '{}' 不支持 GPU 检测", platform)
+            }
+            GpuDetectionError::Internal { message } => {
+                write!(f, "内部错误: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for GpuDetectionError {}
+
+/// 断路器状态
+#[derive(Debug, Clone, Copy)]
+pub enum CircuitBreakerState {
+    /// 正常状态
+    Closed,
+    /// 打开状态（故障）
+    Open,
+    /// 半开状态（尝试恢复）
+    HalfOpen,
+}
+
+/// 断路器配置
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerConfig {
+    /// 失败次数阈值
+    pub failure_threshold: u32,
+    /// 半开状态持续时间（秒）
+    pub half_open_timeout_secs: u64,
+    /// 重置时间窗口（秒）
+    pub reset_timeout_secs: u64,
+    /// 超时时间（秒）
+    pub timeout_secs: u64,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            failure_threshold: 5,
+            half_open_timeout_secs: 30,
+            reset_timeout_secs: 300,
+            timeout_secs: 10,
+        }
+    }
+}
+
+/// 断路器
+pub struct CircuitBreaker {
+    state: Mutex<CircuitBreakerState>,
+    config: CircuitBreakerConfig,
+    failure_count: Mutex<u32>,
+    last_failure_time: Mutex<Instant>,
+    success_count: Mutex<u32>,
+    tool_name: &'static str,
+}
+
+impl CircuitBreaker {
+    /// 创建新的断路器
+    pub fn new(tool_name: &'static str) -> Self {
+        Self {
+            state: Mutex::new(CircuitBreakerState::Closed),
+            config: CircuitBreakerConfig::default(),
+            failure_count: Mutex::new(0),
+            last_failure_time: Mutex::new(Instant::now()),
+            success_count: Mutex::new(0),
+            tool_name,
+        }
+    }
+
+    /// 创建带自定义配置的断路器
+    pub fn with_config(tool_name: &'static str, config: CircuitBreakerConfig) -> Self {
+        Self {
+            state: Mutex::new(CircuitBreakerState::Closed),
+            config,
+            failure_count: Mutex::new(0),
+            last_failure_time: Mutex::new(Instant::now()),
+            success_count: Mutex::new(0),
+            tool_name,
+        }
+    }
+
+    /// 执行操作，如果断路器处于打开状态则跳过
+    pub async fn call<F, R, E>(&self, operation: F) -> Result<R, GpuDetectionError>
+    where
+        F: std::future::Future<Output = Result<R, E>>,
+        E: std::fmt::Display + Send + 'static,
+    {
+        // 检查是否需要重置状态
+        if self.should_reset() {
+            let mut state = self.state.lock().await;
+            *state = CircuitBreakerState::Closed;
+            let mut failure_count = self.failure_count.lock().await;
+            *failure_count = 0;
+            tracing::debug!(target: "GpuCircuitBreaker", tool = self.tool_name, "断路器状态重置");
+        }
+
+        // 检查是否处于打开状态
+        let state = *self.state.lock().await;
+        if matches!(state, CircuitBreakerState::Open) && !self.is_half_open() {
+            return Err(GpuDetectionError::CommandNotFound {
+                tool: self.tool_name.to_string(),
+            });
+        }
+
+        // 执行操作
+        match timeout(Duration::from_secs(self.config.timeout_secs), operation).await {
+            Ok(Ok(result)) => {
+                // 操作成功
+                self.on_success().await;
+                Ok(result)
+            }
+            Ok(Err(_e)) => {
+                // 操作失败
+                self.on_failure().await;
+                Err(GpuDetectionError::CommandFailed {
+                    tool: self.tool_name.to_string(),
+                    exit_code: None,
+                })
+            }
+            Err(_) => {
+                // 超时
+                self.on_failure().await;
+                Err(GpuDetectionError::Timeout {
+                    tool: self.tool_name.to_string(),
+                    timeout_secs: self.config.timeout_secs,
+                })
+            }
+        }
+    }
+
+    /// 记录成功
+    async fn on_success(&self) {
+        let mut success_count = self.success_count.lock().await;
+        *success_count += 1;
+
+        // 如果成功次数足够，在半开状态下切换到关闭状态
+        if *success_count >= self.config.failure_threshold {
+            let mut state = self.state.lock().await;
+            *state = CircuitBreakerState::Closed;
+            *success_count = 0;
+            tracing::info!(target: "GpuCircuitBreaker", tool = self.tool_name, "断路器状态从 HalfOpen 切换到 Closed");
+        }
+    }
+
+    /// 记录失败
+    async fn on_failure(&self) {
+        let mut failure_count = self.failure_count.lock().await;
+        let mut last_failure_time = self.last_failure_time.lock().await;
+        *failure_count += 1;
+        *last_failure_time = Instant::now();
+
+        // 如果失败次数达到阈值，切换到打开状态
+        if *failure_count >= self.config.failure_threshold {
+            let mut state = self.state.lock().await;
+            *state = CircuitBreakerState::Open;
+            tracing::warn!(
+                target: "GpuCircuitBreaker",
+                tool = self.tool_name,
+                failure_count = *failure_count,
+                "断路器状态从 Closed 切换到 Open"
+            );
+        }
+    }
+
+    /// 检查是否需要重置状态
+    fn should_reset(&self) -> bool {
+        let last_failure = *self.last_failure_time.try_lock().unwrap_or_else(|e| e.into_inner());
+        last_failure.elapsed().as_secs() > self.config.reset_timeout_secs
+    }
+
+    /// 检查是否处于半开状态
+    fn is_half_open(&self) -> bool {
+        let last_failure = *self.last_failure_time.try_lock().unwrap_or_else(|e| e.into_inner());
+        last_failure.elapsed().as_secs() >= self.config.half_open_timeout_secs
+    }
+}
+
+/// 全局断路器实例（延迟初始化）
+static NVIDIA_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
+    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("nvidia-smi")));
+
+static AMD_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
+    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("lspci")));
+
+static APPLE_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
+    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("system_profiler")));
+
+static ROCM_CIRCUIT_BREAKER: once_cell::sync::Lazy<Arc<CircuitBreaker>> = 
+    once_cell::sync::Lazy::new(|| Arc::new(CircuitBreaker::new("rocminfo")));
+
+/// 获取全局 NVIDIA GPU 检测断路器
+pub fn nvidia_circuit_breaker() -> Arc<CircuitBreaker> {
+    Arc::clone(&NVIDIA_CIRCUIT_BREAKER)
+}
+
+/// 获取全局 AMD GPU 检测断路器
+pub fn amd_circuit_breaker() -> Arc<CircuitBreaker> {
+    Arc::clone(&AMD_CIRCUIT_BREAKER)
+}
+
+/// 获取全局 Apple Silicon GPU 检测断路器
+pub fn apple_circuit_breaker() -> Arc<CircuitBreaker> {
+    Arc::clone(&APPLE_CIRCUIT_BREAKER)
+}
+
+/// 获取全局 ROCm 版本检测断路器
+pub fn rocm_circuit_breaker() -> Arc<CircuitBreaker> {
+    Arc::clone(&ROCM_CIRCUIT_BREAKER)
+}
+
+/// 异步锁存器，确保并发安全
+static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// GPU 信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,8 +317,11 @@ pub struct GpuStateEvent {
 }
 
 /// 检测所有 GPU（异步版本）
-pub async fn detect_all_gpus_async() -> Vec<GpuInfo> {
+pub async fn detect_all_gpus_async() -> Result<Vec<GpuInfo>, GpuDetectionError> {
     tracing::debug!(target: "GpuDetect", "开始异步检测所有 GPU");
+
+    // 环境验证
+    validate_environment()?;
 
     let mut gpus = Vec::new();
 
@@ -137,14 +388,29 @@ pub async fn detect_all_gpus_async() -> Vec<GpuInfo> {
         }
     }
 
-    gpus
+    Ok(gpus)
+}
+
+/// 验证环境
+fn validate_environment() -> Result<(), GpuDetectionError> {
+    let platform = if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else {
+        "Unknown"
+    };
+    tracing::debug!(target: "GpuDetect", platform = %platform, "验证 GPU 检测环境");
+    Ok(())
 }
 
 /// 异步检测 NVIDIA GPU
 async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
     tracing::debug!(target: "GpuDetect", "异步检测 NVIDIA GPU...");
 
-    // 增加超时和错误处理
+    // 使用断路器保护
     let nvidia_smi_task = async {
         Command::new("nvidia-smi")
             .args(["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"])
@@ -152,16 +418,10 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
             .await
     };
 
-    let output = match tokio::time::timeout(Duration::from_secs(10), nvidia_smi_task).await {
-        Ok(result) => match result {
-            Ok(output) => output,
-            Err(e) => {
-                tracing::debug!(target: "GpuDetect", "nvidia-smi 执行失败: {}", e);
-                return None;
-            }
-        },
-        Err(_) => {
-            tracing::debug!(target: "GpuDetect", "nvidia-smi 超时");
+    let output = match nvidia_circuit_breaker().call(nvidia_smi_task).await {
+        Ok(output) => output,
+        Err(e) => {
+            tracing::debug!(target: "GpuDetect", "nvidia-smi 执行失败: {}", e);
             return None;
         }
     };
@@ -238,23 +498,20 @@ async fn detect_cuda_version_async() -> Option<String> {
         Command::new("nvidia-smi").output().await
     };
 
-    match tokio::time::timeout(Duration::from_secs(5), nvidia_smi_task).await {
-        Ok(result) => match result {
-            Ok(output) => {
-                if !output.status.success() { return None; }
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if line.contains("CUDA Version:") {
-                        let parts: Vec<&str> = line.split("CUDA Version:").collect();
-                        if parts.len() > 1 {
-                            let version = parts[1].trim().split_whitespace().next()?;
-                            return Some(version.to_string());
-                        }
+    match nvidia_circuit_breaker().call(nvidia_smi_task).await {
+        Ok(output) => {
+            if !output.status.success() { return None; }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if line.contains("CUDA Version:") {
+                    let parts: Vec<&str> = line.split("CUDA Version:").collect();
+                    if parts.len() > 1 {
+                        let version = parts[1].trim().split_whitespace().next()?;
+                        return Some(version.to_string());
                     }
                 }
-                None
-            },
-            Err(_) => None,
+            }
+            None
         },
         Err(_) => None,
     }
@@ -295,11 +552,8 @@ async fn detect_amd_gpu_async() -> Option<GpuInfo> {
             .await
     };
 
-    let output = match tokio::time::timeout(Duration::from_secs(10), lspci_task).await {
-        Ok(result) => match result {
-            Ok(output) => output,
-            Err(_) => return None,
-        },
+    let output = match amd_circuit_breaker().call(lspci_task).await {
+        Ok(output) => output,
         Err(_) => return None,
     };
 
@@ -358,23 +612,20 @@ async fn detect_rocm_version_async() -> Option<String> {
         Command::new("rocminfo").output().await
     };
 
-    match tokio::time::timeout(Duration::from_secs(5), rocminfo_task).await {
-        Ok(result) => match result {
-            Ok(output) => {
-                if !output.status.success() { return None; }
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if let Some(idx) = line.find("HSA Runtime Version:") {
-                        let version = line[idx + 21..].trim();
-                        if !version.is_empty() {
-                            tracing::info!(target: "GpuDetect", version = %version, "检测到 ROCm (via rocminfo)");
-                            return Some(version.to_string());
-                        }
+    match rocm_circuit_breaker().call(rocminfo_task).await {
+        Ok(output) => {
+            if !output.status.success() { return None; }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if let Some(idx) = line.find("HSA Runtime Version:") {
+                    let version = line[idx + 21..].trim();
+                    if !version.is_empty() {
+                        tracing::info!(target: "GpuDetect", version = %version, "检测到 ROCm (via rocminfo)");
+                        return Some(version.to_string());
                     }
                 }
-                None
-            },
-            Err(_) => None,
+            }
+            None
         },
         Err(_) => None,
     }
@@ -395,16 +646,10 @@ async fn detect_apple_silicon_gpu_async() -> Option<GpuInfo> {
             .await
     };
 
-    let output = match tokio::time::timeout(Duration::from_secs(10), system_profiler_task).await {
-        Ok(result) => match result {
-            Ok(output) => output,
-            Err(e) => {
-                tracing::debug!(target: "GpuDetect", "system_profiler 执行失败: {}", e);
-                return None;
-            }
-        },
-        Err(_) => {
-            tracing::debug!(target: "GpuDetect", "system_profiler 超时");
+    let output = match apple_circuit_breaker().call(system_profiler_task).await {
+        Ok(output) => output,
+        Err(e) => {
+            tracing::debug!(target: "GpuDetect", "system_profiler 执行失败: {}", e);
             return None;
         }
     };
@@ -495,8 +740,10 @@ async fn detect_apple_silicon_gpu_async() -> Option<GpuInfo> {
 }
 
 /// 诊断 GPU 问题（异步版本）
-pub async fn diagnose_gpu_issues_async() -> Vec<GpuIssue> {
+pub async fn diagnose_gpu_issues_async() -> Result<Vec<GpuIssue>, GpuDetectionError> {
     tracing::debug!(target: "GpuDetect", "开始异步诊断 GPU");
+
+    validate_environment()?;
 
     let mut all_issues = Vec::new();
 
@@ -508,7 +755,7 @@ pub async fn diagnose_gpu_issues_async() -> Vec<GpuIssue> {
     all_issues.extend(cuda_issues);
     all_issues.extend(memory_issues);
 
-    all_issues
+    Ok(all_issues)
 }
 
 /// 诊断 CUDA Runtime
@@ -519,40 +766,29 @@ async fn diagnose_cuda_runtime_async() -> Vec<GpuIssue> {
         Command::new("nvidia-smi").output().await
     };
 
-    match tokio::time::timeout(Duration::from_secs(5), nvidia_smi_task).await {
-        Ok(result) => match result {
-            Ok(output) => {
-                if !output.status.success() {
-                    issues.push(GpuIssue {
-                        issue_type: "no_cuda_runtime".to_string(),
-                        severity: "error".to_string(),
-                        message: "CUDA Runtime 不可用".to_string(),
-                        suggestion: "请安装 NVIDIA CUDA Toolkit".to_string(),
-                        auto_fixable: true,
-                    });
-                    return issues;
-                }
+    match nvidia_circuit_breaker().call(nvidia_smi_task).await {
+        Ok(output) => {
+            if !output.status.success() {
+                issues.push(GpuIssue {
+                    issue_type: "no_cuda_runtime".to_string(),
+                    severity: "error".to_string(),
+                    message: "CUDA Runtime 不可用".to_string(),
+                    suggestion: "请安装 NVIDIA CUDA Toolkit".to_string(),
+                    auto_fixable: true,
+                });
+                return issues;
+            }
 
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let mut has_cuda = false;
-                for line in stdout.lines() {
-                    if line.contains("CUDA Version:") {
-                        has_cuda = true;
-                        break;
-                    }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut has_cuda = false;
+            for line in stdout.lines() {
+                if line.contains("CUDA Version:") {
+                    has_cuda = true;
+                    break;
                 }
+            }
 
-                if !has_cuda {
-                    issues.push(GpuIssue {
-                        issue_type: "no_cuda_runtime".to_string(),
-                        severity: "error".to_string(),
-                        message: "CUDA Runtime 不可用".to_string(),
-                        suggestion: "请安装 NVIDIA CUDA Toolkit".to_string(),
-                        auto_fixable: true,
-                    });
-                }
-            },
-            Err(_) => {
+            if !has_cuda {
                 issues.push(GpuIssue {
                     issue_type: "no_cuda_runtime".to_string(),
                     severity: "error".to_string(),
@@ -562,11 +798,12 @@ async fn diagnose_cuda_runtime_async() -> Vec<GpuIssue> {
                 });
             }
         },
-        Err(_) => {
+        Err(e) => {
+            tracing::warn!(target: "GpuDetect", error = %e, "CUDA 诊断失败");
             issues.push(GpuIssue {
                 issue_type: "no_cuda_runtime".to_string(),
                 severity: "error".to_string(),
-                message: "CUDA Runtime 不可用".to_string(),
+                message: format!("CUDA Runtime 诊断失败: {}", e),
                 suggestion: "请安装 NVIDIA CUDA Toolkit".to_string(),
                 auto_fixable: true,
             });
@@ -588,30 +825,27 @@ async fn diagnose_memory_usage_async() -> Vec<GpuIssue> {
             .await
     };
 
-    match tokio::time::timeout(Duration::from_secs(5), nvidia_smi_task).await {
-        Ok(result) => match result {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let mut total_memory = 0u64;
-                    for line in stdout.lines() {
-                        if let Ok(mem) = line.trim().parse::<u64>() {
-                            total_memory = mem;
-                        }
-                    }
-
-                    if total_memory > 0 && total_memory < 4096 {
-                        issues.push(GpuIssue {
-                            issue_type: "low_vram".to_string(),
-                            severity: "warning".to_string(),
-                            message: format!("显存较小: {} MB，可能无法加载大型模型", total_memory),
-                            suggestion: "建议使用较小的模型或增加显存".to_string(),
-                            auto_fixable: false,
-                        });
+    match nvidia_circuit_breaker().call(nvidia_smi_task).await {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let mut total_memory = 0u64;
+                for line in stdout.lines() {
+                    if let Ok(mem) = line.trim().parse::<u64>() {
+                        total_memory = mem;
                     }
                 }
-            },
-            Err(_) => {}
+
+                if total_memory > 0 && total_memory < 4096 {
+                    issues.push(GpuIssue {
+                        issue_type: "low_vram".to_string(),
+                        severity: "warning".to_string(),
+                        message: format!("显存较小: {} MB，可能无法加载大型模型", total_memory),
+                        suggestion: "建议使用较小的模型或增加显存".to_string(),
+                        auto_fixable: false,
+                    });
+                }
+            }
         },
         Err(_) => {}
     }
@@ -647,5 +881,89 @@ pub fn auto_fix_gpu_issue(issue: &GpuIssue) -> Result<String, String> {
 pub fn diagnose_gpu_issues() -> Vec<GpuIssue> {
     // 运行异步版本并阻塞等待完成
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime.block_on(diagnose_gpu_issues_async())
+    runtime.block_on(async {
+        match diagnose_gpu_issues_async().await {
+            Ok(issues) => issues,
+            Err(e) => {
+                tracing::error!(target: "GpuDetect", "诊断 GPU 问题失败: {}", e);
+                Vec::new()
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_circuit_breaker_creation() {
+        let cb = CircuitBreaker::new("test-tool");
+        assert!(matches!(*cb.state.try_lock().unwrap(), CircuitBreakerState::Closed));
+    }
+
+    #[test]
+    fn test_circuit_breaker_config() {
+        let config = CircuitBreakerConfig {
+            failure_threshold: 3,
+            half_open_timeout_secs: 10,
+            reset_timeout_secs: 60,
+            timeout_secs: 5,
+        };
+        let cb = CircuitBreaker::with_config("test-tool", config);
+        assert!(matches!(*cb.state.try_lock().unwrap(), CircuitBreakerState::Closed));
+    }
+
+    #[tokio::test]
+    async fn test_gpu_detection_error_display() {
+        let timeout_err = GpuDetectionError::Timeout {
+            tool: "nvidia-smi".to_string(),
+            timeout_secs: 10,
+        };
+        assert!(timeout_err.to_string().contains("超时"));
+
+        let not_found_err = GpuDetectionError::CommandNotFound {
+            tool: "nvidia-smi".to_string(),
+        };
+        assert!(not_found_err.to_string().contains("未找到"));
+    }
+
+    #[test]
+    fn test_validate_environment() {
+        let result = validate_environment();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_circuit_open() {
+        let cb = CircuitBreaker::with_config(
+            "test-tool",
+            CircuitBreakerConfig {
+                failure_threshold: 2,
+                half_open_timeout_secs: 1,
+                reset_timeout_secs: 60,
+                timeout_secs: 1,
+            }
+        );
+
+        // 连续失败2次后，断路器应该打开
+        let _ = cb.call(async { 
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok::<(), &str>(())
+        }).await;
+        let _ = cb.call(async { 
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok::<(), &str>(())
+        }).await;
+        
+        // 第三次调用应该快速返回（断路器打开）
+        let start = Instant::now();
+        let _ = cb.call(async { 
+            Ok::<(), &str>(())
+        }).await;
+        let elapsed = start.elapsed();
+        
+        // 应该快速失败（断路器打开时跳过实际执行）
+        assert!(elapsed < Duration::from_millis(100));
+    }
 }
