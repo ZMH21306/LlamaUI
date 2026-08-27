@@ -507,7 +507,7 @@ async fn detect_cuda_version_async() -> Option<String> {
                 if line.contains("CUDA Version:") {
                     let parts: Vec<&str> = line.split("CUDA Version:").collect();
                     if parts.len() > 1 {
-                        let version = parts[1].trim().split_whitespace().next()?;
+                        let version = parts[1].split_whitespace().next()?;
                         return Some(version.to_string());
                     }
                 }
@@ -826,29 +826,26 @@ async fn diagnose_memory_usage_async() -> Vec<GpuIssue> {
             .await
     };
 
-    match nvidia_circuit_breaker().call(nvidia_smi_task).await {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let mut total_memory = 0u64;
-                for line in stdout.lines() {
-                    if let Ok(mem) = line.trim().parse::<u64>() {
-                        total_memory = mem;
-                    }
-                }
-
-                if total_memory > 0 && total_memory < 4096 {
-                    issues.push(GpuIssue {
-                        issue_type: "low_vram".to_string(),
-                        severity: "warning".to_string(),
-                        message: format!("显存较小: {} MB，可能无法加载大型模型", total_memory),
-                        suggestion: "建议使用较小的模型或增加显存".to_string(),
-                        auto_fixable: false,
-                    });
+    if let Ok(output) = nvidia_circuit_breaker().call(nvidia_smi_task).await {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut total_memory = 0u64;
+            for line in stdout.lines() {
+                if let Ok(mem) = line.trim().parse::<u64>() {
+                    total_memory = mem;
                 }
             }
-        },
-        Err(_) => {}
+
+            if total_memory > 0 && total_memory < 4096 {
+                issues.push(GpuIssue {
+                    issue_type: "low_vram".to_string(),
+                    severity: "warning".to_string(),
+                    message: format!("显存较小: {} MB，可能无法加载大型模型", total_memory),
+                    suggestion: "建议使用较小的模型或增加显存".to_string(),
+                    auto_fixable: false,
+                });
+            }
+        }
     }
 
     issues
@@ -881,7 +878,7 @@ pub fn auto_fix_gpu_issue(issue: &GpuIssue) -> Result<String, String> {
 /// 诊断 GPU 问题（保持向后兼容性）
 pub fn diagnose_gpu_issues() -> Vec<GpuIssue> {
     // 运行异步版本并阻塞等待完成
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Runtime::new().expect("创建 tokio runtime 失败");
     runtime.block_on(async {
         match diagnose_gpu_issues_async().await {
             Ok(issues) => issues,

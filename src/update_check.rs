@@ -218,12 +218,7 @@ pub fn get_platform() -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    let os_str = match os {
-        "windows" => "windows",
-        "linux" => "linux",
-        "macos" => "macos",
-        _ => os,
-    };
+    let os_str = os;
 
     let arch_str = match arch {
         "x86_64" => "x64",

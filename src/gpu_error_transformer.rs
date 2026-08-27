@@ -69,7 +69,7 @@ impl GpuError {
                 title: "GPU 检测异常".to_string(),
                 description: message.to_string(),
                 action: "请检查 GPU 驱动程序是否正确安装".to_string(),
-                auto_fixable: false,
+                auto_fixable,
             },
         }
     }
