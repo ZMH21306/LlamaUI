@@ -38,9 +38,15 @@ pub fn get_remote_server(
 /// 探测远程服务器是否可用（异步，返回结果字符串）。
 #[tauri::command]
 pub async fn probe_remote_server(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     url: String,
     api_key: Option<String>,
 ) -> Result<bool, String> {
-    crate::remote_server::probe_remote_server(&url, api_key.as_deref()).await
+    // ureq 是同步 HTTP 客户端，放到阻塞线程池执行避免阻塞 Tauri 事件循环
+    let join_result = tokio::task::spawn_blocking(move || {
+        crate::remote_server::probe_remote_server(&url, api_key.as_deref())
+    })
+    .await
+    .map_err(|e| format!("探测任务执行失败：{}", e))?;
+    join_result
 }

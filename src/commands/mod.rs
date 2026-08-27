@@ -32,8 +32,6 @@
 
 use parking_lot::Mutex;
 
-use crate::detect::CancelFlag;
-
 pub mod config_io_cmd;
 pub mod config_cmd;
 pub mod detect_cmd;
@@ -106,6 +104,7 @@ mod tests {
     //! 跨子模块共享的回归测试。子模块专属的测试放各子模块底部。
 
     use super::*;
+    use crate::detect::CancelFlag;
     use std::sync::atomic::Ordering;
 
     /// P0-1 关键回归：模拟一个线程在持锁时 panic，验证后续 lock() 仍能返回 guard。

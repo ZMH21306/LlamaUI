@@ -21,18 +21,15 @@ pub fn auto_fix_issues(
     let mut fixed = false;
     
     for issue_type in issue_types {
-        match issue_type {
-            IssueType::PortOccupied => {
-                // 自动顺延端口
-                cfg.port = cfg.port.wrapping_add(1);
-                if cfg.port == 0 {
-                    cfg.port = 10897; // 回退到默认端口
-                }
-                fixed = true;
+        if let IssueType::PortOccupied = issue_type {
+            // 自动顺延端口
+            cfg.port = cfg.port.wrapping_add(1);
+            if cfg.port == 0 {
+                cfg.port = 10897; // 回退到默认端口
             }
-            // 其他问题需要用户手动修复
-            _ => {}
+            fixed = true;
         }
+        // 其他问题需要用户手动修复
     }
     
     if fixed {
