@@ -182,8 +182,10 @@ mod tests {
     #[test]
     fn diagnose_port_occupied() {
         // 端口 0 应该被 validate 拒绝，但 diagnose 仍应能检测
-        let mut cfg = AppConfig::default();
-        cfg.port = 1; // 端口 1 通常被占用或保留
+        let cfg = AppConfig {
+            port: 1, // 端口 1 通常被占用或保留
+            ..AppConfig::default()
+        };
         let result = diagnose(&cfg);
         // 可能有问题也可能没问题，取决于系统状态
         let _ = result.issues;

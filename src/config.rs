@@ -21,7 +21,7 @@ pub const CURRENT_CONFIG_VERSION: u32 = 1;
 
 /// 专业模式默认启动命令（首次安装或新配置时使用）
 pub const DEFAULT_PRO_CUSTOM_COMMAND: &str =
-    "\"%%llama_server%%\" --host %%host%% --port %%port%% -ngl all -c 327680 -fa on -ctk q5_0 -ctv q5_0 --spec-type draft-mtp -tb 32";
+    "\"%%llama_server%%\" --models-dir \"%%models_dir%%\" --host %%host%% --port %%port%% -ngl all -c 327680 -fa on -ctk q5_0 -ctv q5_0 --spec-type draft-mtp -tb 32";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -185,10 +185,30 @@ impl ConfigStore {
             cfg.custom_command = DEFAULT_PRO_CUSTOM_COMMAND.to_string();
             let _ = save_to_disk(&path, &cfg);
         }
-        // 一次性迁移：清理旧命令中的 --models-dir 参数（llama-server b6240 不支持）
-        if cfg.custom_command.contains("--models-dir") {
-            cfg.custom_command = DEFAULT_PRO_CUSTOM_COMMAND.to_string();
+        // 一次性迁移：旧版本默认命令缺少 --models-dir（llama-server b6240 之前版本不
+        // 支持，但当前版本已支持且必需，否则路由模式加载不到模型）。
+        // 修复方式：检测到命令中不包含 --models-dir 时，在 llama-server 程序后插入该参数。
+        // 注意：必须使用"插入"而非"整体重置"——用户的其它自定义参数（如 -ngl -c 等）应保留。
+        if !cfg.custom_command.is_empty() && !cfg.custom_command.contains("--models-dir") {
+            // 在第一个空格处（程序后）插入 --models-dir "%%models_dir%%"
+            if let Some(idx) = cfg.custom_command.find(' ') {
+                let (head, tail) = cfg.custom_command.split_at(idx);
+                cfg.custom_command = format!(
+                    "{} --models-dir \"%%models_dir%%\"{}",
+                    head, tail
+                );
+            } else {
+                // 命令只有一个 token（程序名），直接追加
+                cfg.custom_command = format!(
+                    "{} --models-dir \"%%models_dir%%\"",
+                    cfg.custom_command
+                );
+            }
             let _ = save_to_disk(&path, &cfg);
+            tracing::info!(
+                target: "Config",
+                "已为旧版 custom_command 补充 --models-dir 参数"
+            );
         }
         // 一次性迁移：models_dir 为空时自动检测 WinGet 模型目录
         if cfg.models_dir.is_empty() {

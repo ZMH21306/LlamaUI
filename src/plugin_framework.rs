@@ -273,10 +273,12 @@ mod tests {
     #[test]
     fn manager_rejects_duplicate() {
         let mgr = PluginManager::new();
+        #[derive(Debug)]
         struct D1;
         impl Plugin for D1 {
             fn name(&self) -> &str { "dup" }
         }
+        #[derive(Debug)]
         struct D2;
         impl Plugin for D2 {
             fn name(&self) -> &str { "dup" }
