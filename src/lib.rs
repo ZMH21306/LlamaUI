@@ -44,7 +44,6 @@ mod init;
 mod log;
 pub mod log_sanitizer;
 mod llama_downloader;
-mod metrics_enhanced;
 mod model_management;
 mod plugin_framework;
 mod recovery;
