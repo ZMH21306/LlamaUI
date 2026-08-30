@@ -24,10 +24,10 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 /// 敏感数据正则模式（预编译，避免每次调用重新编译）
+#[allow(clippy::expect_used)] // 静态正则字面量，编译期可保证正确
 fn api_key_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN.get_or_init(|| {
-        // 静态硬编码的正则，编译失败属于开发者错误。
         Regex::new(
             r"(?i)\b(key|token|secret|password|passwd|api[_-]?key|auth[_-]?token)\s*[=:]\s*(\S+)",
         )
@@ -36,6 +36,7 @@ fn api_key_pattern() -> &'static Regex {
 }
 
 /// URL 中认证信息模式（user:pass@host）
+#[allow(clippy::expect_used)] // 静态正则字面量，编译期可保证正确
 fn url_auth_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN.get_or_init(|| {
@@ -44,6 +45,7 @@ fn url_auth_pattern() -> &'static Regex {
 }
 
 /// 敏感路径段（相对用户主目录之外的部分）
+#[allow(clippy::expect_used)] // 静态正则字面量，编译期可保证正确
 fn sensitive_path_segments() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN.get_or_init(|| {
