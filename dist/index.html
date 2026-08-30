@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LlamaUI</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 顶部浮动通知 -->
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <!-- 模式切换 / 危险操作确认弹窗 -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h3 class="modal-title" id="modalTitle">确认</h3>
+      <p class="modal-body" id="modalBody"></p>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="modalCancel" data-modal-close>取消</button>
+        <button class="btn-primary" id="modalConfirm">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app">
+    <!-- ============ 顶栏 ============ -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7l8-4 8 4-8 4-8-4z"></path>
+            <path d="M4 12l8 4 8-4"></path>
+            <path d="M4 17l8 4 8-4"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>LlamaUI</h1>
+          <p>Llama图形化控制程序</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="btn-icon" id="themeToggle" title="切换亮色/暗色主题" aria-label="切换主题">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <div class="status-pill" id="statusPill" data-status="Stopped">
+          <span class="status-dot"></span>
+          <span class="status-text">已停止</span>
+        </div>
+        <button class="btn-primary" id="startBtn">启动</button>
+        <button class="btn-danger" id="stopBtn" disabled>停止</button>
+        <button class="btn-secondary" id="restartBtn">重启</button>
+        <button class="btn-icon" id="checkUpdateBtn" title="检查更新" aria-label="检查更新">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 0 1-15.36 6.36"></path>
+            <path d="M3 12a9 9 0 0 1 15.36-6.36"></path>
+            <polyline points="21 3 21 9 15 9"></polyline>
+            <polyline points="3 21 3 15 9 15"></polyline>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ============ 左侧：参数配置 ============ -->
+    <aside class="pane pane-left">
+      <div class="pane-scroll">
+
+        <!-- 程序与模型位置 -->
+        <section class="card">
+          <header class="card-header">
+            <h2>程序与模型位置</h2>
+          </header>
+          <div class="card-body">
+            <div class="field">
+              <label for="llamaServerPath">llama-server 可执行文件</label>
+              <div class="input-group">
+                <input type="text" id="llamaServerPath" placeholder="自动从 PATH 搜索" />
+                <button class="btn-secondary" id="browseLlamaServer" title="浏览文件">浏览</button>
+                <button class="btn-secondary" id="detectLlamaServer" title="自动检测">检测</button>
+              </div>
+              
+            </div>
+            <div class="field">
+              <label for="modelsDir">模型目录 <span class="hint-inline">（路由模式：包含 .gguf 的文件夹）</span></label>
+              <div class="input-group">
+                <input type="text" id="modelsDir" placeholder="例如：D:\models" />
+                <button class="btn-secondary" id="browseModelsDir" title="浏览文件夹">浏览</button>
+                <button class="btn-secondary" id="detectModelsDir" title="自动检测">检测</button>
+              </div>
+              
+            </div>
+            <!-- 自动下载 llama-server -->
+            <div class="field" id="downloadSection" style="margin-top:8px;">
+              <button class="btn-primary" id="downloadLlamaBtn" style="width:100%;">🚀 自动下载 llama-server</button>
+              <div id="downloadProgress" style="display:none;margin-top:8px;">
+                <div style="background:var(--bg-2);border-radius:6px;overflow:hidden;height:8px;">
+                  <div id="downloadBar" style="background:var(--gradient-primary);height:100%;width:0%;transition:width 0.15s ease-out;"></div>
+                </div>
+                <p id="downloadStatus" style="margin-top:4px;font-size:11px;color:var(--text-2);">准备中...</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- GPU 信息 -->
+        <section class="card">
+          <header class="card-header">
+            <h2>GPU 信息</h2>
+            <button class="btn-secondary" id="refreshGpuBtn" title="刷新 GPU 信息" style="font-size:11px;padding:2px 8px;">刷新</button>
+          </header>
+          <div class="card-body" id="gpuInfoBody">
+            <p style="color:var(--text-3);font-size:12px;">点击刷新检测 GPU...</p>
+          </div>
+        </section>
+
+        <!-- 模式切换 + 当前模式表单 -->
+        <section class="card">
+          <div class="mode-tabs" role="tablist">
+            <button class="mode-tab active" data-mode="normal" role="tab">普通模式</button>
+            <button class="mode-tab" data-mode="advanced" role="tab">高级模式</button>
+            <button class="mode-tab" data-mode="pro" role="tab">专业模式</button>
+            <select id="configTemplateSelect" class="template-select" aria-label="配置预设">
+              <option value="">配置预设 ▾</option>
+              <option value="cpu_only">💻 纯 CPU 运行（低内存）</option>
+              <option value="gpu_balanced">🎮 GPU 均衡（4GB+ 显存）</option>
+              <option value="gpu_full">🚀 满速 GPU（12GB+ 显存）</option>
+              <option value="low_latency">⚡ 低延迟推理</option>
+              <option value="large_ctx">📖 超长上下文（32K+）</option>
+              <option value="server_deploy">🌐 服务端部署</option>
+            </select>
+          </div>
+
+          <!-- 普通模式 -->
+          <div class="mode-view" data-view="normal">
+            <div class="card-body">
+              <p class="hint">只设置服务端口，其它数值保持默认，提供最大兼容性</p>
+              <div class="field">
+                <label for="port">服务端口（默认 10897）</label>
+                <div class="row">
+                  <span class="row-label">服务端口：</span>
+                  <input type="number" id="port" class="row-input" min="1" max="65535" value="10897" />
+                </div>
+              </div>
+              <div class="field field-checkbox">
+                <label>
+                  <input type="checkbox" id="autoPort" checked />
+                  <span>端口被占用时自动切换</span>
+                </label>
+              </div>
+              <div class="cmd-preview" id="normalCmdPreview" aria-label="启动命令预览"></div>
+            </div>
+          </div>
+
+          <!-- 高级模式 -->
+          <div class="mode-view" data-view="advanced" hidden>
+            <div class="card-body">
+              <p class="hint">按类别组织 llama.cpp 常用参数；默认全部折叠。</p>
+              <div class="toolbar">
+                <button class="btn-secondary btn-small" id="advancedExpandAll" type="button">全部展开</button>
+                <button class="btn-secondary btn-small" id="advancedCollapseAll" type="button">全部折叠</button>
+                <button class="btn-secondary btn-small" id="advancedReset" type="button" title="把所有开关/输入框恢复为默认值">重置设置</button>
+              </div>
+              <div id="advancedAccordion" class="accordion"></div>
+              <div class="cmd-preview" id="advancedPreview" aria-label="启动参数预览"></div>
+            </div>
+          </div>
+
+          <!-- 专业模式 -->
+          <div class="mode-view" data-view="pro" hidden>
+            <div class="card-body">
+              <p class="hint">直接编写启动命令，使用 <code>%%变量名%%</code> 直接引用自动识别的信息</p>
+              <div class="field">
+                <label for="customCommand">启动命令</label>
+                <textarea id="customCommand" class="cmd-input" rows="5" spellcheck="false" placeholder='"%%llama_server%%" --models-dir "%%models_dir%%" --host %%host%% --port %%port%% -ngl all -c 32768 -fa on -ctk q5_0 -ctv q5_0 --spec-type draft-mtp --spec-draft-n-max 3 -tb 32'></textarea>
+              </div>
+              <details class="var-list">
+                <summary>可用变量列表（点击展开、点击变量名直接插入到输入框）</summary>
+                <div class="var-grid" id="varGrid">
+                  <!-- 动态生成 -->
+                </div>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <!-- 配置导入/导出 -->
+        <section class="card" id="backupSection">
+          <header class="card-header">
+            <h2>配置管理</h2>
+          </header>
+          <div class="card-body">
+            <div class="backup-actions" style="display: flex; gap: 8px;">
+              <button class="btn-primary btn-small" id="exportConfig" type="button">导出配置</button>
+              <button class="btn-secondary btn-small" id="importConfig" type="button">导入配置</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </aside>
+
+    <!-- 分隔条 -->
+    <div class="splitter" id="splitter" aria-hidden="true"></div>
+
+    <!-- ============ 中间：WebView ============ -->
+    <main class="pane pane-main">
+      <div class="webview-wrapper">
+        <div class="webview-placeholder" id="webviewPlaceholder">
+          <div class="placeholder-card">
+            <div class="placeholder-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </div>
+            <h2>服务尚未启动</h2>
+            <p>请在左侧配置参数后，点击 <strong>启动</strong> 来运行 llama-server。</p>
+            <p class="hint">启动后 Web 界面将显示在 <code id="placeholderUrl">http://127.0.0.1:10897</code>。</p>
+          </div>
+        </div>
+        <!-- Webview 加载遮罩：llama-server 首次启动加载模型可能 30-60s，期间遮盖白屏 -->
+        <div class="webview-loading" id="webviewLoading" hidden>
+          <div class="loading-card">
+            <div class="spinner" aria-hidden="true"></div>
+            <h3>正在加载 llama-server Web 界面</h3>
+            <p>首次启动需要把模型读入显存/内存，耗时取决于模型大小和磁盘速度（30 秒 ~ 数分钟）。</p>
+            <p class="hint">如果长时间不出现，请检查 <code id="loadingUrl">http://127.0.0.1:10897</code> 是否可访问，或重启服务。</p>
+            <div class="loading-actions">
+              <button class="btn-secondary" id="openInBrowser">在浏览器打开</button>
+              <button class="btn-secondary" id="reloadWebview">重新加载</button>
+              <button class="btn-secondary" id="stopFromLoading">停止服务</button>
+            </div>
+          </div>
+        </div>
+        <!-- WebView 工具条：在浏览器打开 -->
+        <div class="webview-toolbar">
+          <button class="btn-secondary btn-small" id="openInBrowserToolbar">在浏览器打开</button>
+        </div>
+        <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI" style="display:none;"></iframe>
+      </div>
+    </main>
+
+    <!-- 分隔条 -->
+    <div class="splitter splitter-right" id="splitterRight" aria-hidden="true"></div>
+
+    <!-- ============ 右侧：监控 + 日志 ============ -->
+    <aside class="pane pane-right">
+      <div class="pane-scroll">
+
+        <!-- 监控 -->
+        <section class="card">
+          <header class="card-header">
+            <h2>运行监控</h2>
+          </header>
+          <div class="card-body">
+            <div class="metric-row">
+              <div class="metric-head">
+                <span class="metric-label">应用 PID</span>
+                <span class="metric-value" id="metricPid">—</span>
+              </div>
+            </div>
+            <div class="metric-row">
+              <div class="metric-head">
+                <span class="metric-label">Llama 启动时长</span>
+                <span class="metric-value" id="metricUptime">—</span>
+              </div>
+            </div>
+            <div class="metric-row">
+              <div class="metric-head">
+                <span class="metric-label">CPU占用率</span>
+                <span class="metric-value" id="metricCpuText">—</span>
+              </div>
+              <div class="meter"><div class="meter-fill" id="metricCpuBar"></div></div>
+            </div>
+            <div class="metric-row">
+              <div class="metric-head">
+                <span class="metric-label">显存占用</span>
+                <span class="metric-value" id="metricVramText">—</span>
+              </div>
+              <div class="meter"><div class="meter-fill" id="metricVramBar"></div></div>
+            </div>
+            <div class="metric-row">
+              <div class="metric-head">
+                <span class="metric-label">GPU占用率</span>
+                <span class="metric-value" id="metricGpuText">—</span>
+              </div>
+              <div class="meter"><div class="meter-fill" id="metricGpuBar"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 日志 -->
+        <section class="card card-flex">
+          <header class="card-header">
+            <h2>运行日志</h2>
+            <div class="logs-actions">
+              <label class="checkbox-inline">
+                <input type="checkbox" id="autoScroll" checked />
+                <span>自动滚动</span>
+              </label>
+              <button class="btn-secondary btn-small" id="exportLogs" type="button" title="导出日志">导出</button>
+              <button class="btn-secondary btn-small" id="clearLogs" type="button">清空</button>
+            </div>
+          </header>
+          <div class="logs" id="logs" role="log" aria-live="polite"></div>
+        </section>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- 主题引擎：基于 Oklab 色彩空间的丝滑主题切换 -->
+  <script src="theme-engine.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
