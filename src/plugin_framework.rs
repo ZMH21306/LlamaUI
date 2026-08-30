@@ -26,26 +26,15 @@
 //! 当前版本（v0.6）插件框架为**实验性**，尚未实现完整沙箱隔离。
 //! 仅支持本地文件系统加载的静态插件（`.so` / `.dll`），不支持远程下载执行。
 
-use std::fmt;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
 use serde::Serialize;
 
-use crate::config::AppConfig;
-
 /// 插件上下文，由框架提供，插件可用于获取应用状态。
+#[derive(Debug)]
 pub struct PluginContext {
     pub app_version: String,
-    pub config: Arc<Mutex<AppConfig>>,
-}
-
-impl fmt::Debug for PluginContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PluginContext")
-            .field("app_version", &self.app_version)
-            .finish()
-    }
 }
 
 /// 插件生命周期钩子接口。
@@ -63,20 +52,6 @@ pub trait Plugin: Send + Sync + std::fmt::Debug {
     /// 插件描述（显示给用户）。
     fn description(&self) -> &str {
         ""
-    }
-
-    /// 插件初始化钩子（应用启动后调用一次）。
-    fn on_init(&self, _ctx: &PluginContext) {}
-
-    /// 配置变更钩子（每次配置保存后调用）。
-    fn on_config_changed(&self, _new_cfg: &AppConfig) {}
-
-    /// 插件卸载前的清理钩子。
-    fn on_shutdown(&self, _ctx: &PluginContext) {}
-
-    /// 返回插件支持的 Tauri 命令名称列表（用于注册）。
-    fn commands(&self) -> Vec<&str> {
-        Vec::new()
     }
 }
 
@@ -157,97 +132,11 @@ impl PluginManager {
     pub fn list_plugins(&self) -> Vec<PluginMetadata> {
         self.metadata.lock().clone()
     }
-
-    /// 初始化所有插件（应用启动时调用）。
-    pub fn init_all(&self, ctx: &PluginContext) {
-        let plugins = self.plugins.lock();
-        for plugin in plugins.iter() {
-            plugin.on_init(ctx);
-        }
-    }
-
-    /// 配置变更时通知所有插件。
-    pub fn notify_config_changed(&self, cfg: &AppConfig) {
-        let plugins = self.plugins.lock();
-        for plugin in plugins.iter() {
-            plugin.on_config_changed(cfg);
-        }
-    }
-
-    /// 关闭时清理所有插件。
-    pub fn shutdown_all(&self, ctx: &PluginContext) {
-        let plugins = self.plugins.lock();
-        for plugin in plugins.iter() {
-            plugin.on_shutdown(ctx);
-        }
-    }
-
-    /// 获取支持的所有命令名称（去重）。
-    pub fn all_commands(&self) -> Vec<String> {
-        let plugins = self.plugins.lock();
-        let mut cmds: Vec<String> = plugins
-            .iter()
-            .flat_map(|p| p.commands().into_iter().map(|s| s.to_string()))
-            .collect();
-        cmds.sort();
-        cmds.dedup();
-        cmds
-    }
 }
 
-impl Default for PluginManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// 删除示例插件：HelloPlugin（用于测试和演示）
+// 没有其他代码会引用这些
 
-/// 示例插件：用于测试和演示插件框架。
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct HelloPlugin {
-    pub invoke_count: std::sync::Arc<parking_lot::Mutex<u32>>,
-}
-
-#[allow(dead_code)]
-impl HelloPlugin {
-    pub fn new() -> Self {
-        Self {
-            invoke_count: std::sync::Arc::new(parking_lot::Mutex::new(0)),
-        }
-    }
-}
-
-#[allow(dead_code)]
-impl Plugin for HelloPlugin {
-    fn name(&self) -> &str {
-        "hello-plugin"
-    }
-
-    fn version(&self) -> &str {
-        "0.1.0"
-    }
-
-    fn description(&self) -> &str {
-        "LlamaUI 示例插件：显示欢迎信息并统计调用次数"
-    }
-
-    fn on_init(&self, ctx: &PluginContext) {
-        tracing::info!(
-            target: "Plugin:hello",
-            app_version = %ctx.app_version,
-            "示例插件初始化完成"
-        );
-        *self.invoke_count.lock() += 1;
-    }
-
-    fn on_config_changed(&self, _cfg: &AppConfig) {
-        *self.invoke_count.lock() += 1;
-    }
-
-    fn commands(&self) -> Vec<&str> {
-        vec!["hello_plugin::get_invocation_count"]
-    }
-}
 
 #[cfg(test)]
 mod tests {
