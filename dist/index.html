@@ -64,7 +64,8 @@
       </div>
     </header>
 
-    <!-- ============ 左侧：参数配置 ============ -->
+    <div class="main-row">
+      <!-- ============ 左侧：参数配置 ============ -->
     <aside class="pane pane-left">
       <div class="pane-scroll">
 
@@ -93,13 +94,13 @@
               
             </div>
             <!-- 自动下载 llama-server -->
-            <div class="field" id="downloadSection" style="margin-top:8px;">
-              <button class="btn-primary" id="downloadLlamaBtn" style="width:100%;">🚀 自动下载 llama-server</button>
-              <div id="downloadProgress" style="display:none;margin-top:8px;">
-                <div style="background:var(--bg-2);border-radius:6px;overflow:hidden;height:8px;">
-                  <div id="downloadBar" style="background:var(--gradient-primary);height:100%;width:0%;transition:width 0.15s ease-out;"></div>
+            <div class="field download-section-wrap" id="downloadSection">
+              <button class="btn-primary btn-full-width" id="downloadLlamaBtn">🚀 自动下载 llama-server</button>
+              <div id="downloadProgress" class="download-progress-wrap">
+                <div class="download-bar-track">
+                  <div id="downloadBar" class="download-bar-inner"></div>
                 </div>
-                <p id="downloadStatus" style="margin-top:4px;font-size:11px;color:var(--text-2);">准备中...</p>
+                <p id="downloadStatus" class="download-status-text">准备中...</p>
               </div>
             </div>
           </div>
@@ -109,10 +110,10 @@
         <section class="card">
           <header class="card-header">
             <h2>GPU 信息</h2>
-            <button class="btn-secondary" id="refreshGpuBtn" title="刷新 GPU 信息" style="font-size:11px;padding:2px 8px;">刷新</button>
+            <button class="btn-secondary btn-compact" id="refreshGpuBtn" title="刷新 GPU 信息">刷新</button>
           </header>
           <div class="card-body" id="gpuInfoBody">
-            <p style="color:var(--text-3);font-size:12px;">点击刷新检测 GPU...</p>
+            <p class="gpu-empty-hint">点击刷新检测 GPU...</p>
           </div>
         </section>
 
@@ -134,7 +135,7 @@
           </div>
 
           <!-- 普通模式 -->
-          <div class="mode-view" data-view="normal">
+          <div class="mode-view active" data-view="normal">
             <div class="card-body">
               <p class="hint">只设置服务端口，其它数值保持默认，提供最大兼容性</p>
               <div class="field">
@@ -155,7 +156,7 @@
           </div>
 
           <!-- 高级模式 -->
-          <div class="mode-view" data-view="advanced" hidden>
+          <div class="mode-view" data-view="advanced">
             <div class="card-body">
               <p class="hint">按类别组织 llama.cpp 常用参数；默认全部折叠。</p>
               <div class="toolbar">
@@ -169,7 +170,7 @@
           </div>
 
           <!-- 专业模式 -->
-          <div class="mode-view" data-view="pro" hidden>
+          <div class="mode-view" data-view="pro">
             <div class="card-body">
               <p class="hint">直接编写启动命令，使用 <code>%%变量名%%</code> 直接引用自动识别的信息</p>
               <div class="field">
@@ -192,7 +193,7 @@
             <h2>配置管理</h2>
           </header>
           <div class="card-body">
-            <div class="backup-actions" style="display: flex; gap: 8px;">
+            <div class="backup-actions">
               <button class="btn-primary btn-small" id="exportConfig" type="button">导出配置</button>
               <button class="btn-secondary btn-small" id="importConfig" type="button">导入配置</button>
             </div>
@@ -239,7 +240,7 @@
         <div class="webview-toolbar">
           <button class="btn-secondary btn-small" id="openInBrowserToolbar">在浏览器打开</button>
         </div>
-        <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI" style="display:none;"></iframe>
+        <iframe id="webview" class="webview-iframe webview-iframe-hidden" src="about:blank" title="llama-server web UI"></iframe>
       </div>
     </main>
 
@@ -310,6 +311,7 @@
 
       </div>
     </aside>
+    </div>
   </div>
 
   <!-- 主题引擎：基于 Oklab 色彩空间的丝滑主题切换 -->
