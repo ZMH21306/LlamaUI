@@ -430,6 +430,11 @@ class ThemeManager {
 
     this.targetLight = isLight;
 
+    // 添加过渡类名
+    document.body.classList.add('theme-transitioning');
+    document.body.classList.remove('dark-theme', 'light-theme');
+    document.body.classList.add(isLight ? 'light-theme' : 'dark-theme');
+
     // 启动动画
     this.animStartTime = performance.now();
     if (this.animFrameId) {
@@ -441,6 +446,11 @@ class ThemeManager {
 
     // 保存用户偏好
     this._savePreference(isLight);
+
+    // 动画结束后移除过渡类名
+    setTimeout(() => {
+      document.body.classList.remove('theme-transitioning');
+    }, 400);
 
     // 触发事件
     window.dispatchEvent(new CustomEvent('theme-change', {

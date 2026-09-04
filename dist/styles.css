@@ -1400,3 +1400,299 @@ body.light-theme .card { background: var(--bg-1); }
   box-shadow: 0 0 0 2px var(--accent-soft), inset 0 0 0 1px var(--accent-soft) !important;
   background: var(--accent-soft) !important;
 }
+
+
+/* =========================================================
+   LlamaUI · Enhanced Styles v2
+   Added: Responsive design, animation system, interaction enhancements
+   ========================================================= */
+
+/* ---- Theme Toggle Button Enhanced ---- */
+#themeToggle {
+  position: relative;
+  overflow: hidden;
+}
+#themeToggle svg {
+  transition: transform var(--dur-slow) var(--ease-in-out), color var(--dur) var(--ease);
+}
+body.light-theme #themeToggle svg { transform: rotate(360deg); }
+#themeToggle:hover svg { transform: rotate(45deg) scale(1.1); }
+body.light-theme #themeToggle:hover svg { transform: rotate(405deg) scale(1.1); }
+
+/* ---- Card Entrance Animation ---- */
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.card { animation: card-enter 0.5s var(--ease-out) both; }
+.card:nth-child(1) { animation-delay: 0.05s; }
+.card:nth-child(2) { animation-delay: 0.1s; }
+.card:nth-child(3) { animation-delay: 0.15s; }
+.card:nth-child(4) { animation-delay: 0.2s; }
+.card:nth-child(5) { animation-delay: 0.25s; }
+
+/* ---- Status Indicator Animation ---- */
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50% { box-shadow: 0 0 0 6px transparent; opacity: 0.7; }
+}
+.status-pill[data-status="Running"] .status-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+  animation: pulse-dot 2s infinite;
+}
+.status-pill[data-status="Starting"] .status-dot {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+  animation: pulse-dot 1s infinite;
+}
+.status-pill[data-status="Crashed"] .status-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+/* ---- Button Press Effects ---- */
+.btn:active { transform: scale(0.96); }
+.btn-icon:active { transform: scale(0.92); }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow-glow-strong); }
+.btn-secondary:hover { transform: translateY(-1px); }
+.btn-icon:hover { transform: translateY(-1px); }
+
+/* ---- Skeleton Loading Animation ---- */
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-2) 25%, var(--bg-3) 50%, var(--bg-2) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+  border-radius: var(--r-sm);
+}
+
+/* ---- Toast Animation Enhanced ---- */
+.toast-container {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 9999; display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; width: min(640px, calc(100vw - 32px)); box-sizing: border-box;
+}
+.toast.show { animation: toast-enter 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateY(-20px) scale(0.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ---- Modal Animation ---- */
+@keyframes modal-overlay { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-backdrop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-dialog {
+  from { opacity: 0; transform: scale(0.9) translateY(20px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal { animation: modal-overlay 0.25s var(--ease); }
+.modal-dialog { animation: modal-dialog 0.3s var(--ease-spring) both; }
+
+/* ---- Responsive Design ---- */
+@media (max-width: 1280px) { :root { --pane-right-w: 300px; --pane-left-w: 360px; } }
+@media (max-width: 1080px) {
+  :root { --pane-left-w: 320px; --pane-right-w: 260px; --pane-min-w: 200px; --main-min-w: 280px; }
+  .brand-text p { display: none; }
+}
+@media (max-width: 768px) {
+  :root { --pane-left-w: 280px; --pane-right-w: 240px; --pane-min-w: 180px; --main-min-w: 240px; --topbar-h: 50px; }
+}
+@media (max-width: 640px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: var(--topbar-h) 1fr; grid-template-areas: "topbar" "main"; overflow-x: hidden; }
+  .pane-left, .pane-right, .splitter, .splitter-right { display: none !important; }
+}
+
+/* ---- Reduced Motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* ---- High Contrast Mode ---- */
+@media (prefers-contrast: high) {
+  :root { --border: #555; --border-strong: #777; --text-2: #ccc; --text-3: #999; }
+  .card { border-width: 2px; }
+}
+
+/* =========================================================
+   Enhanced Theme Toggle Button
+   ========================================================= */
+.theme-icon-wrapper {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.theme-icon-wrapper svg {
+  position: absolute;
+  inset: 0;
+  width: 18px;
+  height: 18px;
+  transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+body.dark-theme .theme-icon-wrapper .icon-sun { opacity: 0; transform: rotate(90deg) scale(0.5); }
+body.dark-theme .theme-icon-wrapper .icon-moon { opacity: 1; transform: rotate(0deg) scale(1); }
+body.light-theme .theme-icon-wrapper .icon-sun { opacity: 1; transform: rotate(0deg) scale(1); }
+body.light-theme .theme-icon-wrapper .icon-moon { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+#themeToggle:hover .theme-icon-wrapper svg { transform: rotate(15deg) scale(1.15); }
+
+
+/* ---- Dropdown Enhanced ---- */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-content {
+  display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: var(--shadow-2);
+  min-width: 160px; z-index: 100; overflow: hidden;
+  animation: dropdown-enter 0.2s var(--ease-out);
+}
+.dropdown:hover .dropdown-content, .dropdown.open .dropdown-content { display: block; }
+.dropdown-item {
+  display: block; width: 100%; padding: var(--s-2) var(--s-3);
+  text-align: left; background: transparent; border: none;
+  color: var(--text-2); font-size: var(--fs-sm); cursor: pointer;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.dropdown-item:hover { background: var(--bg-2); color: var(--text-1); }
+@keyframes dropdown-enter { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ---- Tag/Pill Enhanced ---- */
+.tag { display: inline-flex; align-items: center; padding: 2px 8px; font-size: var(--fs-xs); font-weight: 500; border-radius: 999px; background: var(--bg-2); color: var(--text-2); border: 1px solid var(--border); gap: 4px; }
+.tag.success { background: var(--success-soft); color: var(--success); border-color: var(--success); }
+.tag.warning { background: var(--warning-soft); color: var(--warning); border-color: var(--warning); }
+.tag.danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+.tag.info { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+.tag.accent { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* ---- Notice ---- */
+.notice { display: flex; align-items: flex-start; gap: var(--s-2); padding: var(--s-3) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-sm); margin: var(--s-2) 0; border-left: 3px solid; }
+.notice.success { background: var(--success-soft); color: var(--success); border-left-color: var(--success); }
+.notice.warning { background: var(--warning-soft); color: var(--warning); border-left-color: var(--warning); }
+.notice.danger { background: var(--danger-soft); color: var(--danger); border-left-color: var(--danger); }
+.notice.info { background: var(--info-soft); color: var(--info); border-left-color: var(--info); }
+
+/* ---- Empty State ---- */
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--s-7); text-align: center; color: var(--text-3); gap: var(--s-3); height: 100%; }
+.empty-state-icon { font-size: 32px; opacity: 0.5; }
+.empty-state-title { font-size: var(--fs-md); color: var(--text-2); font-weight: 500; }
+.empty-state-desc { font-size: var(--fs-sm); color: var(--text-3); max-width: 320px; }
+
+/* ---- Kbd ---- */
+kbd { display: inline-block; padding: 2px 6px; font-family: var(--mono); font-size: 11px; color: var(--text-2); background: var(--bg-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; font-weight: 500; line-height: 1; }
+
+/* ---- Section Title ---- */
+h3.section-title { font-size: var(--fs-md); font-weight: 600; color: var(--text-1); margin: var(--s-4) 0 var(--s-2); display: flex; align-items: center; gap: var(--s-2); }
+h3.section-title::before { content: ''; width: 3px; height: 14px; background: var(--gradient-primary); border-radius: 2px; }
+
+/* ---- Animations ---- */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scale-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+.animate-fade-in { animation: fade-in 0.3s var(--ease-out); }
+.animate-slide-up { animation: slide-up 0.3s var(--ease-out); }
+.animate-scale-in { animation: scale-in 0.3s var(--ease-out); }
+
+/* =========================================================
+   下载进度条面板（增强版：步骤条 + 详情 + 速度/ETA）
+   ========================================================= */
+.download-progress-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.download-steps {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.download-step-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+.download-step-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+.download-step-chip.done {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: var(--success);
+}
+.download-step-chip.failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.download-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.download-bar-track {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-2);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.download-bar-fill {
+  height: 100%;
+  background: var(--gradient-primary);
+  width: 0%;
+  transition: width 0.18s linear;
+  border-radius: 4px;
+}
+.download-bar-fill.indeterminate {
+  width: 30% !important;
+  animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
+@keyframes indeterminate-slide {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(180%); }
+  100% { transform: translateX(380%); }
+}
+.download-percent {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.download-detail {
+  font-size: 11px;
+  color: var(--text-2);
+  word-break: break-all;
+  line-height: 1.4;
+  min-height: 14px;
+}
+.download-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+.download-meta strong { color: var(--text-2); font-weight: 600; }

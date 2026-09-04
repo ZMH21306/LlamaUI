@@ -451,14 +451,6 @@ function toggleTheme() {
   state.lightTheme = !state.lightTheme;
   const isLight = state.lightTheme;
 
-  // 更新按钮图标（立即响应）
-  const btn = els.themeToggle;
-  if (btn) {
-    btn.innerHTML = isLight
-      ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>'
-      : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>';
-  }
-
   // 同步 iframe 主题（立即响应）
   syncIframeTheme();
 
@@ -1564,80 +1556,178 @@ function attachUIListeners() {
   els.importConfig?.addEventListener('click', handleImportConfig);
   els.autoScroll?.addEventListener('change', scheduleSave);
 
-  // ============ 自动下载 llama-server（实时进度） ============
+  // ============ 自动下载 llama-server（即时详细进度） ============
   els.downloadLlamaBtn?.addEventListener('click', async () => {
-    els.downloadLlamaBtn.disabled = true;
-    els.downloadLlamaBtn.textContent = '⏳ 下载中...';
-    els.downloadProgress.style.display = 'block';
-    els.downloadBar.style.width = '5%';
-    els.downloadStatus.textContent = '正在检测 GPU 并选择最佳版本...';
+    const btn = els.downloadLlamaBtn;
+    const bar = els.downloadBar;
+    const detailEl = $('downloadDetail');
+    const metaEl = $('downloadMeta');
+    const percentEl = $('downloadPercent');
+    const stepsEl = $('downloadSteps');
 
-    // 订阅后端实时进度事件
-    let smoothProgress = 0;
+    // 阶段定义
+    const STAGES = [
+      { id: 'init',            label: '初始化' },
+      { id: 'fetching_version', label: '获取版本' },
+      { id: 'finding_asset',    label: '匹配资产' },
+      { id: 'downloading',      label: '下载' },
+      { id: 'extracting',       label: '解压' },
+      { id: 'complete',         label: '完成' },
+    ];
+    let currentStageIdx = -1;
+    let lastCandidate = '';
+
+    function renderSteps() {
+      if (!stepsEl) return;
+      stepsEl.innerHTML = '';
+      STAGES.forEach((s, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'download-step-chip';
+        if (i < currentStageIdx) chip.classList.add('done');
+        else if (i === currentStageIdx) chip.classList.add('active');
+        if (s.id === 'complete' && currentStageIdx === STAGES.length - 1)
+          chip.classList.add('done');
+        chip.textContent = s.label;
+        stepsEl.appendChild(chip);
+      });
+    }
+
+    function setStage(stageId) {
+      const idx = STAGES.findIndex(s => s.id === stageId);
+      if (idx >= 0 && idx !== currentStageIdx) {
+        currentStageIdx = idx;
+        renderSteps();
+      }
+    }
+
+    function setProgress(pct, label) {
+      const clamped = Math.max(0, Math.min(100, pct));
+      if (bar) bar.style.width = clamped + '%';
+      if (percentEl) percentEl.textContent = clamped.toFixed(1) + '%';
+      if (label && detailEl) detailEl.textContent = label;
+    }
+
+    function setMeta(speed, eta) {
+      if (!metaEl) return;
+      const parts = [];
+      if (speed && speed > 0.01) parts.push(speed.toFixed(2) + ' MB/s');
+      if (eta && eta > 0 && eta < 1e8) {
+        const s = Math.round(eta);
+        parts.push('剩余 ' + (s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + s % 60 + 's'));
+      }
+      metaEl.textContent = parts.join(' · ');
+    }
+
+    function setIndeterminate(label) {
+      if (bar) bar.classList.add('indeterminate');
+      if (percentEl) percentEl.textContent = '…';
+      if (label && detailEl) detailEl.textContent = label;
+    }
+
+    function clearIndeterminate() {
+      if (bar) bar.classList.remove('indeterminate');
+    }
+
+    // 启动
+    btn.disabled = true;
+    btn.textContent = '⏳ 下载中...';
+    els.downloadProgress.style.display = 'block';
+    currentStageIdx = -1;
+    lastCandidate = '';
+    renderSteps();
+    setProgress(0, '准备中...');
+    setMeta(0, null);
+    setStage('init');
+
+    // 订阅后端实时进度事件（即时更新，无平滑插值）
     const unlisten = await listen('download-progress', (e) => {
       const p = e.payload;
-      // 平滑插值目标进度，避免跳跃
-      const target = Math.min(Math.max(p.progress * 100, 0), 100);
-      if (target > smoothProgress) {
-        // 渐进式逼近（每帧最多前进 2%）
-        smoothProgress = Math.min(target, smoothProgress + 2);
-      }
-      els.downloadBar.style.width = smoothProgress + '%';
+      const d = p.detail || null;
 
-      // 根据阶段设置不同描述
-      const stageLabels = {
-        init: '初始化...',
-        fetching_version: '获取版本信息...',
-        downloading: '下载文件...',
-        extracting: '解压中...',
-        complete: '完成！',
-      };
-      const label = stageLabels[p.stage] || p.message;
-      if (p.stage === 'downloading' && p.total > 0) {
-        const dlMB = (p.downloaded / 1048576).toFixed(1);
-        const totalMB = (p.total / 1048576).toFixed(1);
-        els.downloadStatus.textContent = `下载中... ${dlMB} / ${totalMB} MB`;
-      } else {
-        els.downloadStatus.textContent = label;
+      // 阶段变化 → 重渲染步骤条
+      if (p.stage && p.stage !== STAGES[currentStageIdx]?.id) {
+        setStage(p.stage);
       }
+
+      // finding_asset：展示候选验证详情
+      if (p.stage === 'finding_asset') {
+        clearIndeterminate();
+        if (d && d.candidate_count > 0) {
+          const cur = d.current_candidate || '';
+          if (cur && cur !== lastCandidate) lastCandidate = cur;
+          setProgress(
+            p.progress * 100,
+            d.step + (lastCandidate ? ' · ' + lastCandidate : '')
+          );
+        } else {
+          setProgress(0, p.message || '匹配资产中...');
+        }
+        setMeta(0, null);
+        return;
+      }
+
+      // downloading：即时显示百分比、速度、ETA
+      if (p.stage === 'downloading') {
+        clearIndeterminate();
+        const pct = p.progress * 100;
+        const dlMB = (p.downloaded / 1048576).toFixed(2);
+        const totalMB = p.total > 0 ? (p.total / 1048576).toFixed(2) : '?';
+        const speed = d && d.speed_mbps ? d.speed_mbps : 0;
+        const eta = d && d.eta_secs !== undefined ? d.eta_secs : null;
+        setProgress(pct, '下载中 · ' + dlMB + ' / ' + totalMB + ' MB (' + pct.toFixed(1) + '%)');
+        setMeta(speed, eta);
+        return;
+      }
+
+      // retrying / extracting / complete
+      if (p.stage === 'retrying') {
+        setIndeterminate(p.message || '重试中...');
+        setMeta(0, null);
+        return;
+      }
+      if (p.stage === 'extracting') {
+        setIndeterminate('解压中...');
+        setMeta(0, null);
+        return;
+      }
+      if (p.stage === 'complete') {
+        clearIndeterminate();
+        setProgress(100, '✅ 下载完成！');
+        setMeta(0, null);
+        return;
+      }
+
+      // 兜底
+      setProgress(p.progress * 100, p.message || '');
     });
 
-    // 额外：每 100ms 补间平滑动画
-    const smoothInterval = setInterval(() => {
-      const bar = els.downloadBar;
-      if (!bar) return;
-      const target = parseFloat(bar.dataset.target || '0');
-      const current = smoothProgress;
-      if (current < target) {
-        smoothProgress = Math.min(target, current + 0.5);
-        bar.style.width = smoothProgress + '%';
-      }
-    }, 100);
-
     try {
-      // 自动检测 GPU 后端
+      setStage('fetching_version');
+      setIndeterminate('检测 GPU 后端...');
       const backend = await invoke('detect_gpu');
-      els.downloadStatus.textContent = `检测到后端: ${backend}，开始下载...`;
-      els.downloadBar.style.width = '10%';
+      setIndeterminate('后端: ' + backend + '，准备下载...');
 
       const result = await invoke('download_llama_server', { backend });
-      smoothProgress = 100;
-      els.downloadBar.style.width = '100%';
-      els.downloadStatus.textContent = `下载完成！文件: ${result.path}`;
-      showNotification(`llama-server 安装成功！耗时 ${result.elapsed_ms}ms`, 'success', 5000);
-      // 自动填入路径
+      setStage('complete');
+      setProgress(100, '✅ 安装完成！');
+      setMeta(0, null);
+      if (els.downloadStatus) els.downloadStatus.textContent = '耗时 ' + (result.elapsed_ms / 1000).toFixed(1) + 's';
+      showNotification('llama-server 安装成功！耗时 ' + result.elapsed_ms + 'ms', 'success', 5000);
       els.llamaServerPath.value = result.path;
       try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}
     } catch (e) {
-      els.downloadStatus.textContent = `错误: ${e}`;
-      showNotification(`下载失败: ${e}`, 'error', 5000);
+      if (bar) { bar.classList.remove('indeterminate'); bar.style.background = 'var(--danger)'; }
+      if (detailEl) detailEl.textContent = '❌ 错误: ' + e;
+      if (percentEl) percentEl.textContent = '失败';
+      const chip = stepsEl && stepsEl.querySelectorAll('.download-step-chip')[currentStageIdx];
+      if (chip) { chip.classList.remove('active'); chip.classList.add('failed'); }
+      showNotification('下载失败: ' + e, 'error', 8000);
     }
 
-    clearInterval(smoothInterval);
     unlisten();
-    els.downloadLlamaBtn.disabled = false;
-    els.downloadLlamaBtn.textContent = '🚀 自动下载 llama-server';
-    setTimeout(() => { els.downloadProgress.style.display = 'none'; }, 5000);
+    btn.disabled = false;
+    btn.textContent = '🚀 自动下载 llama-server';
+    setTimeout(function() { els.downloadProgress.style.display = 'none'; }, 8000);
   });
 
   // ============ GPU 信息刷新 ============
