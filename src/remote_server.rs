@@ -28,6 +28,7 @@ pub struct RemoteServerInfo {
     pub name: String,
     /// API 密钥（存储加密或环境变量中，不直接可见）。
     #[serde(skip_serializing, skip_deserializing)]
+    #[allow(dead_code)]
     pub api_key: Option<String>,
     /// 服务器是否已连接。
     pub connected: bool,
@@ -55,6 +56,7 @@ impl RemoteServerInfo {
     }
 
     /// 标记为已连接，记录连接时间。
+    #[allow(dead_code)]
     pub fn mark_connected(&mut self) {
         self.connected = true;
         self.last_connected_at = Some(
@@ -66,6 +68,7 @@ impl RemoteServerInfo {
     }
 
     /// 标记为断开连接。
+    #[allow(dead_code)]
     pub fn mark_disconnected(&mut self) {
         self.connected = false;
     }
@@ -135,6 +138,7 @@ impl RemoteServerManager {
     }
 
     /// 检查是否有已连接的服务器。
+    #[allow(dead_code)]
     pub fn has_connected_server(&self) -> bool {
         self.servers
             .lock()
@@ -143,6 +147,7 @@ impl RemoteServerManager {
     }
 
     /// 获取所有已连接服务器的模型列表（扁平化）。
+    #[allow(dead_code)]
     pub fn all_available_models(&self) -> Vec<String> {
         self.servers
             .lock()

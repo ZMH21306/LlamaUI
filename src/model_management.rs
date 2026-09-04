@@ -15,7 +15,6 @@
 //! - 模型元数据缓存到磁盘，避免重复扫描
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -86,6 +85,7 @@ pub struct ModelCatalog {
     /// 已扫描的模型列表。
     pub models: Vec<ModelInfo>,
     /// 上次扫描时间（UNIX 纪元秒），用于增量扫描判断。
+    #[allow(dead_code)]
     pub scanned_at: u64,
 }
 
@@ -155,6 +155,7 @@ impl ModelManager {
     /// 添加一个模型目录并开始后台扫描。
     ///
     /// 扫描在调用线程同步执行（适合小目录）。
+    #[allow(dead_code)]
     pub fn add_directory(&self, dir: &Path) {
         let catalog = ModelCatalog::scan(dir);
         let mut cats = self.catalogs.lock();
@@ -165,6 +166,7 @@ impl ModelManager {
     }
 
     /// 移除一个模型目录。
+    #[allow(dead_code)]
     pub fn remove_directory(&self, dir: &Path) {
         let mut cats = self.catalogs.lock();
         cats.retain(|c| c.dir != dir);
@@ -213,6 +215,7 @@ impl Default for ModelManager {
 }
 
 /// 模型启动配置（用于快速切换到某个模型）。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelLaunchConfig {
     /// 模型路径。
@@ -225,6 +228,7 @@ pub struct ModelLaunchConfig {
     pub n_gpu_layers_override: Option<i32>,
 }
 
+#[allow(dead_code)]
 impl ModelLaunchConfig {
     /// 从模型信息构建启动配置。
     pub fn from_model(model: &ModelInfo) -> Self {

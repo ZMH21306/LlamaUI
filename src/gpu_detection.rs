@@ -257,9 +257,6 @@ pub fn rocm_circuit_breaker() -> Arc<CircuitBreaker> {
         .clone()
 }
 
-/// 异步锁存器，确保并发安全
-static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 /// GPU 信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuInfo {

@@ -612,7 +612,7 @@ function setMode(mode, opts = {}) {
   if (mode !== 'normal' && mode !== 'advanced' && mode !== 'pro') mode = 'normal';
   state.mode = mode;
   els.modeTabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.mode === mode));
-  els.modeViews.forEach((view) => { view.hidden = view.dataset.view !== mode; });
+  els.modeViews.forEach((view) => { view.classList.toggle('active', view.dataset.view === mode); });
   try {
     if (mode === 'advanced' && !opts.skipRender) {
       if (!els.advancedAccordion?.dataset.rendered) renderAdvancedAccordion();
@@ -1730,7 +1730,7 @@ function attachUIListeners() {
     setTimeout(function() { els.downloadProgress.style.display = 'none'; }, 8000);
   });
 
-  // ============ GPU 信息刷新 ============
+// ============ GPU 信息刷新 ============
   async function refreshGpuInfo() {
     if (!els.gpuInfoBody) return;
     els.gpuInfoBody.innerHTML = '<p style="color:var(--text-3);font-size:12px;">检测中...</p>';

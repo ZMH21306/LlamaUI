@@ -11,6 +11,28 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+fn current_os() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "unknown"
+    }
+}
+
+fn current_arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    }
+}
+
 /// 获取 GitHub Token（优先级：GITHUB_TOKEN → gh CLI → GH_TOKEN → 无）
 fn get_github_token() -> Option<String> {
     // 1. 环境变量 GITHUB_TOKEN
@@ -39,44 +61,6 @@ fn get_github_token() -> Option<String> {
     }
     tracing::debug!(target: "LlamaDownloader", "未找到认证 token，使用匿名请求");
     None
-}
-
-/// 用 curl 获取 URL 内容（自动继承系统代理）
-fn curl_get(url: &str) -> anyhow::Result<String> {
-    let token = get_github_token();
-    let auth_header = token.as_deref().map(|t| format!("Authorization: token {}", t));
-    let has_token = auth_header.is_some();
-    let start = std::time::Instant::now();
-
-    tracing::debug!(target: "LlamaDownloader", url = %url, has_token, "发起 curl GET 请求");
-
-    let mut args: Vec<&str> = vec!["-s", "-L", "--max-time", "30"];
-    let auth_ref;
-    if let Some(ref h) = auth_header {
-        auth_ref = h.as_str();
-        args.push("-H");
-        args.push(auth_ref);
-    }
-    args.push(url);
-
-    let output = Command::new("curl")
-        .args(&args)
-        .output()
-        .map_err(|e| anyhow::anyhow!("curl 不存在或无法执行: {}", e))?;
-
-    let elapsed_ms = start.elapsed().as_millis();
-    let status_code = output.status.code().unwrap_or(-1);
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::error!(target: "LlamaDownloader", url = %url, status = status_code, elapsed_ms, stderr = %stderr, "curl GET 请求失败");
-        return Err(anyhow::anyhow!("curl GET {} 返回 {}: {}", url, status_code, stderr));
-    }
-
-    let body = String::from_utf8_lossy(&output.stdout);
-    tracing::debug!(target: "LlamaDownloader", url = %url, status = status_code, elapsed_ms, body_len = body.len(), "curl GET 请求成功");
-
-    Ok(body.to_string())
 }
 
 /// 用 curl 发送 HEAD 请求验证 URL 可用性（自动继承系统代理）
@@ -531,6 +515,7 @@ struct GitHubRelease {
     tag_name: String,
     assets: Vec<GitHubAsset>,
     #[serde(default)]
+    #[allow(dead_code)]
     prerelease: bool,
 }
 
@@ -707,11 +692,6 @@ fn build_asset_name(tag: &str, backend: GpuBackend) -> String {
     )
 }
 
-/// 从 GitHub Release 查找匹配的资产
-fn find_asset<'a>(release: &'a GitHubRelease, asset_name: &str) -> Option<&'a GitHubAsset> {
-    release.assets.iter().find(|a| a.name == asset_name)
-}
-
 /// 解压 tar.gz
 #[allow(clippy::print_stderr)]
 pub fn extract_tar_gz(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -800,27 +780,6 @@ fn find_llama_server_recursive(dir: &Path, results: &mut Vec<PathBuf>) -> anyhow
         }
     }
     Ok(())
-}
-
-/// 校验 SHA256
-pub fn verify_sha256(file: &Path, expected: &str) -> anyhow::Result<bool> {
-    tracing::debug!(target: "LlamaDownloader", file = %file.display(), "校验 SHA256");
-    let mut file = fs::File::open(file)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 65536];
-
-    loop {
-        let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-
-    let actual = format!("{:x}", hasher.finalize());
-    let result = actual.eq_ignore_ascii_case(expected);
-    tracing::info!(target: "LlamaDownloader", actual = %actual, expected = %expected, ok = result, "SHA256 校验完成");
-    Ok(result)
 }
 
 /// 从 release 的资产列表中智能查找匹配当前系统的资产
@@ -1054,63 +1013,6 @@ fn smart_find_asset<'a>(
     }
 
     None
-}
-
-/// 构建候选资产名列表（按优先级）
-fn build_candidate_asset_names(backend: GpuBackend, os: &str, arch: &str) -> Vec<String> {
-    let arch_str = match arch {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        _ => arch,
-    };
-
-    let ext = if os == "windows" { "zip" } else { "tar.gz" };
-
-    let os_str = match os {
-        "windows" => "win",
-        "linux" => "ubuntu",
-        "macos" => "macos",
-        _ => os,
-    };
-
-    let backend_part = match backend {
-        GpuBackend::Cpu => {
-            if os == "windows" {
-                "-cpu".to_string()
-            } else {
-                String::new()
-            }
-        }
-        GpuBackend::Cuda12_4 => "-cuda-12.4".to_string(),
-        GpuBackend::Cuda13_3 => "-cuda-13.3".to_string(),
-        GpuBackend::Rocm => {
-            if os == "linux" {
-                "-rocm-7.2".to_string()
-            } else {
-                "-hip-radeon".to_string()
-            }
-        }
-        GpuBackend::Vulkan => "-vulkan".to_string(),
-        GpuBackend::Metal => String::new(),
-    };
-
-    let mut candidates = Vec::new();
-
-    // 候选 1: cudart- 前缀（Windows CUDA）
-    if matches!(backend, GpuBackend::Cuda12_4 | GpuBackend::Cuda13_3) && os == "windows" {
-        candidates.push(format!(
-            "cudart-llama-{{}}-bin-{}{}-{}.{}",
-            os_str, backend_part, arch_str, ext
-        ));
-    }
-
-    // 候选 2: 标准格式
-    candidates.push(format!(
-        "llama-{{}}-bin-{}{}-{}.{}",
-        os_str, backend_part, arch_str, ext
-    ));
-
-    candidates.into_iter().collect()
 }
 
 /// 带重试的 GitHub API 调用
@@ -1402,55 +1304,6 @@ fn build_official_candidate_names(tag: &str, os: &str, arch: &str) -> Vec<String
     );
 
     candidates
-}
-
-/// 检测后端后缀（cuda-12.4 / cpu / vulkan 等）
-fn detect_backend_suffix() -> String {
-    // 默认 CUDA 12.4（兼容 RTX 50 系列）
-    "cuda-12.4".to_string()
-}
-
-/// 当前操作系统
-fn current_os() -> String {
-    if cfg!(target_os = "windows") {
-        "windows".to_string()
-    } else if cfg!(target_os = "linux") {
-        "linux".to_string()
-    } else if cfg!(target_os = "macos") {
-        "macos".to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
-
-/// 当前架构
-fn current_arch() -> String {
-    if cfg!(target_arch = "x86_64") {
-        "x86_64".to_string()
-    } else if cfg!(target_arch = "aarch64") {
-        "aarch64".to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
-
-/// 根据 tag 获取 release 信息
-fn fetch_release_by_tag(tag: &str) -> anyhow::Result<GitHubRelease> {
-    let url = format!("https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}", tag);
-    tracing::debug!(target: "LlamaDownloader", url = %url, "根据 tag 获取 release");
-
-    let json_str = curl_get(&url)?;
-    let release: GitHubRelease = serde_json::from_str(&json_str)
-        .map_err(|e| anyhow::anyhow!("解析 release 失败: {}", e))?;
-
-    tracing::info!(
-        target: "LlamaDownloader",
-        tag = %release.tag_name,
-        count = release.assets.len(),
-        "获取到 release"
-    );
-
-    Ok(release)
 }
 
 #[cfg(test)]
