@@ -44,6 +44,7 @@ pub async fn download_llama_server(
             downloaded: 0,
             total: 0,
             message: format!("开始下载 (后端: {})", gpu_backend.as_str()),
+            detail: None,
         },
     );
 
@@ -94,6 +95,7 @@ pub async fn download_llama_server(
             downloaded: result.file_size,
             total: result.file_size,
             message: "下载完成".into(),
+            detail: None,
         },
     );
 
