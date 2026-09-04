@@ -168,6 +168,7 @@ fn curl_download(
                 downloaded: 0,
                 total: total_size,
                 message: format!("开始下载 ({:.1} MB)...", total_size as f64 / 1048576.0),
+                detail: None,
             });
         }
     }
@@ -187,6 +188,7 @@ fn curl_download(
                     downloaded: 0,
                     total: total_size,
                     message: format!("重试第 {} 次 (等待 {}s)...", attempt, wait_secs),
+                    detail: None,
                 });
             }
             std::thread::sleep(std::time::Duration::from_secs(wait_secs.into()));
@@ -288,6 +290,12 @@ fn curl_download(
                 }
 
                 if let Some(cb) = progress_callback {
+                    let eta_secs = if speed_mbps > 0.0 && total_size > downloaded {
+                        let remaining_bytes = total_size - downloaded;
+                        Some((remaining_bytes as f64 / (speed_mbps * 1048576.0)).max(0.0))
+                    } else {
+                        None
+                    };
                     cb(DownloadProgress {
                         stage: "downloading".to_string(),
                         progress: pct / 100.0,
@@ -299,6 +307,15 @@ fn curl_download(
                             total_size as f64 / 1048576.0,
                             pct
                         ),
+                        detail: Some(DownloadProgressDetail {
+                            step: format!("下载中 {:.0}%", pct),
+                            step_progress: pct / 100.0,
+                            candidate_index: 0,
+                            candidate_count: 0,
+                            current_candidate: None,
+                            speed_mbps,
+                            eta_secs,
+                        }),
                     });
                 }
             }
@@ -358,6 +375,7 @@ fn curl_download(
                         elapsed_secs,
                         speed_mbps
                     ),
+                    detail: None,
                 });
             }
 
@@ -406,6 +424,58 @@ pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
     pub message: String,
+    /// 可选的细粒度进度信息（用于前端展示更详细的实时状态）
+    pub detail: Option<DownloadProgressDetail>,
+}
+
+/// 下载进度的细粒度实时信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadProgressDetail {
+    /// 当前子步骤描述（如："验证候选 2/5"）
+    pub step: String,
+    /// 子步骤内进度 0.0 ~ 1.0
+    pub step_progress: f64,
+    /// 当前候选索引（从 1 开始）
+    pub candidate_index: u32,
+    /// 总候选数
+    pub candidate_count: u32,
+    /// 当前正在验证/下载的候选名
+    pub current_candidate: Option<String>,
+    /// 当前下载速度 MB/s（仅下载阶段有效）
+    pub speed_mbps: f64,
+    /// 预计剩余秒数（仅下载阶段有效）
+    pub eta_secs: Option<f64>,
+}
+
+/// 构造带 detail 的 DownloadProgress（简化创建）
+fn progress_with(
+    stage: &str,
+    progress: f64,
+    downloaded: u64,
+    total: u64,
+    message: String,
+    detail: DownloadProgressDetail,
+) -> DownloadProgress {
+    DownloadProgress {
+        stage: stage.to_string(),
+        progress,
+        downloaded,
+        total,
+        message,
+        detail: Some(detail),
+    }
+}
+
+/// 构造一个简单的 DownloadProgress（无 detail）
+fn progress_simple(stage: &str, progress: f64, message: String) -> DownloadProgress {
+    DownloadProgress {
+        stage: stage.to_string(),
+        progress,
+        downloaded: 0,
+        total: 0,
+        message,
+        detail: None,
+    }
 }
 
 /// 下载结果
@@ -756,22 +826,37 @@ pub fn verify_sha256(file: &Path, expected: &str) -> anyhow::Result<bool> {
 /// 从 release 的资产列表中智能查找匹配当前系统的资产
 /// 支持多种命名变体，自动识别 OS/arch/backend
 /// **关键改进：验证 URL 可用性，确保下载成功**
-fn smart_find_asset(
-    release: &GitHubRelease,
+/// 
+/// 每次候选验证都会通过 `progress_callback` 发送实时进度，
+/// 让前端能立即显示"验证候选 X/Y: xxx.zip"等详细信息。
+fn smart_find_asset<'a>(
+    release: &'a GitHubRelease,
     backend: GpuBackend,
-) -> Option<&GitHubAsset> {
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) -> Option<&'a GitHubAsset> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
+    let tag = &release.tag_name;
+    let asset_count = release.assets.len() as u32;
 
     tracing::info!(
         target: "LlamaDownloader",
         os = os,
         arch = arch,
         backend = %backend.as_str(),
-        tag = %release.tag_name,
-        asset_count = release.assets.len(),
+        tag = %tag,
+        asset_count = asset_count,
         "开始智能匹配资产（官方稳定方案）"
     );
+
+    // 通知前端：开始匹配
+    if let Some(cb) = progress_callback {
+        cb(progress_simple(
+            "finding_asset",
+            0.0,
+            format!("开始匹配资产（共 {} 个候选需要验证）...", asset_count),
+        ));
+    }
 
     // 模糊匹配：按后端关键词匹配
     let backend_keywords: Vec<&str> = match backend {
@@ -821,6 +906,13 @@ fn smart_find_asset(
     // 如果没有候选，尝试更宽松的匹配
     if candidates.is_empty() {
         tracing::warn!(target: "LlamaDownloader", "精确匹配失败，尝试宽松匹配");
+        if let Some(cb) = progress_callback {
+            cb(progress_simple(
+                "finding_asset",
+                0.0,
+                "精确匹配失败，尝试宽松匹配...".to_string(),
+            ));
+        }
         for asset in &release.assets {
             let name_lower = asset.name.to_lowercase();
             // 宽松匹配：只要求包含 llama 和匹配架构
@@ -836,9 +928,41 @@ fn smart_find_asset(
     // 验证每个候选 URL 的可用性（HEAD 请求）
     // 保存第一个候选以便最后回退
     let first_candidate = candidates.first().copied();
-    for asset in candidates {
+    let total_candidates = candidates.len() as u32;
+    for (i, asset) in candidates.iter().enumerate() {
+        let candidate_index = (i + 1) as u32;
+        let candidate_name = &asset.name;
         let url = &asset.browser_download_url;
-        tracing::debug!(target: "LlamaDownloader", url = %url, "验证 URL 可用性");
+
+        tracing::info!(
+            target: "LlamaDownloader",
+            candidate_index = candidate_index,
+            total = total_candidates,
+            name = %candidate_name,
+            "验证候选资产 {}/{}",
+            candidate_index,
+            total_candidates
+        );
+
+        // 通知前端：当前验证的候选
+        if let Some(cb) = progress_callback {
+            cb(progress_with(
+                "finding_asset",
+                (candidate_index as f64 / total_candidates as f64) * 0.99 + 0.01,
+                candidate_index as u64,
+                total_candidates as u64,
+                format!("验证候选 {}/{}：{}", candidate_index, total_candidates, candidate_name),
+                DownloadProgressDetail {
+                    step: format!("验证候选 {}/{}", candidate_index, total_candidates),
+                    step_progress: candidate_index as f64 / total_candidates as f64,
+                    candidate_index,
+                    candidate_count: total_candidates,
+                    current_candidate: Some(candidate_name.clone()),
+                    speed_mbps: 0.0,
+                    eta_secs: None,
+                },
+            ));
+        }
 
         // 使用 HEAD 请求验证 URL
         let result = curl_head(url);
@@ -846,10 +970,29 @@ fn smart_find_asset(
             Ok(_) => {
                 tracing::info!(
                     target: "LlamaDownloader",
-                    name = %asset.name,
+                    name = %candidate_name,
                     url = %url,
                     "✅ URL 可用，选择此资产"
                 );
+                // 通知前端：验证成功
+                if let Some(cb) = progress_callback {
+                    cb(progress_with(
+                        "finding_asset",
+                        0.95,
+                        candidate_index as u64,
+                        total_candidates as u64,
+                        format!("✅ 候选 {}/{} 可用，选中：{}", candidate_index, total_candidates, candidate_name),
+                        DownloadProgressDetail {
+                            step: format!("✅ 选中：{}", candidate_name),
+                            step_progress: 0.95,
+                            candidate_index,
+                            candidate_count: total_candidates,
+                            current_candidate: Some(candidate_name.clone()),
+                            speed_mbps: 0.0,
+                            eta_secs: None,
+                        },
+                    ));
+                }
                 return Some(asset);
             }
             Err(e) => {
@@ -859,6 +1002,25 @@ fn smart_find_asset(
                     error = %e,
                     "❌ URL 不可用，尝试下一个"
                 );
+                // 通知前端：验证失败，尝试下一个
+                if let Some(cb) = progress_callback {
+                    cb(progress_with(
+                        "finding_asset",
+                        (candidate_index as f64 / total_candidates as f64) * 0.99 + 0.01,
+                        candidate_index as u64,
+                        total_candidates as u64,
+                        format!("❌ {}/{} 失败（{}），尝试下一个...", candidate_index, total_candidates, e),
+                        DownloadProgressDetail {
+                            step: format!("❌ {}/{} 失败", candidate_index, total_candidates),
+                            step_progress: candidate_index as f64 / total_candidates as f64,
+                            candidate_index,
+                            candidate_count: total_candidates,
+                            current_candidate: Some(candidate_name.clone()),
+                            speed_mbps: 0.0,
+                            eta_secs: None,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -870,6 +1032,24 @@ fn smart_find_asset(
             name = %asset.name,
             "所有候选 URL 验证失败，返回第一个候选"
         );
+        if let Some(cb) = progress_callback {
+            cb(progress_with(
+                "finding_asset",
+                0.95,
+                0,
+                total_candidates as u64,
+                format!("⚠️ 所有候选验证失败，回退到：{}", asset.name),
+                DownloadProgressDetail {
+                    step: format!("⚠️ 回退到：{}", asset.name),
+                    step_progress: 0.95,
+                    candidate_index: total_candidates,
+                    candidate_count: total_candidates,
+                    current_candidate: Some(asset.name.clone()),
+                    speed_mbps: 0.0,
+                    eta_secs: None,
+                },
+            ));
+        }
         return Some(asset);
     }
 
@@ -992,6 +1172,7 @@ pub fn download_and_install(
             downloaded: 0,
             total: 0,
             message: format!("获取最新版本（最多 {} 次重试）...", max_retries),
+            detail: None,
         });
     }
 
@@ -1007,10 +1188,11 @@ pub fn download_and_install(
             downloaded: 0,
             total: 0,
             message: format!("查找匹配资产 (tag={})...", tag),
+            detail: None,
         });
     }
 
-    let asset = smart_find_asset(&release, backend).ok_or_else(|| {
+    let asset = smart_find_asset(&release, backend, progress_callback).ok_or_else(|| {
         let available: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
         anyhow::anyhow!(
             "未找到匹配资产。\n系统: {} {}\n后端: {}\ntag: {}\n可用资产: {:?}",
@@ -1066,6 +1248,7 @@ pub fn download_and_install(
             downloaded,
             total: downloaded,
             message: "解压中...".to_string(),
+            detail: None,
         });
     }
 
