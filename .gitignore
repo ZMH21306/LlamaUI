@@ -4,6 +4,16 @@ target/
 # Tauri 自动生成文件
 gen/
 
+# Cargo 本地配置（代理、注册表缓存等）
+.cargo/config.toml
+.cargo/run-proxy.ps1
+.cargo/registry/
+.cargo/advisories/
+.cargo/config
+
+# Rustup 工具链配置（用户本地）
+.rustup/
+
 # 环境变量文件
 .env
 .env.*
