@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LlamaUI",
   "version": "0.7.0",
@@ -21,10 +21,23 @@
         "resizable": true,
         "fullscreen": false,
         "center": true
+      },
+      {
+        "label": "hf-store",
+        "title": "HuggingFace 妯″瀷鍟嗗煄",
+        "url": "hf-store.html",
+        "width": 920,
+        "height": 720,
+        "minWidth": 760,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://ipc.localhost http://127.0.0.1:* http://localhost:*; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' http://127.0.0.1:* http://localhost:*"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://ipc.localhost http://127.0.0.1:* http://localhost:* https://huggingface.co; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {
