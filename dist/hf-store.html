@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HuggingFace 模型商城</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="hf-store-app">
+    <header class="hf-store-header">
+      <div class="hf-store-title-row">
+        <h3>🤗 HuggingFace 模型商城</h3>
+      </div>
+      <div class="hf-search-row">
+        <div class="hf-search-box">
+          <svg class="hf-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="search" id="hfSearchInput" class="hf-search-input" placeholder="搜索模型，如 qwen llama gemma..." autocomplete="off" />
+          <button class="btn-primary" id="hfSearchBtn" style="padding:4px 12px;font-size:12px;">搜索</button>
+        </div>
+      </div>
+      <div class="hf-settings-row">
+        <div class="hf-setting-item">
+          <label for="hfTokenInput">HF Token:</label>
+          <input type="password" id="hfTokenInput" placeholder="可选，未登录限速" style="flex:1;padding:4px 8px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-1);" />
+          <button class="btn-secondary" id="hfTokenSaveBtn" style="padding:4px 10px;font-size:12px;">保存</button>
+        </div>
+        <div class="hf-setting-item">
+          <label for="hfDownloadDirInput">下载到:</label>
+          <input type="text" id="hfDownloadDirInput" placeholder="模型保存目录" style="flex:1;padding:4px 8px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-1);" />
+          <button class="btn-secondary" id="hfDownloadDirSaveBtn" style="padding:4px 10px;font-size:12px;">保存</button>
+        </div>
+      </div>
+      <p style="font-size:10px;color:var(--text-3);margin-top:4px;margin-left:60px;">默认使用 llama-server 同级 models 目录</p>
+    </header>
+    <div class="hf-store-body">
+      <div class="hf-scroll-area">
+        <div class="hf-results-list" id="hfResultsList">
+          <div class="hf-empty-state" id="hfEmptyState">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="var(--text-3)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+            <p>输入关键词搜索 HuggingFace 模型</p>
+            <p style="font-size:11px;color:var(--text-3);margin-top:4px;">仅显示包含 GGUF 量化文件的模型</p>
+          </div>
+          <div class="hf-loading-state" id="hfLoadingState" hidden>
+            <div class="spinner"></div>
+            <p>搜索中...</p>
+          </div>
+          <div id="hfModelsContainer"></div>
+        </div>
+        <div class="hf-detail-panel" id="hfDetailPanel" hidden>
+          <div class="hf-detail-header">
+            <button class="btn-secondary" id="hfBackBtn" style="padding:4px 8px;font-size:12px;">← 返回列表</button>
+            <span id="hfDetailModelId" style="font-weight:600;color:var(--text-1);font-size:13px;margin-left:8px;"></span>
+          </div>
+          <div class="hf-detail-body" id="hfDetailBody"></div>
+        </div>
+      </div>
+      <div class="hf-downloads-panel" id="hfDownloadsPanel">
+        <div class="hf-downloads-header">
+          <span>下载队列</span>
+          <span class="hf-downloads-count" id="hfDownloadsCount">0</span>
+        </div>
+        <div class="hf-downloads-list" id="hfDownloadsList">
+          <p class="hf-empty-dl">暂无下载任务</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="theme-engine.js"></script>
+  <script src="hf-store.js"></script>
+</body>
+</html>
