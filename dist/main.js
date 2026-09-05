@@ -436,28 +436,58 @@ function updateStatusUI(status) {
  *      强制旧版 llama.cpp 视觉上与软件一致。
  * 双层互补：现代页面走第 1 层（视觉无损），老页面走第 2 层（兜底）。
  */
+/**
+ * 同步 iframe 配色与软件主题保持一致。
+ * 由于 iframe 内是第三方 llama.cpp WebUI（跨源），无法用 CSS 注入或 DOM 操作，
+ * 采用两层联动：
+ *   1) color-scheme 属性：透传给 iframe，影响 UA 控件及较新 llama.cpp 的
+ *      @media (prefers-color-scheme: dark) 规则；
+ *   2) filter: invert(1) hue-rotate(180deg)：在暗色模式下整体反相，
+ *      强制旧版 llama.cpp 视觉上与软件一致。
+ */
 function syncIframeTheme() {
   const wv = els.webview;
   if (!wv) return;
   const dark = !state.lightTheme;
-  // 第 1 层：color-scheme 透传
   wv.style.colorScheme = dark ? 'dark' : 'light';
-  // 第 2 层：暗色下整体反相
   wv.classList.toggle('match-dark', dark);
 }
 
+// 防止快速重复点击（过渡期间禁用按钮）
+let themeSwitching = false;
+
 function toggleTheme() {
+  // 防止快速重复点击（过渡期间忽略）
+  if (themeSwitching) return;
+  themeSwitching = true;
+
   // 立即更新状态（用于 UI 响应）
   state.lightTheme = !state.lightTheme;
   const isLight = state.lightTheme;
 
+  // 更新按钮图标（带旋转动画）
+  const btn = els.themeToggle;
+  if (btn) {
+    btn.classList.add('theme-icon-spinning');
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.classList.remove('theme-icon-spinning');
+      btn.disabled = false;
+    }, 400);
+  }
+
   // 同步 iframe 主题（立即响应）
   syncIframeTheme();
 
-  // 使用主题引擎执行颜色动画过渡（带 300ms 防抖）
+  // 使用主题引擎执行颜色动画过渡
   themeManager.setLightTheme(isLight);
 
   showNotification(isLight ? '已切换到亮色主题' : '已切换到暗色主题', 'info', 1500);
+
+  // 过渡结束后恢复按钮可用（350ms 与 CSS --dur-slow 一致）
+  setTimeout(() => {
+    themeSwitching = false;
+  }, 350);
 }
 
 // ============= 配置预设 =============
@@ -2190,6 +2220,14 @@ async function init() {
   // 启动时按当前主题状态同步一次 iframe 配色（避免 reload 后 class/style 丢失）
   syncIframeTheme();
 
+  // 启动时根据当前主题设置主题切换按钮图标（CSS 通过 body.light-theme 类控制图标显示）
+
+  // 监听主题变化：同步到状态和 iframe（处理系统主题变化或 engine 触发的变化）
+  window.addEventListener('theme-change', (e) => {
+    state.lightTheme = e.detail?.isLight ?? false;
+    syncIframeTheme();
+  });
+
   // 全局键盘快捷键
   document.addEventListener('keydown', (e) => {
     // 忽略输入框/文本域内的快捷键（避免在输入内容时误触）
@@ -2278,6 +2316,17 @@ async function init() {
     if (status.active_port) state.activePort = status.active_port;
     updateStatusUI(status.status);
   }, '获取状态失败');
+
+  // 加载 HF 模型商城默认下载目录
+  safeCall(async () => {
+    const dir = await invoke('get_hf_download_dir');
+    const el = $('hfDownloadDirDisplay');
+    const wrap = $('hfQuickStatus');
+    if (el && dir) {
+      el.textContent = dir;
+      if (wrap) wrap.style.display = '';
+    }
+  }, '加载HF下载目录失败');
 
   // 加载历史日志
   // 启动时只加载最近 200 行，避免构建 5000+ DOM 节点卡住 UI。

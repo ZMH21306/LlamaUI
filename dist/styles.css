@@ -6,43 +6,38 @@
 
 /* ---- 设计 token ---- */
 :root {
-  /* 颜色 - 深空紫主题 */
-  --bg-0: #0a0a0f;
-  --bg-1: #12121a;
-  --bg-2: #1a1a28;
-  --bg-3: #242438;
-  --bg-input: #12121a;
-  --bg-elevated: #1e1e30;
-
-  --border: #2a2a40;
-  --border-strong: #363654;
-  --border-subtle: #1e1e30;
-
-  --text-1: #e8e8f0;
-  --text-2: #a0a0b8;
-  --text-3: #646478;
+  /* =========================================================
+     深色主题 - 午夜空间 (Midnight Space)
+     核心理念：深邃层次、温暖底色、优雅高光
+     ========================================================= */
+  --bg-0: #0b0d11;
+  --bg-1: #11141c;
+  --bg-2: #181c26;
+  --bg-3: #1e2330;
+  --bg-input: #151820;
+  --bg-elevated: #1a1f2b;
+  --border: #252a38;
+  --border-strong: #32394d;
+  --border-subtle: #1e2230;
+  --text-1: #e8ecf2;
+  --text-2: #9ba3b5;
+  --text-3: #5e6678;
   --text-on-accent: #ffffff;
-
   --accent: #22d3ee;
   --accent-2: #67e8f9;
-  --accent-soft: rgba(34, 211, 238, 0.12);
+  --accent-soft: rgba(34, 211, 238, 0.15);
   --accent-purple: #a78bfa;
-  --accent-purple-soft: rgba(167, 139, 250, 0.12);
-
+  --accent-purple-soft: rgba(167, 139, 250, 0.15);
   --success: #34d399;
-  --success-soft: rgba(52, 211, 153, 0.12);
+  --success-soft: rgba(52, 211, 153, 0.15);
   --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.12);
+  --warning-soft: rgba(251, 191, 36, 0.15);
   --danger: #f87171;
-  --danger-soft: rgba(248, 113, 113, 0.12);
+  --danger-soft: rgba(248, 113, 113, 0.15);
   --info: #60a5fa;
-  --info-soft: rgba(96, 165, 250, 0.12);
-
-  /* 渐变 */
+  --info-soft: rgba(96, 165, 250, 0.15);
   --gradient-primary: linear-gradient(135deg, #22d3ee 0%, #a78bfa 100%);
   --gradient-accent: linear-gradient(135deg, var(--accent), var(--accent-purple));
-
-  /* 间距 / 圆角 / 阴影 */
   --s-1: 4px;
   --s-2: 6px;
   --s-3: 8px;
@@ -50,38 +45,72 @@
   --s-5: 16px;
   --s-6: 20px;
   --s-7: 24px;
-
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
   --radius-md: var(--r-md);
-
-  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(34, 211, 238, 0.05);
-  --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(34, 211, 238, 0.08);
-  --shadow-glow: 0 0 20px rgba(34, 211, 238, 0.15);
-
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 24px rgba(34, 211, 238, 0.2);
   --border-1: var(--border);
-
   --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
-
-  /* 字号 */
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-base: 13px;
   --fs-md: 14px;
   --fs-lg: 16px;
   --fs-xl: 20px;
-
-  /* 动效 */
   --ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
   --ease-out: cubic-bezier(0.215, 0.61, 0.355, 1);
   --dur: 250ms;
   --dur-fast: 150ms;
-
-  /* 布局 */
+  --dur-slow: 350ms;
   --topbar-h: 56px;
   --pane-left-w: 420px;
   --pane-right-w: 280px;
+}
+
+/* =========================================================
+   亮色主题
+   通过 body.light-theme 类切换所有颜色变量
+   ========================================================= */
+
+/* =========================================================
+   亮色主题 - 晨光暖白 (Morning Light)
+   核心理念：干净暖白、清晰层级、优雅阴影
+   ========================================================= */
+body.light-theme {
+  --bg-0: #f5f6f8;
+  --bg-1: #ffffff;
+  --bg-2: #eef0f4;
+  --bg-3: #e2e6ec;
+  --bg-input: #ffffff;
+  --bg-elevated: #ffffff;
+  --border: #d0d5dd;
+  --border-strong: #98a2b3;
+  --border-subtle: #eef0f4;
+  --text-1: #101828;
+  --text-2: #475467;
+  --text-3: #667085;
+  --text-on-accent: #ffffff;
+  --accent: #0096a8;
+  --accent-2: #00b4d8;
+  --accent-soft: rgba(0, 150, 168, 0.12);
+  --accent-purple: #7c3aed;
+  --accent-purple-soft: rgba(124, 58, 237, 0.12);
+  --success: #1a7f4d;
+  --success-soft: rgba(26, 127, 77, 0.12);
+  --warning: #b54708;
+  --warning-soft: rgba(181, 71, 8, 0.12);
+  --danger: #c4342e;
+  --danger-soft: rgba(196, 52, 46, 0.12);
+  --info: #2663ab;
+  --info-soft: rgba(38, 99, 171, 0.12);
+  --gradient-primary: linear-gradient(135deg, #0096a8 0%, #7c3aed 100%);
+  --gradient-accent: linear-gradient(135deg, var(--accent), var(--accent-purple));
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --shadow-glow: 0 0 20px rgba(0, 150, 168, 0.2);
 }
 
 /* ---- 基础 ---- */
@@ -98,7 +127,14 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: background var(--dur-slow) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur-slow) var(--ease);
+}
+/* 主题切换全局过渡：确保子元素在主题切换时也有平滑过渡 */
+body.theme-transitioning,
+body.theme-transitioning *,
+body.theme-transitioning *::before,
+body.theme-transitioning *::after {
+  transition: background var(--dur-slow) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur-slow) var(--ease), fill var(--dur-slow) var(--ease), stroke var(--dur-slow) var(--ease);
 }
 button, input, select, textarea {
   font: inherit;
@@ -1407,17 +1443,15 @@ body.light-theme .card { background: var(--bg-1); }
    Added: Responsive design, animation system, interaction enhancements
    ========================================================= */
 
-/* ---- Theme Toggle Button Enhanced ---- */
-#themeToggle {
-  position: relative;
-  overflow: hidden;
+/* ---- Theme Toggle Button ---- */
+.btn-icon.theme-icon-spinning svg {
+  animation: theme-rotate 0.4s var(--ease-out);
 }
-#themeToggle svg {
-  transition: transform var(--dur-slow) var(--ease-in-out), color var(--dur) var(--ease);
-}
-body.light-theme #themeToggle svg { transform: rotate(360deg); }
-#themeToggle:hover svg { transform: rotate(45deg) scale(1.1); }
-body.light-theme #themeToggle:hover svg { transform: rotate(405deg) scale(1.1); }
+@keyframes theme-rotate {
+  0% { transform: rotate(0deg); }
+  50% { transform: rotate(180deg); }
+  100% { transform: rotate(360deg); } }
+/* ---- Card Entrance Animation ----
 
 /* ---- Card Entrance Animation ---- */
 @keyframes card-enter {
@@ -1520,6 +1554,26 @@ body.light-theme #themeToggle:hover svg { transform: rotate(405deg) scale(1.1); 
 /* =========================================================
    Enhanced Theme Toggle Button
    ========================================================= */
+/* =========================================================
+   主题切换过渡效果
+   ========================================================= */
+/* 过渡遮罩层 */
+.theme-transition-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+body.theme-transitioning .theme-transition-overlay {
+  opacity: 1;
+  background: radial-gradient(circle at center, rgba(255,255,255,0.03) 0%, transparent 70%);
+}
+body.light-theme.theme-transitioning .theme-transition-overlay {
+  background: radial-gradient(circle at center, rgba(0,0,0,0.02) 0%, transparent 70%);
+}
+
 .theme-icon-wrapper {
   position: relative;
   width: 18px;
@@ -1534,6 +1588,17 @@ body.light-theme #themeToggle:hover svg { transform: rotate(405deg) scale(1.1); 
   width: 18px;
   height: 18px;
   transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 主题图标默认状态（暗色主题 = 月亮显示，太阳隐藏）
+   在 body.light-theme/dark-theme 类应用前，防止两个图标同时可见 */
+.theme-icon-wrapper .icon-sun {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.5);
+}
+.theme-icon-wrapper .icon-moon {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
 }
 body.dark-theme .theme-icon-wrapper .icon-sun { opacity: 0; transform: rotate(90deg) scale(0.5); }
 body.dark-theme .theme-icon-wrapper .icon-moon { opacity: 1; transform: rotate(0deg) scale(1); }
@@ -1695,4 +1760,59 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   font-variant-numeric: tabular-nums;
   min-height: 14px;
 }
+.download-meta strong { color: var(--text-2); font-weight: 600; }
+
+/* HuggingFace 模型商城样式 */
+.hf-store-dialog { max-width: 1000px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; }
+.hf-store-header { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.hf-store-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.hf-store-title-row h3 { margin: 0; font-size: var(--fs-lg); }
+.hf-search-row { margin-bottom: 10px; }
+.hf-search-box { display: flex; align-items: center; gap: 8px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px 8px; transition: border-color var(--dur-fast); }
+.hf-search-box:focus-within { border-color: var(--accent); }
+.hf-search-icon { color: var(--text-3); flex-shrink: 0; }
+.hf-search-input { flex: 1; border: none; background: none; color: var(--text-1); font-size: var(--fs-base); outline: none; padding: 6px 4px; }
+.hf-search-input::placeholder { color: var(--text-3); }
+.hf-settings-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.hf-setting-item { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; }
+.hf-setting-item label { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; }
+.hf-store-body { flex: 1; overflow: hidden; min-height: 0; display: flex; flex-direction: column; padding: 16px 20px; gap: 12px; }
+.hf-scroll-area { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-3); }
+.hf-results-list { flex: 1; overflow-y: auto; min-height: 120px; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-3); }
+.hf-empty-state { text-align: center; padding: 40px 20px; color: var(--text-3); }
+.hf-empty-state svg { margin-bottom: 12px; opacity: 0.5; }
+.hf-empty-state p { margin: 4px 0; font-size: var(--fs-base); }
+.hf-loading-state { text-align: center; padding: 40px; color: var(--text-3); }
+.hf-loading-state .spinner { width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: hf-spin 0.8s linear infinite; margin: 0 auto 8px; }
+#hfModelsContainer { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.hf-model-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px; display: flex; flex-direction: column; gap: 8px; transition: all var(--dur-fast); cursor: default; }
+.hf-model-card:hover { border-color: var(--accent); box-shadow: var(--shadow-glow); }
+.hf-model-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.hf-model-id { font-weight: 600; font-size: var(--fs-sm); color: var(--text-1); word-break: break-all; }
+.hf-model-stats { display: flex; gap: 12px; font-size: var(--fs-xs); color: var(--text-3); margin-top: 4px; }
+.hf-model-desc { font-size: var(--fs-xs); color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.hf-model-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.hf-model-tag { padding: 2px 8px; background: var(--bg-3); border-radius: 8px; font-size: 10px; color: var(--text-2); }
+.hf-model-gguf-info { font-size: var(--fs-xs); color: var(--success); margin-top: 4px; }
+.hf-model-download-btn { margin-top: auto; padding: 6px 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--r-sm); color: var(--accent); cursor: pointer; font-size: var(--fs-sm); transition: all var(--dur-fast); }
+.hf-model-download-btn:hover { background: var(--accent); color: var(--text-on-accent); }
+.hf-model-download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.hf-detail-panel { border-top: 1px solid var(--border); padding-top: 12px; flex: 1; min-height: 0; }
+.hf-detail-body { display: flex; flex-direction: column; gap: 8px; }
+.hf-file-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-2); border-radius: var(--r-sm); border: 1px solid var(--border); }
+.hf-file-name { font-size: var(--fs-sm); color: var(--text-1); word-break: break-all; flex: 1; }
+.hf-file-size { font-size: var(--fs-xs); color: var(--text-3); margin-left: 12px; }
+.hf-downloads-panel { border-top: 1px solid var(--border); padding-top: 12px; max-height: 200px; overflow-y: auto; }
+.hf-downloads-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-1); }
+.hf-downloads-count { background: var(--accent-soft); color: var(--accent); padding: 2px 8px; border-radius: 10px; font-size: var(--fs-xs); }
+.hf-download-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-2); border-radius: var(--r-sm); margin-bottom: 6px; border: 1px solid var(--border); }
+.hf-dl-progress-track { flex: 1; height: 6px; background: var(--bg-3); border-radius: 3px; overflow: hidden; }
+.hf-dl-progress-fill { height: 100%; width: 0%; background: var(--gradient-primary); border-radius: 3px; transition: width 0.18s linear; }
+.hf-dl-info { font-size: var(--fs-xs); color: var(--text-2); min-width: 80px; text-align: right; }
+.hf-dl-status { font-size: var(--fs-xs); font-weight: 600; }
+.hf-dl-status.complete { color: var(--success); }
+.hf-dl-status.error { color: var(--danger); }
+.hf-dl-status.downloading { color: var(--accent); }
+.hf-empty-dl { text-align: center; color: var(--text-3); font-size: var(--fs-sm); padding: 12px; }
+@keyframes hf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .download-meta strong { color: var(--text-2); font-weight: 600; }

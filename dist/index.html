@@ -137,6 +137,22 @@
           </div>
         </section>
 
+        <!-- HuggingFace 模型商城入口 -->
+        <section class="card">
+          <header class="card-header">
+            <h2>🛒 HuggingFace 模型商城</h2>
+          </header>
+          <div class="card-body">
+            <p class="hint">搜索、浏览和下载 HuggingFace 上的 GGUF 模型文件</p>
+            <button class="btn-primary" id="openHfStoreBtn" style="width:100%;margin-top:8px;">
+              🚀 打开模型商城
+            </button>
+            <div id="hfQuickStatus" style="margin-top:8px;font-size:11px;color:var(--text-3);display:none;">
+              下载目录: <span id="hfDownloadDirDisplay"></span>
+            </div>
+          </div>
+        </section>
+
         <!-- 模式切换 + 当前模式表单 -->
         <section class="card">
           <div class="mode-tabs" role="tablist">
@@ -336,5 +352,6 @@
   <!-- 主题引擎：基于 Oklab 色彩空间的丝滑主题切换 -->
   <script src="theme-engine.js"></script>
   <script src="main.js"></script>
+  <script src="hf-store.js"></script>
 </body>
 </html>
