@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use tokio::process::Command;
+use crate::util::process::silent_tokio_command as silent_command;
 
 /// GPU 检测错误类型
 #[derive(Debug, Clone)]
@@ -410,7 +410,7 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
 
     // 使用断路器保护
     let nvidia_smi_task = async {
-        Command::new("nvidia-smi")
+        silent_command("nvidia-smi")
             .args(["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"])
             .output()
             .await
@@ -493,7 +493,7 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
 /// 异步检测 CUDA 版本
 async fn detect_cuda_version_async() -> Option<String> {
     let nvidia_smi_task = async {
-        Command::new("nvidia-smi").output().await
+        silent_command("nvidia-smi").output().await
     };
 
     match nvidia_circuit_breaker().call(nvidia_smi_task).await {
@@ -544,7 +544,7 @@ async fn detect_amd_gpu_async() -> Option<GpuInfo> {
 
     // 异步执行 lspci 检测
     let lspci_task = async {
-        Command::new("lspci")
+        silent_command("lspci")
             .arg("-nn")
             .output()
             .await
@@ -607,7 +607,7 @@ async fn detect_rocm_version_async() -> Option<String> {
 
     // 异步执行 rocminfo
     let rocminfo_task = async {
-        Command::new("rocminfo").output().await
+        silent_command("rocminfo").output().await
     };
 
     match rocm_circuit_breaker().call(rocminfo_task).await {
@@ -638,7 +638,7 @@ async fn detect_apple_silicon_gpu_async() -> Option<GpuInfo> {
     tracing::debug!(target: "GpuDetect", "异步检测 Apple Silicon GPU...");
 
     let system_profiler_task = async {
-        Command::new("system_profiler")
+        silent_command("system_profiler")
             .args(["SPDisplaysDataType"])
             .output()
             .await
@@ -761,7 +761,7 @@ async fn diagnose_cuda_runtime_async() -> Vec<GpuIssue> {
     let mut issues = Vec::new();
 
     let nvidia_smi_task = async {
-        Command::new("nvidia-smi").output().await
+        silent_command("nvidia-smi").output().await
     };
 
     match nvidia_circuit_breaker().call(nvidia_smi_task).await {
@@ -817,7 +817,7 @@ async fn diagnose_memory_usage_async() -> Vec<GpuIssue> {
 
     // 尝试获取 GPU 显存信息
     let nvidia_smi_task = async {
-        Command::new("nvidia-smi")
+        silent_command("nvidia-smi")
             .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
             .output()
             .await
@@ -857,7 +857,7 @@ pub fn auto_fix_gpu_issue(issue: &GpuIssue) -> Result<String, String> {
 
     match issue.issue_type.as_str() {
         "no_cuda_runtime" if cfg!(target_os = "linux") => {
-            let output = std::process::Command::new("sudo")
+            let output = crate::util::process::silent_command("sudo")
                 .args(["apt-get", "install", "-y", "nvidia-cuda-toolkit"])
                 .output()
                 .map_err(|e| format!("执行安装命令失败: {}", e))?;

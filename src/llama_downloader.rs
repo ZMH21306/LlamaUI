@@ -9,7 +9,8 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use crate::util::process::silent_command;
 
 fn current_os() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -43,7 +44,10 @@ fn get_github_token() -> Option<String> {
         }
     }
     // 2. gh CLI auth token
-    if let Ok(output) = Command::new("gh").args(["auth", "token"]).output() {
+    if let Ok(output) = crate::util::process::silent_command("gh")
+        .args(["auth", "token"])
+        .output()
+    {
         if output.status.success() {
             let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !token.is_empty() {
@@ -75,7 +79,7 @@ fn curl_head(url: &str) -> anyhow::Result<()> {
     }
     args.push(url);
 
-    let output = Command::new("curl")
+    let output = crate::util::process::silent_command("curl")
         .args(&args)
         .output()
         .map_err(|e| anyhow::anyhow!("curl HEAD 请求失败: {}", e))?;
@@ -129,26 +133,49 @@ fn parse_curl_progress(line: &str) -> Option<f64> {
     None
 }
 
+/// 下载阶段常量（用于统一的进度分配）
+///
+/// 总进度 (0.0 ~ 1.0) 分配如下：
+/// - ① 获取最新版本     : 0% ~ 2%   （2%）
+/// - ② 智能匹配资产     : 2% ~ 10%  （8%）
+/// - ③ 下载安装包       : 10% ~ 88% （78%，主阶段）
+/// - ④ 解压归档         : 88% ~ 96% （8%）
+/// - ⑤ 设置权限+清理    : 96% ~ 100%（4%）
+pub mod stage_progress {
+    pub const FETCHING_VERSION_END: f64 = 0.02;
+    pub const FINDING_ASSET_END: f64 = 0.10;
+    pub const DOWNLOAD_START: f64 = 0.10;
+    pub const DOWNLOAD_END: f64 = 0.88;
+    pub const EXTRACTING_END: f64 = 0.96;
+    pub const FINALIZE_END: f64 = 1.00;
+}
+
 /// 用 curl 下载文件到本地路径（spawn + 实时进度读取）
 ///
 /// 使用 `Command::spawn()` 启动 curl，逐行读取 stderr 中的进度输出，
 /// 实时调用 `progress_callback` 报告下载进度。
 /// 支持断点续传和完整重试机制。
+///
+/// `progress_start`/`progress_end` 用于将 curl 内部 0~1 的下载进度
+/// 映射到全局进度区间的 [progress_start, progress_end]。
 fn curl_download(
     url: &str,
     dest: &Path,
     total_size: u64,
+    progress_start: f64,
+    progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<u64> {
     let start = std::time::Instant::now();
     let dest_str = dest.to_string_lossy().to_string();
+    let progress_range = progress_end - progress_start;
     tracing::info!(target: "LlamaDownloader", url = %url, dest = %dest_str, total_size, "启动 curl 下载进程");
 
     if total_size > 0 {
         if let Some(cb) = progress_callback {
             cb(DownloadProgress {
                 stage: "downloading".to_string(),
-                progress: 0.0,
+                progress: progress_start,
                 downloaded: 0,
                 total: total_size,
                 message: format!("开始下载 ({:.1} MB)...", total_size as f64 / 1048576.0),
@@ -168,7 +195,7 @@ fn curl_download(
             if let Some(cb) = progress_callback {
                 cb(DownloadProgress {
                     stage: "retrying".to_string(),
-                    progress: 0.0,
+                    progress: progress_start,
                     downloaded: 0,
                     total: total_size,
                     message: format!("重试第 {} 次 (等待 {}s)...", attempt, wait_secs),
@@ -178,7 +205,7 @@ fn curl_download(
             std::thread::sleep(std::time::Duration::from_secs(wait_secs.into()));
         }
 
-        let mut cmd = Command::new("curl");
+        let mut cmd = crate::util::process::silent_command("curl");
         // 基础参数
         cmd.args([
             "-L",                          // 跟随重定向
@@ -282,7 +309,8 @@ fn curl_download(
                     };
                     cb(DownloadProgress {
                         stage: "downloading".to_string(),
-                        progress: pct / 100.0,
+                        // 将 curl 的 0~1 进度映射到全局 [progress_start, progress_end]
+                        progress: progress_start + (pct / 100.0) * progress_range,
                         downloaded,
                         total: total_size,
                         message: format!(
@@ -350,7 +378,7 @@ fn curl_download(
             if let Some(cb) = progress_callback {
                 cb(DownloadProgress {
                     stage: "downloading".to_string(),
-                    progress: 1.0,
+                    progress: progress_end,
                     downloaded,
                     total: total_size,
                     message: format!(
@@ -574,7 +602,7 @@ pub fn detect_gpu_backend() -> GpuBackend {
 }
 
 fn detect_nvidia_gpu() -> bool {
-    Command::new("nvidia-smi")
+    silent_command("nvidia-smi")
         .args(["--query-gpu=name", "--format=csv,noheader"])
         .output()
         .map(|o| o.status.success() && !o.stdout.is_empty())
@@ -586,7 +614,7 @@ fn detect_amd_gpu() -> bool {
 
     #[cfg(target_os = "linux")]
     if os == "linux" {
-        if let Ok(output) = Command::new("lspci").arg("-nn").output() {
+        if let Ok(output) = silent_command("lspci").arg("-nn").output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
                 let lower = line.to_lowercase();
@@ -600,7 +628,7 @@ fn detect_amd_gpu() -> bool {
 
     #[cfg(target_os = "windows")]
     if os == "windows" {
-        if let Ok(output) = Command::new("wmic")
+        if let Ok(output) = silent_command("wmic")
             .args(["path", "win32_videocontroller", "get", "name"])
             .output()
         {
@@ -620,7 +648,7 @@ fn detect_amd_gpu() -> bool {
 
 /// 检测 CUDA 版本（从 nvidia-smi 输出）
 fn detect_cuda_version() -> Option<String> {
-    let output = Command::new("nvidia-smi").output().ok()?;
+    let output = silent_command("nvidia-smi").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -744,7 +772,7 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf>> 
                 archive.display(),
                 dest.display()
             );
-            let output = Command::new("powershell")
+            let output = silent_command("powershell")
                 .args(["-Command", &script])
                 .output()
                 .map_err(|e| anyhow::anyhow!("解压失败: {}", e))?;
@@ -812,7 +840,7 @@ fn smart_find_asset<'a>(
     if let Some(cb) = progress_callback {
         cb(progress_simple(
             "finding_asset",
-            0.0,
+            stage_progress::FETCHING_VERSION_END,
             format!("开始匹配资产（共 {} 个候选需要验证）...", asset_count),
         ));
     }
@@ -868,7 +896,7 @@ fn smart_find_asset<'a>(
         if let Some(cb) = progress_callback {
             cb(progress_simple(
                 "finding_asset",
-                0.0,
+                stage_progress::FETCHING_VERSION_END,
                 "精确匹配失败，尝试宽松匹配...".to_string(),
             ));
         }
@@ -904,10 +932,14 @@ fn smart_find_asset<'a>(
         );
 
         // 通知前端：当前验证的候选
+        // 进度区间：[FETCHING_VERSION_END, FINDING_ASSET_END] = [2%, 10%]
+        let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FETCHING_VERSION_END;
+        let verify_progress = stage_progress::FETCHING_VERSION_END
+            + (candidate_index as f64 / total_candidates as f64) * asset_range;
         if let Some(cb) = progress_callback {
             cb(progress_with(
                 "finding_asset",
-                (candidate_index as f64 / total_candidates as f64) * 0.99 + 0.01,
+                verify_progress,
                 candidate_index as u64,
                 total_candidates as u64,
                 format!("验证候选 {}/{}：{}", candidate_index, total_candidates, candidate_name),
@@ -934,16 +966,17 @@ fn smart_find_asset<'a>(
                     "✅ URL 可用，选择此资产"
                 );
                 // 通知前端：验证成功
+                let found_progress = stage_progress::FINDING_ASSET_END;
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",
-                        0.95,
+                        found_progress,
                         candidate_index as u64,
                         total_candidates as u64,
                         format!("✅ 候选 {}/{} 可用，选中：{}", candidate_index, total_candidates, candidate_name),
                         DownloadProgressDetail {
                             step: format!("✅ 选中：{}", candidate_name),
-                            step_progress: 0.95,
+                            step_progress: found_progress,
                             candidate_index,
                             candidate_count: total_candidates,
                             current_candidate: Some(candidate_name.clone()),
@@ -965,7 +998,7 @@ fn smart_find_asset<'a>(
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",
-                        (candidate_index as f64 / total_candidates as f64) * 0.99 + 0.01,
+                        verify_progress,
                         candidate_index as u64,
                         total_candidates as u64,
                         format!("❌ {}/{} 失败（{}），尝试下一个...", candidate_index, total_candidates, e),
@@ -994,13 +1027,13 @@ fn smart_find_asset<'a>(
         if let Some(cb) = progress_callback {
             cb(progress_with(
                 "finding_asset",
-                0.95,
+                stage_progress::FINDING_ASSET_END,
                 0,
                 total_candidates as u64,
                 format!("⚠️ 所有候选验证失败，回退到：{}", asset.name),
                 DownloadProgressDetail {
                     step: format!("⚠️ 回退到：{}", asset.name),
-                    step_progress: 0.95,
+                    step_progress: stage_progress::FINDING_ASSET_END,
                     candidate_index: total_candidates,
                     candidate_count: total_candidates,
                     current_candidate: Some(asset.name.clone()),
@@ -1086,7 +1119,7 @@ pub fn download_and_install(
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
             stage: "finding_asset".to_string(),
-            progress: 0.05,
+            progress: stage_progress::FETCHING_VERSION_END,
             downloaded: 0,
             total: 0,
             message: format!("查找匹配资产 (tag={})...", tag),
@@ -1124,7 +1157,14 @@ pub fn download_and_install(
     let mut download_attempt = 0;
     let downloaded = loop {
         download_attempt += 1;
-        match curl_download(&asset.browser_download_url, &archive_path, asset.size, progress_callback) {
+        match curl_download(
+            &asset.browser_download_url,
+            &archive_path,
+            asset.size,
+            stage_progress::DOWNLOAD_START,
+            stage_progress::DOWNLOAD_END,
+            progress_callback,
+        ) {
             Ok(size) => break size,
             Err(e) => {
                 tracing::warn!(
@@ -1146,7 +1186,7 @@ pub fn download_and_install(
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
             stage: "extracting".to_string(),
-            progress: 0.9,
+            progress: stage_progress::DOWNLOAD_END,
             downloaded,
             total: downloaded,
             message: "解压中...".to_string(),
@@ -1191,10 +1231,38 @@ pub fn download_and_install(
     // 8. 删除归档文件
     let _ = fs::remove_file(&archive_path);
 
+    // 9. 完成（finalize 阶段）
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "finalize".to_string(),
+            progress: stage_progress::EXTRACTING_END,
+            downloaded,
+            total: downloaded,
+            message: "清理临时文件...".to_string(),
+            detail: None,
+        });
+    }
+
     let elapsed = start.elapsed().as_millis() as u64;
     let file_size = fs::metadata(&llama_server_path)?.len();
 
     tracing::info!(target: "LlamaDownloader", path = %llama_server_path.display(), bytes = file_size, elapsed_ms = elapsed, "安装完成");
+
+    // 最终进度 100%
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "complete".to_string(),
+            progress: stage_progress::FINALIZE_END,
+            downloaded: file_size,
+            total: file_size,
+            message: format!(
+                "✅ 安装完成 ({:.1} MB，耗时 {:.1}s)",
+                file_size as f64 / 1048576.0,
+                elapsed as f64 / 1000.0
+            ),
+            detail: None,
+        });
+    }
 
     Ok(DownloadResult {
         success: true,

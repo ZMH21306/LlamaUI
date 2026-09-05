@@ -11,6 +11,7 @@ use super::cmdline::is_llama_related_exe;
 use super::winapi::{get_process_exe_name, is_pid_alive};
 use crate::detect::CancelFlag;
 use crate::log::emit_log;
+use crate::util::process::silent_tokio_command;
 
 /// 并行探测的前 N 个端口上限。剩余端口（>=N）顺序探测。
 ///
@@ -36,11 +37,10 @@ pub async fn is_port_available(port: u16) -> bool {
 #[cfg(windows)]
 pub async fn find_pid_listening_on(port: u16) -> Option<u32> {
     use std::process::Stdio;
-    let output = tokio::process::Command::new("netstat")
+let output = silent_tokio_command("netstat")
         .args(["-ano", "-p", "TCP"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
         .await
         .ok()?;
@@ -99,12 +99,11 @@ fn port_holder_is_killable(pid: Option<u32>) -> bool {
 #[cfg(target_os = "windows")]
 pub async fn kill_pid_with_taskkill(pid: u32) {
     use std::process::Stdio;
-    // 1. 优雅终止
-    let _ = tokio::process::Command::new("taskkill")
+    // 1. 优雅终止（使用静默命令，Windows 下无控制台窗口）
+    let _ = silent_tokio_command("taskkill")
         .args(["/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(0x08000000)
         .output()
         .await;
 }
@@ -113,11 +112,10 @@ pub async fn kill_pid_with_taskkill(pid: u32) {
 #[cfg(target_os = "windows")]
 pub async fn force_kill_pid(pid: u32) {
     use std::process::Stdio;
-    let _ = tokio::process::Command::new("taskkill")
+    let _ = silent_tokio_command("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(0x08000000)
         .output()
         .await;
 }
@@ -126,7 +124,7 @@ pub async fn force_kill_pid(pid: u32) {
 #[cfg(not(target_os = "windows"))]
 pub async fn kill_pid_with_taskkill(pid: u32) {
     use std::process::Stdio;
-    let _ = tokio::process::Command::new("kill")
+    let _ = silent_tokio_command("kill")
         .arg(pid.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -138,7 +136,7 @@ pub async fn kill_pid_with_taskkill(pid: u32) {
 #[cfg(not(target_os = "windows"))]
 pub async fn force_kill_pid(pid: u32) {
     use std::process::Stdio;
-    let _ = tokio::process::Command::new("kill")
+    let _ = silent_tokio_command("kill")
         .args(["-9", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

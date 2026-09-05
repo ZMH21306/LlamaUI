@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use crate::util::process::silent_command;
 
 /// 获取 GitHub Token（优先级：GITHUB_TOKEN/gh token → GH_TOKEN → 无）
 ///
@@ -21,7 +21,7 @@ fn get_github_token() -> Option<String> {
         }
     }
     // 2. gh CLI auth token（用户通过 gh auth login 登录后自动获取）
-    if let Ok(output) = Command::new("gh").args(["auth", "token"]).output() {
+    if let Ok(output) = silent_command("gh").args(["auth", "token"]).output() {
         if output.status.success() {
             let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !token.is_empty() {
@@ -61,7 +61,7 @@ fn curl_get_json(url: &str) -> anyhow::Result<String> {
     }
     args.push(url);
 
-    let output = Command::new("curl")
+    let output = silent_command("curl")
         .args(&args)
         .output()
         .map_err(|e| anyhow::anyhow!("curl 不存在或无法执行: {}", e))?;
