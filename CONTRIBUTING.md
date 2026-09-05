@@ -1,4 +1,4 @@
-# Contributing to LlamaUI
+﻿# Contributing to LlamaUI
 
 Thank you for your interest in contributing! This document covers how to get started.
 
@@ -39,19 +39,73 @@ Thank you for your interest in contributing! This document covers how to get sta
 ```
 src/
 ├── commands/    # Tauri IPC commands (backend)
+│   ├── server_cmd.rs       # Service process control (start/stop/restart/status)
+│   ├── config_cmd.rs       # Config read/write
+│   ├── config_io_cmd.rs    # Config import/export
+│   ├── detect_cmd.rs       # Auto-detection (detect/cancel/check_models_dir)
+│   ├── init_cmd.rs         # Startup initialization
+│   ├── system_cmd.rs       # Misc (open_external_url)
+│   ├── download_cmd.rs     # llama.cpp auto-download
+│   ├── gpu_cmd.rs          # GPU detection & diagnosis
+│   ├── hf_model_cmd.rs     # HuggingFace model store
+│   ├── model_cmd.rs        # Multi-model management
+│   ├── plugin_cmd.rs       # Plugin management
+│   ├── recovery_cmd.rs     # Error diagnosis & auto-fix
+│   ├── remote_cmd.rs       # Remote server management
+│   ├── export_cmd.rs       # Log export
+│   └── update_cmd.rs       # Auto-update check
 ├── server/      # Process management (start/stop/monitor logs)
-├── detect/      # Auto-detection of llama-server & model paths
-├── init/        # Startup initialization
-├── util/        # Shared utilities
-├── config.rs    # Configuration persistence
-├── error.rs     # Unified error types
-├── events.rs    # Event names and payloads
-├── log.rs       # Logging entry point
-└── plugin_framework.rs  # Plugin system (experimental)
+│   ├── cmdline.rs         # Command-line parsing & path validation
+│   ├── job.rs             # Windows Job Object isolation
+│   ├── lifecycle.rs       # Start/stop orchestration
+│   ├── log_channel.rs     # Bounded log channel with backpressure
+│   ├── log_truncate.rs    # Log line truncation
+│   ├── metrics.rs         # Real-time CPU/memory/GPU metrics
+│   ├── mod.rs             # Server module root
+│   ├── port.rs            # Port allocation & conflict resolution
+│   ├── state.rs           # Server state machine
+│   ├── tasks.rs           # Background task orchestration
+│   └── winapi.rs          # Windows VM size query (NTAPI)
+├── detect/      # Auto-detection (4-stage priority chain)
+│   ├── mod.rs
+│   ├── stage1.rs .. stage4.rs  # Detection stages
+│   └── ctx.rs
+├── init/        # Startup initialization (env check → driver check → auto load)
+│   ├── mod.rs
+│   ├── env_check.rs
+│   ├── install_check.rs
+│   └── auto_load.rs
+├── util/        # Shared utilities (path/time/URL/process)
+│   ├── mod.rs
+│   ├── path.rs            # Path normalization, sanitize_filename, is_world_writable
+│   ├── process.rs         # Silent command helper (CREATE_NO_WINDOW)
+│   ├── time.rs            # Time utilities
+│   └── url.rs             # URL scheme whitelist validation
+├── gpu_detect.rs          # Sync GPU detection wrapper
+├── gpu_detection.rs       # Async GPU detection & diagnosis (33KB)
+├── gpu_error_transformer.rs  # GPU error → user-friendly messages
+├── llama_downloader.rs    # llama.cpp auto-download (52KB)
+├── model_management.rs    # Multi-model directory index
+├── plugin_framework.rs    # Plugin system (experimental)
+├── recovery.rs            # Error diagnosis & auto-fix
+├── remote_server.rs       # Remote server management
+├── config.rs              # Configuration persistence
+├── config_io.rs           # Config JSON import/export
+├── error.rs               # Unified error types
+├── error_macros.rs        # Error macros
+├── events.rs              # Event names + payload types
+├── lib.rs                 # Crate root + Tauri Builder
+├── log.rs                 # Logging entry point
+├── log_sanitizer.rs       # Token/secret redaction in logs
+├── main.rs                # Binary entry point (windows_subsystem)
+├── tracing_setup.rs       # Structured logging setup
+└── update_check.rs        # GitHub Releases update check
 dist/            # Frontend (vanilla HTML/CSS/JS, no build step)
-icons/           # Application icons
+icons/           # Application icons (32x32 / 128x128 / 256x256 / .ico)
 capabilities/    # Tauri permission caps
-.github/         # CI/CD workflows
+.github/         # CI/CD workflows + issue templates
+scripts/         # Helper scripts (start.ps1, generate-changelog.ps1)
+test/            # Test fixtures (empty; tests live in src/)
 ```
 
 ## Building from Source

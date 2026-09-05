@@ -4,9 +4,10 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| v0.6.x  | ✅                 |
+| v0.7.x  | ✅ Security fixes & updates |
+| v0.6.x  | ✅ Security fixes only |
 | v0.5.x  | ⚠️ Security fixes only |
-| < 0.5.0 | ❌                 |
+| < 0.5.0 | ❌ Unsupported |
 
 ## Reporting a Vulnerability
 
@@ -28,10 +29,11 @@ We aim to respond within **72 hours** and publish a fix in the next patch releas
 
 ## Current Security Measures
 
-- **RCE Protection**: Command whitelist validates the executable name and file path
+- **RCE Protection**: Command whitelist validates the executable name and file path; P0-1 fix adds `validate_p0_path` (file-name + `is_world_writable_path`) for any path-based pro mode command
 - **Job Object Isolation**: Child processes are killed when the parent exits
 - **URL Scheme Whitelist**: Only `http://` and `https://` allowed for external links
 - **PATH Injection Defense**: Rejects executables from world-writable directories (`tmp/`, `temp/`, `downloads/`)
+- **HF Download Path Traversal Defense** (P0-2): `sanitize_filename()` rejects `..` segments, absolute paths, Windows drive letters, NUL/control chars, device names (`CON/NUL/PRN/AUX/LPT*/COM*`), and multi-segment paths
 - **Memory Safety**: Log buffer capped at 5000 lines / 16KB per line; bounded channel with backpressure
 
 ## Dependencies

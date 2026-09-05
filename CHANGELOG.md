@@ -5,13 +5,25 @@
 ## [0.7.0] - 2026-08-27
 
 ### 改进
-- 清理仓库中的开发垃圾与调试产物，统一 .gitignore 规范
-- 移除未使用的 `metrics_enhanced` 模块及 `model_management` 死代码
+- 清理仓库中的开发垃圾与调试产物，统一 `.gitignore` 规范；删除 Blender MCP 工具脚本（`test_blender_mcp.js` / `test_get_scene.js` / `create_camera_animation.js`）与 `build.log` 等无关文件
+- 新增 P0-1 安全修复：pro 模式可执行文件路径白名单加固（`validate_pro_program` 调用 `validate_p0_path` 二次校验文件名 + 世界可写目录拒绝）
+- 新增 P0-2 安全修复：HF 模型下载 `filename` 接入 `sanitize_filename()`，拒绝 `../`、`..\`、绝对路径、Windows 设备名等路径遍历攻击
+- 新增 P0-3 安全修复：`script-src` 移除 `unsafe-inline`（项目无内联 `<script>` 块）；保留 `style-src 'unsafe-inline'`（25 处 inline style 属性）
+- 新增 `src/util/path.rs`：`sanitize_filename()` + `FilenameError` 枚举 + 完整单元测试（11 项）
+- 移除已弃用的 `metrics_enhanced` 模块，`model_management` 模块替代
 - 优化 `remote_server.validate_url` 判定逻辑，避免 HTTP 公网地址被误判为本地地址
 
 ### 修复
 - 修复 `commands/mod.rs` 测试模块缺失 `CancelFlag` 导入导致的 E0425 编译错误
 - 解决 `gpu_cmd` / `llama_downloader` / `update_check` 等模块的 clippy 警告（unwrap/expect、冗余 match、平台依赖测试等）
+
+### 安全修复（P0-1）
+- **专业模式命令白名单路径校验**：修复前仅校验可执行文件名是否在白名单，攻击者可在白名单目录外放一个 `llama-server.exe`（如 `C:\evil\llama-server.exe`）骗过后端，spawn 时执行恶意文件。修复后带路径形式必须通过 `validate_p0_path`（文件名严格匹配 + `is_world_writable_path` 拒绝 `/tmp`、`/temp`、`Downloads` 等目录）
+
+### 安全修复（P0-2）
+- **HF 模型下载路径遍历防护**：修复前 `filename.split('/').last()` 仅剥掉 `/` 分隔的目录前缀，对 `..\evil.exe`（Windows 反斜杠）完全无效。修复后 `sanitize_filename()` 拒绝 `..` 段、绝对路径、Windows 盘符、NUL、控制字符、CON/NUL/PRN/AUX/LPT*/COM* 等设备名、多段路径
+
+## [0.6.0] - 2026-08-14
 
 ### 依赖与安全
 - 升级 `time` 至 0.3.53（修复 RUSTSEC-2026-0009 栈溢出 DoS）

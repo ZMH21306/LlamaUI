@@ -1,4 +1,4 @@
-# LlamaUI
+﻿# LlamaUI
 
 > LLM Desktop Console for managing llama-server
 

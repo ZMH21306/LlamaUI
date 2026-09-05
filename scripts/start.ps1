@@ -6,11 +6,12 @@ param(
 )
 
 switch ($Action) {
-    "start" { cargo run }
-    "dev" { cargo tauri dev }
-    "build" { .\build\build.ps1 }
-    "test" { cargo test }
-    "lint" { cargo clippy }
+    "start"  { cargo run }
+    "dev"    { cargo tauri dev }
+    "build"  { cargo build --release }
+    "test"   { cargo test --lib }
+    "lint"   { cargo clippy --all-targets --release }
     "release" { Write-Host "触发 CI 发布流程：推送 v* 标签" }
+    "audit"  { cargo audit || Write-Host "⚠️ cargo audit 未安装或发现漏洞" }
     default { Write-Host "未知操作: $Action" }
 }
