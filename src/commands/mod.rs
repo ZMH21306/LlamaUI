@@ -38,6 +38,7 @@ pub mod detect_cmd;
 pub mod download_cmd;
 pub mod export_cmd;
 pub mod gpu_cmd;
+pub mod hf_model_cmd;
 pub mod init_cmd;
 pub mod model_cmd;
 pub mod plugin_cmd;

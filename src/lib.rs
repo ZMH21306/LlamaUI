@@ -61,6 +61,9 @@ use commands::AppState;
 use tauri::Emitter;
 use tauri::Manager;
 
+use commands::hf_model_cmd::HfState;
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 1. 初始化 tracing 日志系统（控制台彩色 + 文件滚动 + panic hook）
@@ -79,6 +82,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
+        .manage(HfState::new())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
@@ -137,6 +141,15 @@ pub fn run() {
             commands::model_cmd::refresh_models,
             commands::model_cmd::select_model,
             commands::model_cmd::get_selected_model,
+            // HuggingFace 模型商城
+            commands::hf_model_cmd::search_hf_models,
+            commands::hf_model_cmd::get_hf_model_files,
+            commands::hf_model_cmd::download_hf_model,
+            commands::hf_model_cmd::set_hf_token,
+            commands::hf_model_cmd::get_hf_token,
+            commands::hf_model_cmd::set_hf_download_dir,
+            commands::hf_model_cmd::get_hf_download_dir,
+            commands::hf_model_cmd::open_hf_store_window,
             // 远程服务器管理
             commands::remote_cmd::add_remote_server,
             commands::remote_cmd::remove_remote_server,

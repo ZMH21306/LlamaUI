@@ -10,6 +10,7 @@ use tokio::process::Command;
 
 use crate::config::AppConfig;
 use crate::log::emit_log_to;
+use crate::util::process::silent_tokio_command as silent_command;
 
 use super::STEP_INSTALL;
 
@@ -124,7 +125,7 @@ async fn check_driver(app: &AppHandle) {
         // 通过 nvidia-smi 探测 NVIDIA 驱动
         match tokio::time::timeout(
             PROBE_TIMEOUT,
-            Command::new("nvidia-smi").output(),
+            silent_command("nvidia-smi").output(),
         )
         .await
         {
@@ -168,7 +169,7 @@ async fn check_driver(app: &AppHandle) {
     {
         let probe = tokio::time::timeout(
             PROBE_TIMEOUT,
-            Command::new("nvidia-smi").output(),
+            silent_command("nvidia-smi").output(),
         )
         .await;
         let has_nvidia = matches!(probe, Ok(Ok(ref o)) if o.status.success());
