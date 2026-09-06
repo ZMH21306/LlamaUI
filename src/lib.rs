@@ -85,14 +85,21 @@ pub fn run() {
         .manage(HfState::new())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let state = window.state::<AppState>();
-                let status = state.server.status();
-                if status == crate::events::ServerStatus::Running
-                    || status == crate::events::ServerStatus::Starting
-                {
-                    // 拦截关闭请求，提示用户先停止服务
-                    api.prevent_close();
-                    let _ = window.emit("close-requested", true);
+                let label = window.label();
+                if label == "main" {
+                    // 关闭 hf-store 窗口（如果存在），避免其成为孤儿窗口
+                    if let Some(hf_window) = window.app_handle().get_webview_window("hf-store") {
+                        let _ = hf_window.close();
+                    }
+                    let state = window.state::<AppState>();
+                    let status = state.server.status();
+                    if status == crate::events::ServerStatus::Running
+                        || status == crate::events::ServerStatus::Starting
+                    {
+                        // 拦截关闭请求，提示用户先停止服务
+                        api.prevent_close();
+                        let _ = window.emit("close-requested", true);
+                    }
                 }
             }
         })
@@ -141,7 +148,7 @@ pub fn run() {
             commands::model_cmd::refresh_models,
             commands::model_cmd::select_model,
             commands::model_cmd::get_selected_model,
-            // HuggingFace 模型商城
+            // HuggingFace 模型商店
             commands::hf_model_cmd::search_hf_models,
             commands::hf_model_cmd::get_hf_model_files,
             commands::hf_model_cmd::download_hf_model,
