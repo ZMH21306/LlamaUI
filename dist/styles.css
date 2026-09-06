@@ -1,14 +1,14 @@
 /* =========================================================
-   LlamaUI · 大模型控制台
-   设计系统：深空紫主题 / 8pt 间距 / 12px 圆角 / 三栏布局
-   设计理念：霓虹青 + 电光紫 — 科技感、专业、现代
+   LlamaUI 路 澶фā鍨嬫帶鍒跺彴
+   璁捐绯荤粺锛氭繁绌虹传涓婚 / 8pt 闂磋窛 / 12px 鍦嗚 / 涓夋爮甯冨眬
+   璁捐鐞嗗康锛氶湏铏归潚 + 鐢靛厜绱?鈥?绉戞妧鎰熴€佷笓涓氥€佺幇浠?
    ========================================================= */
 
-/* ---- 设计 token ---- */
+/* ---- 璁捐 token ---- */
 :root {
   /* =========================================================
-     深色主题 - 午夜空间 (Midnight Space)
-     核心理念：深邃层次、温暖底色、优雅高光
+     娣辫壊涓婚 - 鍗堝绌洪棿 (Midnight Space)
+     鏍稿績鐞嗗康锛氭繁閭冨眰娆°€佹俯鏆栧簳鑹层€佷紭闆呴珮鍏?
      ========================================================= */
   --bg-0: #0b0d11;
   --bg-1: #11141c;
@@ -71,13 +71,13 @@
 }
 
 /* =========================================================
-   亮色主题
-   通过 body.light-theme 类切换所有颜色变量
+   浜壊涓婚
+   閫氳繃 body.light-theme 绫诲垏鎹㈡墍鏈夐鑹插彉閲?
    ========================================================= */
 
 /* =========================================================
-   亮色主题 - 晨光暖白 (Morning Light)
-   核心理念：干净暖白、清晰层级、优雅阴影
+   浜壊涓婚 - 鏅ㄥ厜鏆栫櫧 (Morning Light)
+   鏍稿績鐞嗗康锛氬共鍑€鏆栫櫧銆佹竻鏅板眰绾с€佷紭闆呴槾褰?
    ========================================================= */
 body.light-theme {
   --bg-0: #f5f6f8;
@@ -113,7 +113,7 @@ body.light-theme {
   --shadow-glow: 0 0 20px rgba(0, 150, 168, 0.2);
 }
 
-/* ---- 基础 ---- */
+/* ---- 鍩虹 ---- */
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -129,7 +129,7 @@ body {
   overflow: hidden;
   transition: background var(--dur-slow) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur-slow) var(--ease);
 }
-/* 主题切换全局过渡：确保子元素在主题切换时也有平滑过渡 */
+/* 涓婚鍒囨崲鍏ㄥ眬杩囨浮锛氱‘淇濆瓙鍏冪礌鍦ㄤ富棰樺垏鎹㈡椂涔熸湁骞虫粦杩囨浮 */
 body.theme-transitioning,
 body.theme-transitioning *,
 body.theme-transitioning *::before,
@@ -153,7 +153,7 @@ code {
 }
 ::selection { background: var(--accent-soft); color: var(--text-1); }
 
-/* 自定义滚动条 */
+/* 鑷畾涔夋粴鍔ㄦ潯 */
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
@@ -163,9 +163,9 @@ code {
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-/* ---- 应用骨架 ---- */
+/* ---- 搴旂敤楠ㄦ灦 ---- */
 
-/* ---- WebView 适配 ---- */
+/* ---- WebView 閫傞厤 ---- */
 .webview {
   width: 100%;
   height: 100%;
@@ -191,9 +191,9 @@ code {
     "topbar topbar topbar topbar topbar"
     "left   sep-l  main   sep-r  right";
   background: var(--bg-0);
-  /* 窗口过小时允许整体横向滚动，避免中间 webview 区域被压缩到 0 */
+  /* 绐楀彛杩囧皬鏃跺厑璁告暣浣撴í鍚戞粴鍔紝閬垮厤涓棿 webview 鍖哄煙琚帇缂╁埌 0 */
   min-width: calc(var(--pane-min-w, 240px) * 2 + 320px + 8px + 16px);
-  overflow-x: auto; /* 允许横向滚动 */
+  overflow-x: auto; /* 鍏佽妯悜婊氬姩 */
   overflow-y: hidden;
 }
 .topbar { grid-area: topbar; }
@@ -205,7 +205,7 @@ code {
 .pane-left, .pane-right, .pane-main { min-height: 0; }
 .pane-left, .pane-right { min-width: var(--pane-min-w); transition: width var(--dur) var(--ease); }
 
-/* ---- 顶栏 ---- */
+/* ---- 椤舵爮 ---- */
 .topbar {
   display: flex;
   align-items: center;
@@ -243,7 +243,7 @@ code {
 
 .topbar-actions { display: flex; align-items: center; gap: var(--s-3); }
 
-/* ---- 状态徽章 ---- */
+/* ---- 鐘舵€佸窘绔?---- */
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -310,7 +310,7 @@ code {
   50% { opacity: 0.45; }
 }
 
-/* ---- 按钮 ---- */
+/* ---- 鎸夐挳 ---- */
 .btn-primary, .btn-secondary, .btn-danger {
   display: inline-flex;
   align-items: center;
@@ -366,7 +366,7 @@ code {
 
 .btn-small { height: 26px; padding: 0 10px; font-size: var(--fs-xs); }
 
-/* ---- 面板 / 卡片 ---- */
+/* ---- 闈㈡澘 / 鍗＄墖 ---- */
 .pane {
   display: flex;
   flex-direction: column;
@@ -414,7 +414,7 @@ code {
 }
 .card-body { padding: var(--s-4); display: flex; flex-direction: column; gap: var(--s-4); }
 
-/* ---- 表单 ---- */
+/* ---- 琛ㄥ崟 ---- */
 .field { display: flex; flex-direction: column; gap: var(--s-2); }
 .field > label {
   font-size: var(--fs-sm);
@@ -483,7 +483,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .input-inline input:focus { outline: none; }
 .input-suffix { font-size: var(--fs-sm); color: var(--text-3); padding-right: 4px; min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
 
-/* row：横排 label + input + suffix（普通模式服务端口用） */
+/* row锛氭í鎺?label + input + suffix锛堟櫘閫氭ā寮忔湇鍔＄鍙ｇ敤锛?*/
 .row {
   display: flex;
   align-items: center;
@@ -509,7 +509,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .row-suffix { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .row-suffix strong { color: var(--text-1); font-weight: 600; }
 
-/* 专业模式：变量列表 */
+/* 涓撲笟妯″紡锛氬彉閲忓垪琛?*/
 .var-list {
   border: 1px solid var(--border-1);
   border-radius: var(--radius-md);
@@ -528,14 +528,14 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 }
 .var-list summary::-webkit-details-marker { display: none; }
 .var-list summary::before {
-  content: '▸ ';
+  content: '鈻?';
   color: var(--text-3);
   font-size: 10px;
   display: inline-block;
   margin-right: 4px;
   transition: transform var(--dur) var(--ease);
 }
-.var-list[open] > summary::before { content: '▾ '; }
+.var-list[open] > summary::before { content: '鈻?'; }
 .var-list summary:hover { color: var(--text-1); }
 .var-grid {
   display: grid;
@@ -626,18 +626,18 @@ input[type="checkbox"]:checked::after {
   user-select: none;
 }
 
-/* ---- 模式 tab ---- */
+/* ---- 妯″紡 tab ---- */
 .mode-tabs {
   display: flex;
-  flex-wrap: nowrap;               /* 防止换行 */
-  overflow-x: auto;                /* 超出时滚动 */
+  flex-wrap: nowrap;               /* 闃叉鎹㈣ */
+  overflow-x: auto;                /* 瓒呭嚭鏃舵粴鍔?*/
   padding: var(--s-2) var(--s-2) 0;
   gap: 2px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .mode-tab {
   flex: 1 1 auto;
-  min-width: 0;                     /* 允许更小宽度 */
+  min-width: 0;                     /* 鍏佽鏇村皬瀹藉害 */
   height: 32px;
   background: transparent;
   border: none;
@@ -646,8 +646,8 @@ input[type="checkbox"]:checked::after {
   font-weight: 500;
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   position: relative;
-  white-space: nowrap;              /* 防止文字换行 */
-  text-align: center;               /* 居中 */
+  white-space: nowrap;              /* 闃叉鏂囧瓧鎹㈣ */
+  text-align: center;               /* 灞呬腑 */
   transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 .mode-tab:hover { color: var(--text-1); }
@@ -662,10 +662,10 @@ input[type="checkbox"]:checked::after {
 }
 .mode-view[hidden] { display: none; }
 
-/* ---- 工具条 ---- */
+/* ---- 宸ュ叿鏉?---- */
 .toolbar { display: flex; gap: var(--s-2); }
 
-/* ---- 命令预览 ---- */
+/* ---- 鍛戒护棰勮 ---- */
 .cmd-preview {
   font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   font-size: var(--fs-xs);
@@ -681,7 +681,7 @@ input[type="checkbox"]:checked::after {
   line-height: 1.5;
 }
 
-/* ---- 高级模式手风琴 ---- */
+/* ---- 楂樼骇妯″紡鎵嬮鐞?---- */
 .accordion { display: flex; flex-direction: column; gap: 1px; }
 .acc-group {
   background: var(--bg-1);
@@ -764,7 +764,7 @@ input[type="checkbox"]:checked::after {
 .acc-field select { padding-right: 24px; cursor: pointer; }
 .acc-field .checkbox-label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); }
 
-/* ---- 分隔条 ---- */
+/* ---- 鍒嗛殧鏉?---- */
 .splitter {
   background: transparent;
   cursor: col-resize;
@@ -779,7 +779,7 @@ input[type="checkbox"]:checked::after {
 }
 .splitter:active { background: var(--accent); }
 
-/* ---- 中间：WebView ---- */
+/* ---- 涓棿锛歐ebView ---- */
 .pane-main {
   background: var(--bg-0);
   position: relative;
@@ -803,17 +803,17 @@ input[type="checkbox"]:checked::after {
   width: 100%;
   height: 100%;
   border: none;
-  /* 使用主题变量代替硬编码 white，避免切到亮色时 iframe 仍显示暗色背景漏白 */
+  /* 浣跨敤涓婚鍙橀噺浠ｆ浛纭紪鐮?white锛岄伩鍏嶅垏鍒颁寒鑹叉椂 iframe 浠嶆樉绀烘殫鑹茶儗鏅紡鐧?*/
   background: var(--bg-1);
   color-scheme: light dark;
-  /* 仅对 filter 做过渡（GPU 合成层），避免 transition: all */
+  /* 浠呭 filter 鍋氳繃娓★紙GPU 鍚堟垚灞傦級锛岄伩鍏?transition: all */
   transition: filter var(--dur) var(--ease);
 }
 .webview-iframe.match-dark {
-  /* 暗色模式下整体反相：让第三方 llama.cpp WebUI 视觉上与软件一致。
-   * hue-rotate(180deg) 用来修正反相后的色相偏移（蓝→橙黄→蓝）。
-   * 注意：此规则会把 iframe 内所有内容（含图标、图片）一起反相。
-   * 由于 llama.cpp WebUI 几乎纯文字/单色，实际影响可接受。 */
+  /* 鏆楄壊妯″紡涓嬫暣浣撳弽鐩革細璁╃涓夋柟 llama.cpp WebUI 瑙嗚涓婁笌杞欢涓€鑷淬€?
+   * hue-rotate(180deg) 鐢ㄦ潵淇鍙嶇浉鍚庣殑鑹茬浉鍋忕Щ锛堣摑鈫掓榛勨啋钃濓級銆?
+   * 娉ㄦ剰锛氭瑙勫垯浼氭妸 iframe 鍐呮墍鏈夊唴瀹癸紙鍚浘鏍囥€佸浘鐗囷級涓€璧峰弽鐩搞€?
+   * 鐢变簬 llama.cpp WebUI 鍑犱箮绾枃瀛?鍗曡壊锛屽疄闄呭奖鍝嶅彲鎺ュ彈銆?*/
   filter: invert(1) hue-rotate(180deg);
 }
 .webview-placeholder {
@@ -880,7 +880,7 @@ input[type="checkbox"]:checked::after {
 .placeholder-card p { font-size: var(--fs-sm); color: var(--text-2); }
 .placeholder-card .hint { margin-top: var(--s-2); }
 
-/* ---- 监控 ---- */
+/* ---- 鐩戞帶 ---- */
 .metric-row { display: flex; flex-direction: column; gap: 5px; }
 .metric-head {
   display: flex;
@@ -938,7 +938,7 @@ input[type="checkbox"]:checked::after {
   border-radius: 3px;
 }
 
-/* ---- 日志 ---- */
+/* ---- 鏃ュ織 ---- */
 .logs-actions { display: flex; align-items: center; gap: var(--s-3); }
 .logs {
   flex: 1 1 auto;
@@ -963,7 +963,7 @@ input[type="checkbox"]:checked::after {
 .log-line.stream-system.is-warning .log-text { color: var(--warning); }
 .log-line.stream-system.is-success .log-text { color: var(--success); }
 
-/* 日志分组（可折叠） */
+/* 鏃ュ織鍒嗙粍锛堝彲鎶樺彔锛?*/
 .log-group { border-bottom: 1px dashed var(--border); }
 .log-group:last-child { border-bottom: none; }
 .log-group-header {
@@ -998,10 +998,10 @@ input[type="checkbox"]:checked::after {
 .log-group-content { padding: 2px 0 6px 18px; }
 .log-group.collapsed .log-group-content { display: none; }
 
-/* ---- 浮动通知 ---- */
-/* P-fix-v7: 容器必须用 width 而非 max-width。
-   position:fixed + display:flex + align-items:stretch + 子项 width:100%
-   会形成"容器宽 = 子项宽 = 子项 min-content"的循环依赖，导致容器塌缩。 */
+/* ---- 娴姩閫氱煡 ---- */
+/* P-fix-v7: 瀹瑰櫒蹇呴』鐢?width 鑰岄潪 max-width銆?
+   position:fixed + display:flex + align-items:stretch + 瀛愰」 width:100%
+   浼氬舰鎴?瀹瑰櫒瀹?= 瀛愰」瀹?= 瀛愰」 min-content"鐨勫惊鐜緷璧栵紝瀵艰嚧瀹瑰櫒濉岀缉銆?*/
 .toast-container {
   position: fixed;
   top: 16px;
@@ -1074,54 +1074,102 @@ input[type="checkbox"]:checked::after {
 }
 .toast-close:hover { color: var(--text-1); background: rgba(255, 255, 255, 0.06); }
 
-/* ---- 扫描进度 Toast（替代内联进度条）---- */
-/* P-fix-v8: 布局规则必须放在独立 .with-progress 类上，不能用 .scanning 承载。
-   原因：finalizeInlineScan 会移除 .scanning 切换到 .success/.error/.warning，
-   若布局依赖 .scanning，则完成后回退到 base .toast 的横向 flex，
-   进度条会与 .toast-row 并列显示。修复：布局放 .with-progress（永不移除）。 */
-/* 容器：列布局 + 最小宽度（确保长路径有足够空间） */
+/* ---- 鎵弿杩涘害 Toast锛堟浛浠ｅ唴鑱旇繘搴︽潯锛?--- */
+/* P-fix-v8: 甯冨眬瑙勫垯蹇呴』鏀惧湪鐙珛 .with-progress 绫讳笂锛屼笉鑳界敤 .scanning 鎵胯浇銆?
+   鍘熷洜锛歠inalizeInlineScan 浼氱Щ闄?.scanning 鍒囨崲鍒?.success/.error/.warning锛?
+   鑻ュ竷灞€渚濊禆 .scanning锛屽垯瀹屾垚鍚庡洖閫€鍒?base .toast 鐨勬í鍚?flex锛?
+   杩涘害鏉′細涓?.toast-row 骞跺垪鏄剧ず銆備慨澶嶏細甯冨眬鏀?.with-progress锛堟案涓嶇Щ闄わ級銆?*/
+/* 瀹瑰櫒锛氬垪甯冨眬 + 鏈€灏忓搴︼紙纭繚闀胯矾寰勬湁瓒冲绌洪棿锛?*/
 /* ============================================================
-   HuggingFace 模型商城窗口样式
+   HuggingFace 妯″瀷鍟嗗煄绐楀彛鏍峰紡
    ============================================================ */
 html.hf-store, body.hf-store { height: 100%; margin: 0; }
 .hf-store-app { display: flex; flex-direction: column; height: 100%; overflow: hidden; font-family: var(--font-ui, system-ui, -apple-system, sans-serif); font-size: var(--fs-sm, 13px); background: var(--bg-1); color: var(--text-1); }
 .hf-store-header { padding: 14px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.hf-store-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.hf-store-title-row h3 { margin: 0; font-size: var(--fs-lg); }
-.hf-search-row { padding: 8px 18px 0; flex-shrink: 0; }
+.hf-store-title-row { display: flex; align-items: center; gap: 12px; }
+.hf-store-title-row h3 { margin: 0; font-size: var(--fs-lg); flex-shrink: 0; }
+.hf-store-title-row .hf-search-box { flex: 1; margin-left: 12px; }
 .hf-search-box { display: flex; align-items: center; gap: 8px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px; }
 .hf-search-box:focus-within { border-color: var(--accent); }
 .hf-search-icon { color: var(--text-3); flex-shrink: 0; }
-.hf-search-input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-1); font-size: 13px; }
+.hf-search-input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-1); font-size: 13px; min-width: 120px; }
 .hf-search-input::placeholder { color: var(--text-3); }
-.hf-settings-row { display: flex; flex-direction: column; gap: 5px; padding: 8px 18px 0; flex-shrink: 0; }
-.hf-setting-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
-.hf-setting-item label { min-width: 52px; }
 .hf-store-body { display: flex; flex-direction: column; flex: 1; overflow: hidden; min-height: 0; padding: 10px 18px; gap: 8px; }
-.hf-scroll-area { display: flex; flex: 1; gap: 12px; overflow: hidden; min-height: 0; }
-.hf-results-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-3); }
-.hf-model-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; transition: all var(--dur-fast); cursor: default; }
+/* Floating download panel created dynamically by JS */
+/* ---- Floating Action Button ---- */
+#hfDlFab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent, #6c8ef5);
+  color: white;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  z-index: 999;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+#hfDlFab:hover { transform: scale(1.1); box-shadow: 0 6px 20px rgba(0,0,0,0.3); }
+#hfDlFab:active { transform: scale(0.95); }
+#hfDlBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: #f44336;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 2px solid var(--bg-1, #fff);
+  box-sizing: border-box;
+  pointer-events: none;
+  line-height: 1;
+}
+.hf-scroll-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; position: relative; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-3); }
+.hf-results-list { display: flex; flex-direction: column; gap: 8px; }
+.hf-model-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; transition: all var(--dur-fast); cursor: pointer; }
+.hf-model-card:not([disabled]) { cursor: pointer; }
+.hf-model-card[disabled] { opacity: 0.5; cursor: not-allowed; }
 .hf-model-card:hover { border-color: var(--accent); box-shadow: var(--shadow-glow, 0 0 8px rgba(99,179,237,0.15)); }
+.hf-model-provider { font-size: 11px; color: var(--text-3); line-height: 1.2; }
 .hf-model-id { font-weight: 600; font-size: 13px; color: var(--text-1); word-break: break-all; }
 .hf-model-stats { display: flex; gap: 10px; font-size: 11px; color: var(--text-3); }
 .hf-model-desc { font-size: 11px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hf-model-tags { display: flex; gap: 4px; flex-wrap: wrap; }
 .hf-model-tag { padding: 2px 7px; background: var(--bg-3); border-radius: 8px; font-size: 10px; color: var(--text-2); }
-.hf-model-gguf-info { font-size: 11px; color: var(--success, #4caf50); margin-top: 2px; }
 .hf-model-download-btn { align-self: flex-start; margin-top: 4px; padding: 5px 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--r-sm); color: var(--accent); cursor: pointer; font-size: 12px; transition: all var(--dur-fast); }
 .hf-model-download-btn:hover { background: var(--accent); color: var(--text-on-accent, #fff); }
 .hf-model-download-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.hf-model-card-header { display: flex; flex-direction: column; gap: 3px; }
+.hf-model-summary { display: flex; flex-direction: column; gap: 6px; }
+.hf-model-files { margin-top: 6px; padding: 8px 4px; background: var(--bg-3); border-radius: var(--r-sm); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.hf-file-dl-btn { padding: 3px 10px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--r-sm); color: var(--accent); cursor: pointer; font-size: 11px; transition: all var(--dur-fast); }
+.hf-file-dl-btn:hover { background: var(--accent); color: var(--text-on-accent, #fff); }
 .hf-empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; flex: 1; color: var(--text-3); font-size: 13px; padding: 40px 20px; text-align: center; }
-.hf-loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; flex: 1; color: var(--text-2); padding: 40px; }
-.spinner { width: 28px; height: 28px; border: 2.5px solid var(--bg-3); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+.hf-loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; flex: 1; color: var(--text-2); padding: 40px; }
+.hf-loading-state[hidden] { display: none; }
+.spinner { width: 36px; height: 36px; border: 3px solid var(--bg-3); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; position: relative; }
+.spinner::after { content: ''; position: absolute; top: 4px; left: 4px; right: 4px; bottom: 4px; border: 2px solid transparent; border-top-color: var(--accent-purple, #c084fc); border-radius: 50%; animation: spin 0.5s linear infinite reverse; }
+.hf-loading-state p { font-size: 13px; color: var(--text-2); animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @keyframes spin { to { transform: rotate(360deg); } }
-.hf-detail-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-.hf-detail-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.hf-detail-body { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; flex: 1; min-height: 0; }
 .hf-file-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-2); border-radius: var(--r-sm); border: 1px solid var(--border); gap: 10px; }
 .hf-file-name { font-size: 12px; color: var(--text-1); word-break: break-all; }
 .hf-file-size { font-size: 11px; color: var(--text-3); margin-top: 2px; }
-.hf-downloads-panel { border-top: 1px solid var(--border); padding-top: 8px; max-height: 180px; overflow-y: auto; flex-shrink: 0; }
+/* Floating download panel created dynamically by JS */
 .hf-downloads-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text-1); }
 .hf-downloads-count { background: var(--accent-soft); color: var(--accent); padding: 1px 7px; border-radius: 10px; font-size: 10px; }
 .hf-downloads-list { display: flex; flex-direction: column; gap: 4px; }
@@ -1143,13 +1191,13 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
 .toast.info { border-left-color: var(--info, #2196f3); }
 /* === HF STORE === */ .toast.with-progress {
   display: flex;
-  flex-direction: column;   /* 文字行 + 进度条纵向叠放 */
-  width: 100%;              /* 强制占满容器宽度（align-items:stretch 在某些场景失效的兜底） */
+  flex-direction: column;   /* 鏂囧瓧琛?+ 杩涘害鏉＄旱鍚戝彔鏀?*/
+  width: 100%;              /* 寮哄埗鍗犳弧瀹瑰櫒瀹藉害锛坅lign-items:stretch 鍦ㄦ煇浜涘満鏅け鏁堢殑鍏滃簳锛?*/
   min-width: 320px;
   max-width: 640px;
   box-sizing: border-box;
 }
-/* 文字行：与原始 toast 水平居中一致 */
+/* 鏂囧瓧琛岋細涓庡師濮?toast 姘村钩灞呬腑涓€鑷?*/
 .toast.with-progress .toast-row {
   display: flex;
   align-items: center;
@@ -1157,7 +1205,7 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   width: 100%;
   min-width: 0;
 }
-/* 扫描中：边框色 + spinner（布局由 .with-progress 负责） */
+/* 鎵弿涓細杈规鑹?+ spinner锛堝竷灞€鐢?.with-progress 璐熻矗锛?*/
 .toast.scanning {
   border-left-color: var(--accent);
 }
@@ -1180,7 +1228,7 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   background: var(--bg-3);
   border-radius: 2px;
   overflow: hidden;
-  margin-top: 8px;          /* 与文字行间距 */
+  margin-top: 8px;          /* 涓庢枃瀛楄闂磋窛 */
 }
 .toast-progress-fill {
   height: 100%;
@@ -1198,7 +1246,7 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   to { transform: rotate(360deg); }
 }
 
-/* ---- 确认弹窗（Modal） ---- */
+/* ---- 纭寮圭獥锛圡odal锛?---- */
 .modal {
   position: fixed;
   inset: 0;
@@ -1212,7 +1260,7 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  /* 移除 backdrop-filter 以降低 WebView2 渲染成本（项目记忆：发行前优化） */
+  /* 绉婚櫎 backdrop-filter 浠ラ檷浣?WebView2 娓叉煋鎴愭湰锛堥」鐩蹇嗭細鍙戣鍓嶄紭鍖栵級 */
   animation: modal-fade 0.16s var(--ease);
 }
 .modal-dialog {
@@ -1253,7 +1301,7 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
 .modal-actions .btn-danger {
   height: 34px;
   padding: 0 18px;
-  border-radius: 999px; /* 按钮完全圆角（胶囊形） */
+  border-radius: 999px; /* 鎸夐挳瀹屽叏鍦嗚锛堣兌鍥婂舰锛?*/
   font-weight: 500;
   letter-spacing: 0.3px;
 }
@@ -1264,9 +1312,9 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
 }
 
 /* =========================================================
-   内联扫描状态条（llama-server / 模型目录 自动检测）
-   设计：贴在对应输入框下方，不覆盖其他 UI；扫描中显示进度条与阶段；
-        成功后 1s 自动淡出；失败保持显示
+   鍐呰仈鎵弿鐘舵€佹潯锛坙lama-server / 妯″瀷鐩綍 鑷姩妫€娴嬶級
+   璁捐锛氳创鍦ㄥ搴旇緭鍏ユ涓嬫柟锛屼笉瑕嗙洊鍏朵粬 UI锛涙壂鎻忎腑鏄剧ず杩涘害鏉′笌闃舵锛?
+        鎴愬姛鍚?1s 鑷姩娣″嚭锛涘け璐ヤ繚鎸佹樉绀?
    ========================================================= */
 .inline-scan {
   margin-top: 8px;
@@ -1330,21 +1378,21 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   font-size: 10px;
 }
 .inline-scan.scanning .inline-scan-icon::before {
-  content: "◐";
+  content: "鈼?;
 }
 .inline-scan.success .inline-scan-icon {
   background: var(--success);
   color: var(--text-on-accent);
 }
 .inline-scan.success .inline-scan-icon::before {
-  content: "✓";
+  content: "鉁?;
 }
 .inline-scan.failure .inline-scan-icon {
   background: var(--danger);
   color: var(--text-on-accent);
 }
 .inline-scan.failure .inline-scan-icon::before {
-  content: "✕";
+  content: "鉁?;
 }
 .inline-scan.cancelled .inline-scan-icon {
   background: var(--warning);
@@ -1378,15 +1426,15 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   width: 0%;
   background: var(--accent);
   border-radius: 2px;
-  /* 阶段切换的丝滑过渡：Material Design 缓动曲线，600ms */
+  /* 闃舵鍒囨崲鐨勪笣婊戣繃娓★細Material Design 缂撳姩鏇茬嚎锛?00ms */
   transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s ease;
   will-change: width;
 }
-/* 成功时由 JS 设置 1s 长过渡并推到 100%，不在此处覆盖 */
+/* 鎴愬姛鏃剁敱 JS 璁剧疆 1s 闀胯繃娓″苟鎺ㄥ埌 100%锛屼笉鍦ㄦ澶勮鐩?*/
 .inline-scan.success .inline-scan-bar-fill {
   background: var(--success);
 }
-/* 失败/取消：停留在最后阶段位置（让用户看到"卡在第几阶段"），改色提示 */
+/* 澶辫触/鍙栨秷锛氬仠鐣欏湪鏈€鍚庨樁娈典綅缃紙璁╃敤鎴风湅鍒?鍗″湪绗嚑闃舵"锛夛紝鏀硅壊鎻愮ず */
 .inline-scan.failure .inline-scan-bar-fill {
   background: var(--danger);
 }
@@ -1398,13 +1446,13 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   to { transform: rotate(360deg); }
 }
 
-/* ---- 焦点无障碍 ---- */
+/* ---- 鐒︾偣鏃犻殰纰?---- */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible {
-  outline: none; /* 使用自带的 box-shadow 高亮 */
+  outline: none; /* 浣跨敤鑷甫鐨?box-shadow 楂樹寒 */
 }
 
-/* ---- 输入验证错误样式 ---- */
+/* ---- 杈撳叆楠岃瘉閿欒鏍峰紡 ---- */
 .input-error {
   border-color: var(--danger) !important;
   box-shadow: 0 0 0 1px var(--danger-soft) !important;
@@ -1420,7 +1468,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
   100% { transform: translateX(0); }
 }
 
-/* ---- 响应式：小窗口下隐藏右栏 ---- */
+/* ---- 鍝嶅簲寮忥細灏忕獥鍙ｄ笅闅愯棌鍙虫爮 ---- */
 @media (max-width: 1280px) {
   :root { --pane-right-w: 360px; }
 }
@@ -1429,9 +1477,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-
 }
 
 /* =========================================================
-   亮色主题
-   注：颜色变量现在由 theme-engine.js 动态计算，
-   此处仅保留非颜色相关的样式覆盖
+   浜壊涓婚
+   娉細棰滆壊鍙橀噺鐜板湪鐢?theme-engine.js 鍔ㄦ€佽绠楋紝
+   姝ゅ浠呬繚鐣欓潪棰滆壊鐩稿叧鐨勬牱寮忚鐩?
    ========================================================= */
 body.light-theme .topbar { border-bottom-color: var(--border); }
 body.light-theme code { background: var(--bg-2); color: var(--accent); }
@@ -1440,7 +1488,7 @@ body.light-theme .toast { background: var(--bg-1); }
 body.light-theme .card { background: var(--bg-1); }
 
 /* =========================================================
-   主题切换按钮（图标按钮）
+   涓婚鍒囨崲鎸夐挳锛堝浘鏍囨寜閽級
    ========================================================= */
 .btn-icon {
   display: inline-flex;
@@ -1463,7 +1511,7 @@ body.light-theme .card { background: var(--bg-1); }
 }
 
 /* =========================================================
-   配置预设下拉框
+   閰嶇疆棰勮涓嬫媺妗?
    ========================================================= */
 .template-select {
   margin-left: auto;
@@ -1490,7 +1538,7 @@ body.light-theme .card { background: var(--bg-1); }
 }
 
 /* =========================================================
-   拖拽高亮
+   鎷栨嫿楂樹寒
    ========================================================= */
 .drag-over {
   border-color: var(--accent) !important;
@@ -1500,7 +1548,7 @@ body.light-theme .card { background: var(--bg-1); }
 
 
 /* =========================================================
-   LlamaUI · Enhanced Styles v2
+   LlamaUI 路 Enhanced Styles v2
    Added: Responsive design, animation system, interaction enhancements
    ========================================================= */
 
@@ -1616,9 +1664,9 @@ body.light-theme .card { background: var(--bg-1); }
    Enhanced Theme Toggle Button
    ========================================================= */
 /* =========================================================
-   主题切换过渡效果
+   涓婚鍒囨崲杩囨浮鏁堟灉
    ========================================================= */
-/* 过渡遮罩层 */
+/* 杩囨浮閬僵灞?*/
 .theme-transition-overlay {
   position: fixed;
   inset: 0;
@@ -1651,8 +1699,8 @@ body.light-theme.theme-transitioning .theme-transition-overlay {
   transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* 主题图标默认状态（暗色主题 = 月亮显示，太阳隐藏）
-   在 body.light-theme/dark-theme 类应用前，防止两个图标同时可见 */
+/* 涓婚鍥炬爣榛樿鐘舵€侊紙鏆楄壊涓婚 = 鏈堜寒鏄剧ず锛屽お闃抽殣钘忥級
+   鍦?body.light-theme/dark-theme 绫诲簲鐢ㄥ墠锛岄槻姝袱涓浘鏍囧悓鏃跺彲瑙?*/
 .theme-icon-wrapper .icon-sun {
   opacity: 0;
   transform: rotate(90deg) scale(0.5);
@@ -1724,7 +1772,7 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .animate-scale-in { animation: scale-in 0.3s var(--ease-out); }
 
 /* =========================================================
-   下载进度条面板（增强版：步骤条 + 详情 + 速度/ETA）
+   涓嬭浇杩涘害鏉￠潰鏉匡紙澧炲己鐗堬細姝ラ鏉?+ 璇︽儏 + 閫熷害/ETA锛?
    ========================================================= */
 .download-progress-panel {
   background: var(--bg-1);
@@ -1823,12 +1871,12 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 }
 .download-meta strong { color: var(--text-2); font-weight: 600; }
 
-/* HuggingFace 模型商城样式 */
+/* HuggingFace 妯″瀷鍟嗗煄鏍峰紡 */
 .hf-store-dialog { max-width: 1000px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; }
 .hf-store-header { padding: 16px 20px; border-bottom: 1px solid var(--border); }
-.hf-store-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.hf-store-title-row h3 { margin: 0; font-size: var(--fs-lg); }
-.hf-search-row { margin-bottom: 10px; }
+.hf-store-title-row { display: flex; align-items: center; gap: 12px; }
+.hf-store-title-row h3 { margin: 0; font-size: var(--fs-lg); flex-shrink: 0; }
+.hf-store-title-row .hf-search-box { flex: 1; margin-left: 12px; }
 .hf-search-box { display: flex; align-items: center; gap: 8px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px 8px; transition: border-color var(--dur-fast); }
 .hf-search-box:focus-within { border-color: var(--accent); }
 .hf-search-icon { color: var(--text-3); flex-shrink: 0; }
@@ -1846,24 +1894,26 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .hf-loading-state { text-align: center; padding: 40px; color: var(--text-3); }
 .hf-loading-state .spinner { width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: hf-spin 0.8s linear infinite; margin: 0 auto 8px; }
 #hfModelsContainer { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.hf-model-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px; display: flex; flex-direction: column; gap: 8px; transition: all var(--dur-fast); cursor: default; }
+.hf-model-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px; display: flex; flex-direction: column; gap: 8px; transition: all var(--dur-fast); cursor: pointer; }
+.hf-model-card[disabled] { opacity: 0.5; cursor: not-allowed; }
 .hf-model-card:hover { border-color: var(--accent); box-shadow: var(--shadow-glow); }
-.hf-model-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.hf-model-provider { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.2; }
 .hf-model-id { font-weight: 600; font-size: var(--fs-sm); color: var(--text-1); word-break: break-all; }
 .hf-model-stats { display: flex; gap: 12px; font-size: var(--fs-xs); color: var(--text-3); margin-top: 4px; }
 .hf-model-desc { font-size: var(--fs-xs); color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hf-model-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
 .hf-model-tag { padding: 2px 8px; background: var(--bg-3); border-radius: 8px; font-size: 10px; color: var(--text-2); }
-.hf-model-gguf-info { font-size: var(--fs-xs); color: var(--success); margin-top: 4px; }
 .hf-model-download-btn { margin-top: auto; padding: 6px 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--r-sm); color: var(--accent); cursor: pointer; font-size: var(--fs-sm); transition: all var(--dur-fast); }
 .hf-model-download-btn:hover { background: var(--accent); color: var(--text-on-accent); }
 .hf-model-download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.hf-detail-panel { border-top: 1px solid var(--border); padding-top: 12px; flex: 1; min-height: 0; }
-.hf-detail-body { display: flex; flex-direction: column; gap: 8px; }
+.hf-detail-panel { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-1); border-radius: var(--r-md); border: 1px solid var(--border); display: flex; flex-direction: column; z-index: 10; overflow: hidden; }
+.hf-detail-panel[hidden] { display: none; }
+.hf-detail-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-2); flex-shrink: 0; }
+.hf-detail-body { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 12px 14px; flex: 1; }
 .hf-file-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-2); border-radius: var(--r-sm); border: 1px solid var(--border); }
 .hf-file-name { font-size: var(--fs-sm); color: var(--text-1); word-break: break-all; flex: 1; }
 .hf-file-size { font-size: var(--fs-xs); color: var(--text-3); margin-left: 12px; }
-.hf-downloads-panel { border-top: 1px solid var(--border); padding-top: 12px; max-height: 200px; overflow-y: auto; }
+/* .hf-downloads-panel in large-dialog mode uses .hf-store-body .hf-downloads-panel above */
 .hf-downloads-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-1); }
 .hf-downloads-count { background: var(--accent-soft); color: var(--accent); padding: 2px 8px; border-radius: 10px; font-size: var(--fs-xs); }
 .hf-download-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-2); border-radius: var(--r-sm); margin-bottom: 6px; border: 1px solid var(--border); }
@@ -1877,3 +1927,4 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .hf-empty-dl { text-align: center; color: var(--text-3); font-size: var(--fs-sm); padding: 12px; }
 @keyframes hf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .download-meta strong { color: var(--text-2); font-weight: 600; }
+
