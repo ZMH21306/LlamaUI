@@ -1586,6 +1586,16 @@ function attachUIListeners() {
   els.importConfig?.addEventListener('click', handleImportConfig);
   els.autoScroll?.addEventListener('change', scheduleSave);
 
+  // HuggingFace 模型商店入口
+  $('openHfStoreBtn')?.addEventListener('click', async () => {
+    try {
+      await invoke('open_hf_store_window');
+    } catch (e) {
+      console.error('open_hf_store_window failed:', e);
+      showNotification(`打开模型商店失败：${e}`, 'error', 4000);
+    }
+  });
+
   // ============ 自动下载 llama-server（即时详细进度） ============
   els.downloadLlamaBtn?.addEventListener('click', async () => {
     const btn = els.downloadLlamaBtn;
