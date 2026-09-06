@@ -11,8 +11,6 @@
     <header class="hf-store-header">
       <div class="hf-store-title-row">
         <h3>🤗 HuggingFace 模型商城</h3>
-      </div>
-      <div class="hf-search-row">
         <div class="hf-search-box">
           <svg class="hf-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           <input type="search" id="hfSearchInput" class="hf-search-input" placeholder="搜索模型，如 qwen llama gemma..." autocomplete="off" />
@@ -43,29 +41,26 @@
           </div>
           <div class="hf-loading-state" id="hfLoadingState" hidden>
             <div class="spinner"></div>
-            <p>搜索中...</p>
+            <p id="hfLoadingText">正在搜索 HuggingFace 模型...</p>
+            <p style="font-size:11px;color:var(--text-3);">正在连接 HuggingFace API，请稍候</p>
           </div>
           <div id="hfModelsContainer"></div>
         </div>
+        <!-- 详情子页面：覆盖在结果列表上 -->
         <div class="hf-detail-panel" id="hfDetailPanel" hidden>
           <div class="hf-detail-header">
             <button class="btn-secondary" id="hfBackBtn" style="padding:4px 8px;font-size:12px;">← 返回列表</button>
-            <span id="hfDetailModelId" style="font-weight:600;color:var(--text-1);font-size:13px;margin-left:8px;"></span>
+            <span id="hfDetailModelId" style="font-weight:600;color:var(--text-1);font-size:13px;margin-left:8px;flex:1;min-width:0;word-break:break-all;"></span>
           </div>
           <div class="hf-detail-body" id="hfDetailBody"></div>
         </div>
       </div>
-      <div class="hf-downloads-panel" id="hfDownloadsPanel">
-        <div class="hf-downloads-header">
-          <span>下载队列</span>
-          <span class="hf-downloads-count" id="hfDownloadsCount">0</span>
-        </div>
-        <div class="hf-downloads-list" id="hfDownloadsList">
-          <p class="hf-empty-dl">暂无下载任务</p>
-        </div>
-      </div>
     </div>
   </div>
+  <button id="hfDlFab" title="下载队列" aria-label="下载队列">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    <span id="hfDlBadge">0</span>
+  </button>
   <script src="theme-engine.js"></script>
   <script src="hf-store.js"></script>
 </body>
