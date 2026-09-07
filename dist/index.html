@@ -106,21 +106,21 @@
               
             </div>
             <!-- 自动下载 llama-server -->
-            <div class="field" id="downloadSection" style="margin-top:8px;">
-              <button class="btn-primary" id="downloadLlamaBtn" style="width:100%;">🚀 自动下载 llama-server</button>
-              <div id="downloadProgress" style="display:none;margin-top:8px;">
-                <div class="download-bar-track" style="background:var(--bg-2);border-radius:6px;overflow:hidden;height:10px;">
-                  <div class="download-bar-fill" id="downloadBar" style="background:var(--gradient-primary);height:100%;width:0%;transition:width 0.18s linear;"></div>
+            <div class="field field-spacing-sm" id="downloadSection">
+              <button class="btn-primary btn-block" id="downloadLlamaBtn">🚀 自动下载 llama-server</button>
+              <div id="downloadProgress" class="mt-sm">
+                <div class="download-bar-track">
+                  <div class="download-bar-fill" id="downloadBar"></div>
                 </div>
-                <p id="downloadStatus" style="margin-top:4px;font-size:11px;color:var(--text-2);">准备中...</p>
+                <p id="downloadStatus" class="mt-xs">准备中...</p>
                 <!-- 步骤详情 -->
-                <div class="download-steps" id="downloadSteps" style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;"></div>
+                <div class="download-steps" id="downloadSteps"></div>
                 <!-- 百分比 -->
-                <div class="download-percent" id="downloadPercent" style="font-size:12px;font-weight:700;color:var(--accent);margin-top:6px;">0%</div>
+                <div class="download-percent" id="downloadPercent">0%</div>
                 <!-- 详细步骤信息 -->
-                <div class="download-detail" id="downloadDetail" style="margin-top:2px;font-size:11px;color:var(--text-2);">准备中...</div>
+                <div class="download-detail" id="downloadDetail">准备中...</div>
                 <!-- 速度/ETA -->
-                <div class="download-meta" id="downloadMeta" style="margin-top:2px;font-size:11px;color:var(--text-3);"></div>
+                <div class="download-meta" id="downloadMeta"></div>
               </div>
             </div>
           </div>
@@ -130,10 +130,10 @@
         <section class="card">
           <header class="card-header">
             <h2>GPU 信息</h2>
-            <button class="btn-secondary" id="refreshGpuBtn" title="刷新 GPU 信息" style="font-size:11px;padding:2px 8px;">刷新</button>
+            <button class="btn-secondary btn-refresh" id="refreshGpuBtn" title="刷新 GPU 信息">刷新</button>
           </header>
           <div class="card-body" id="gpuInfoBody">
-            <p style="color:var(--text-3);font-size:12px;">点击刷新检测 GPU...</p>
+            <p class="gpu-info-hint">点击刷新检测 GPU...</p>
           </div>
         </section>
 
@@ -144,7 +144,7 @@
           </header>
           <div class="card-body">
             <p class="hint">搜索、浏览和下载 HuggingFace 上的 GGUF 模型文件</p>
-            <button class="btn-primary" id="openHfStoreBtn" style="width:100%;margin-top:8px;">
+            <button class="btn-primary btn-block mt-sm" id="openHfStoreBtn">
               🚀 打开模型商店
             </button>
           </div>
@@ -226,7 +226,7 @@
             <h2>配置管理</h2>
           </header>
           <div class="card-body">
-            <div class="backup-actions" style="display: flex; gap: 8px;">
+            <div class="backup-actions">
               <button class="btn-primary btn-small" id="exportConfig" type="button">导出配置</button>
               <button class="btn-secondary btn-small" id="importConfig" type="button">导入配置</button>
             </div>
@@ -273,7 +273,7 @@
         <div class="webview-toolbar">
           <button class="btn-secondary btn-small" id="openInBrowserToolbar">在浏览器打开</button>
         </div>
-        <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI" style="display:none;"></iframe>
+        <iframe id="webview" class="webview-iframe" src="about:blank" title="llama-server web UI"></iframe>
       </div>
     </main>
 
