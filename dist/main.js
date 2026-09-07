@@ -23,6 +23,20 @@ const MIN_PANE_W = 240;
 const MAX_PANE_LEFT_W = 720;
 const MAX_PANE_RIGHT_W = 800;
 
+// ============= 工具 =============
+/**
+ * 转义 HTML 特殊字符，防止 XSS。
+ * P2-5 修复：把后端 GPU 字段插入 innerHTML 时必须转义，避免恶意数据被注入为脚本。
+ */
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ============= 状态 =============
 const state = {
   status: 'Stopped',
@@ -1773,33 +1787,33 @@ function attachUIListeners() {
 // ============ GPU 信息刷新 ============
   async function refreshGpuInfo() {
     if (!els.gpuInfoBody) return;
-    els.gpuInfoBody.innerHTML = '<p style="color:var(--text-3);font-size:12px;">检测中...</p>';
+    els.gpuInfoBody.innerHTML = '<p class="gpu-info-detecting">检测中...</p>';
     try {
       const gpus = await invoke('detect_gpus');
       if (!gpus || gpus.length === 0) {
-        els.gpuInfoBody.innerHTML = '<p style="color:var(--text-3);font-size:12px;">未检测到 GPU</p>';
+        els.gpuInfoBody.innerHTML = '<p class="gpu-info-empty">未检测到 GPU</p>';
         return;
       }
       let html = '';
       for (const gpu of gpus) {
-        const color = gpu.vendor === 'NVIDIA' ? 'var(--success)' : gpu.vendor === 'AMD' ? 'var(--danger)' : 'var(--info)';
-        html += `<div style="margin-bottom:8px;padding:8px;background:var(--bg-2);border-radius:6px;border-left:3px solid ${color};">`;
-        html += `<div style="font-size:12px;font-weight:600;color:var(--text-1);">${gpu.vendor} ${gpu.model}</div>`;
-        if (gpu.memory_mb) html += `<div style="font-size:11px;color:var(--text-2);">显存: ${gpu.memory_mb} MB</div>`;
-        if (gpu.cuda_version) html += `<div style="font-size:11px;color:var(--text-2);">CUDA: ${gpu.cuda_version}</div>`;
-        if (gpu.driver_version) html += `<div style="font-size:11px;color:var(--text-2);">驱动: ${gpu.driver_version}</div>`;
-        html += `<div style="font-size:11px;color:var(--accent);">推荐: ${gpu.recommended_backend}</div>`;
+        const vendorClass = gpu.vendor === 'NVIDIA' ? 'gpu-card-nvidia' : gpu.vendor === 'AMD' ? 'gpu-card-amd' : 'gpu-card-intel';
+        html += `<div class="gpu-card ${vendorClass}">`;
+        html += `<div class="gpu-card-name">${escapeHtml(gpu.vendor)} ${escapeHtml(gpu.model)}</div>`;
+        if (gpu.memory_mb) html += `<div class="gpu-card-info">显存: ${gpu.memory_mb} MB</div>`;
+        if (gpu.cuda_version) html += `<div class="gpu-card-info">CUDA: ${escapeHtml(gpu.cuda_version)}</div>`;
+        if (gpu.driver_version) html += `<div class="gpu-card-info">驱动: ${escapeHtml(gpu.driver_version)}</div>`;
+        html += `<div class="gpu-card-recommend">推荐: ${escapeHtml(gpu.recommended_backend)}</div>`;
         if (gpu.issues && gpu.issues.length > 0) {
           for (const issue of gpu.issues) {
-            const ic = issue.severity === 'error' ? 'var(--danger)' : issue.severity === 'warning' ? 'var(--warning)' : 'var(--info)';
-            html += `<div style="font-size:10px;color:${ic};margin-top:2px;">⚠ ${issue.message}</div>`;
+            const sev = issue.severity === 'error' ? 'gpu-card-issue-error' : issue.severity === 'warning' ? 'gpu-card-issue-warning' : 'gpu-card-issue-info';
+            html += `<div class="gpu-card-issue ${sev}">⚠ ${escapeHtml(issue.message)}</div>`;
           }
         }
         html += `</div>`;
       }
       els.gpuInfoBody.innerHTML = html;
     } catch (e) {
-      els.gpuInfoBody.innerHTML = `<p style="color:var(--danger);font-size:12px;">检测失败: ${e}</p>`;
+      els.gpuInfoBody.innerHTML = `<p class="gpu-info-error">检测失败: ${escapeHtml(String(e))}</p>`;
     }
   }
   els.refreshGpuBtn?.addEventListener('click', refreshGpuInfo);
@@ -2038,11 +2052,16 @@ function createScanToast(kind, message) {
       <span class="toast-elapsed">0.0s</span>
       <button class="toast-close" type="button" aria-label="关闭">×</button>
     </div>
-    <div class="toast-progress-bar"><div class="toast-progress-fill" style="width: 5%"></div></div>
+    <div class="toast-progress-bar"><div class="toast-progress-fill"></div></div>
   `;
   toast.querySelector('.toast-text').textContent = message;
   els.toastContainer.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add('show'));
+  requestAnimationFrame(() => {
+    const bar = toast.querySelector('.toast-progress-fill');
+    bar.style.width = '5%';
+    entry.bar = bar;
+  });
 
   const entry = {
     toast,
