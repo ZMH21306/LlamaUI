@@ -44,6 +44,8 @@ pub enum ServerStatus {
     Starting,
     /// 运行中。
     Running,
+    /// 停止中（SIGTERM 已发送，等待子进程退出；5s 内未退出则强杀）。
+    Stopping,
     /// 异常退出。
     Crashed,
 }
