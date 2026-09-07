@@ -49,7 +49,6 @@ src/
 │   ├── gpu_cmd.rs          # GPU detection & diagnosis
 │   ├── hf_model_cmd.rs     # HuggingFace model store
 │   ├── model_cmd.rs        # Multi-model management
-│   ├── plugin_cmd.rs       # Plugin management
 │   ├── recovery_cmd.rs     # Error diagnosis & auto-fix
 │   ├── remote_cmd.rs       # Remote server management
 │   ├── export_cmd.rs       # Log export
@@ -86,13 +85,11 @@ src/
 ├── gpu_error_transformer.rs  # GPU error → user-friendly messages
 ├── llama_downloader.rs    # llama.cpp auto-download (52KB)
 ├── model_management.rs    # Multi-model directory index
-├── plugin_framework.rs    # Plugin system (experimental)
 ├── recovery.rs            # Error diagnosis & auto-fix
 ├── remote_server.rs       # Remote server management
 ├── config.rs              # Configuration persistence
 ├── config_io.rs           # Config JSON import/export
 ├── error.rs               # Unified error types
-├── error_macros.rs        # Error macros
 ├── events.rs              # Event names + payload types
 ├── lib.rs                 # Crate root + Tauri Builder
 ├── log.rs                 # Logging entry point
