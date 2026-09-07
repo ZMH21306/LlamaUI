@@ -222,11 +222,11 @@ LlamaUI/
 
 ## 测试
 
-项目包含 161 个单元测试，覆盖关键安全逻辑：
+项目包含 196 个单元测试，覆盖关键安全逻辑：
 
 ```bash
 cargo test --lib
-# test result: ok. 161 passed; 0 failed
+# test result: ok. 196 passed; 0 failed
 ```
 
 **测试覆盖**：
@@ -237,6 +237,11 @@ cargo test --lib
 - PATH 注入防护
 - 并发取消检测
 - 日志截断与容量管理
+- HF 模型下载路径遍历防护（P0-1）
+- HF model_id 格式校验（P0-2）
+- 停止中状态机（P1-2）
+- HF 下载取消机制（P2-4）
+- CSP unsafe-inline 移除（P2-5：全部 inline style 抽取至 styles.css）
 
 ## 贡献
 
