@@ -9,6 +9,7 @@
 - 新增 P0-1 安全修复：pro 模式可执行文件路径白名单加固（`validate_pro_program` 调用 `validate_p0_path` 二次校验文件名 + 世界可写目录拒绝）
 - 新增 P0-2 安全修复：HF 模型下载 `filename` 接入 `sanitize_filename()`，拒绝 `../`、`..\`、绝对路径、Windows 设备名等路径遍历攻击
 - 新增 P0-3 安全修复：`script-src` 移除 `unsafe-inline`（项目无内联 `<script>` 块）；保留 `style-src 'unsafe-inline'`（25 处 inline style 属性）
+- 新增 P2-5 安全修复：`style-src` 移除 `unsafe-inline`（CSP 收紧）；将 `dist/index.html`（15 处）、`dist/hf-store.html`（9 处）、`dist/hf-store.js`（6 处）、`dist/main.js`（11 处）的全部 inline style 抽取到 `dist/styles.css`，动态数值（进度条 width）改用 CSSOM API；`tauri.conf.json` CSP `style-src` 移除 `'unsafe-inline'`
 - 新增 `src/util/path.rs`：`sanitize_filename()` + `FilenameError` 枚举 + 完整单元测试（11 项）
 - 移除已弃用的 `metrics_enhanced` 模块，`model_management` 模块替代
 - 优化 `remote_server.validate_url` 判定逻辑，避免 HTTP 公网地址被误判为本地地址
