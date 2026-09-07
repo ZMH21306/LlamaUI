@@ -38,6 +38,32 @@ use super::state::{ServerInner, ServerProcess};
 
 /// How many ports to try when auto-port is enabled.
 pub const MAX_PORT_PROBES: u16 = 100;
+
+/// 将 anyhow::Error 转为用户可读的中文错误消息。
+///
+/// 对常见的 std::io::Error 做中文归一化，其他错误保留原始描述。
+pub(crate) fn chinese_error(e: &anyhow::Error) -> String {
+    // 尝试向下转型为 std::io::Error，做细粒度中文映射
+    if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+        return match io_err.kind() {
+            std::io::ErrorKind::NotFound => {
+                format!("可执行文件未找到：{}（请检查 llama-server 是否已安装或在设置中指定路径）", io_err)
+            }
+            std::io::ErrorKind::PermissionDenied => {
+                format!("权限不足，无法启动：{}（请尝试以管理员身份运行）", io_err)
+            }
+            std::io::ErrorKind::AlreadyExists => {
+                format!("文件已存在：{}（请检查是否已有 llama-server 在运行）", io_err)
+            }
+            std::io::ErrorKind::InvalidInput => {
+                format!("启动参数无效：{}（请检查专业模式命令格式）", io_err)
+            }
+            _ => format!("启动 llama-server 失败：{}", io_err),
+        };
+    }
+    // fallback：保留 anyhow 原始描述
+    e.to_string()
+}
 // 注：`METRICS_INTERVAL_MS` 已迁移到 [`super::metrics`] 模块（与其它
 // metrics 常量集中管理），任务工厂从那里 import。
 
@@ -421,10 +447,17 @@ impl ServerProcess {
         };
         drop(_job);
 
+        // P1-2 修复：在等待子进程退出期间立即设置 Stopping 中间态，
+        // 让前端 get_status 轮询时看到「停止中」而非「运行中」，
+        // 避免 5s 等待期 UI 按钮看起来像失灵。
         let mut child = {
             let mut inner = self.inner.lock();
             match inner.child.take() {
-                Some(c) => c,
+                Some(c) => {
+                    inner.status = ServerStatus::Stopping;
+                    emit_status(app, ServerStatus::Stopping);
+                    c
+                }
                 None => {
                     inner.status = ServerStatus::Stopped;
                     inner.pid = None;
@@ -436,6 +469,7 @@ impl ServerProcess {
                 }
             }
         };
+        // (child, _) 元组解构 — 已移除，直接使用 child 变量
 
         emit_log(app, "system", "正在停止 llama-server（发送终止信号）...");
 
