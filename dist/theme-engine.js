@@ -5,70 +5,77 @@
 'use strict';
 
 // ============= 基础色板定义（HSL） =============
+// 新设计：Obsidian Abyss（暗色）/ Alabaster Studio（亮色）
+// 主色相：220（青金石蓝）/ 辅助：262（紫罗兰）
+// 语义色相：150（success）/ 39（warning）/ 0（danger）/ 212（info）
 const BASE_PALETTE = {
-  primaryH: 192,
-  secondaryH: 265,
-  successH: 150,
-  warningH: 37,
-  dangerH: 0,
-  infoH: 217,
+  primaryH: 220,      // 青金石蓝主色相
+  secondaryH: 262,    // 紫罗兰辅助色相
+  successH: 150,      // 翡翠绿
+  warningH: 39,       // 琥珀
+  dangerH: 0,         // 红
+  infoH: 212,         // 蓝
 };
 
 function generatePalette(isLight) {
-  const { primaryH, successH, warningH, dangerH, infoH } = BASE_PALETTE;
+  const { primaryH, secondaryH, successH, warningH, dangerH, infoH } = BASE_PALETTE;
   if (isLight) {
     return {
-      bg0: { h: primaryH, s: 15, l: 96 },
-      bg1: { h: primaryH, s: 12, l: 100 },
-      bg2: { h: primaryH, s: 10, l: 94 },
-      bg3: { h: primaryH, s: 8, l: 91 },
-      bgInput: { h: primaryH, s: 12, l: 100 },
-      bgElevated: { h: primaryH, s: 12, l: 100 },
-      border: { h: primaryH, s: 15, l: 88 },
-      borderStrong: { h: primaryH, s: 14, l: 82 },
-      borderSubtle: { h: primaryH, s: 10, l: 94 },
-      text1: { h: primaryH, s: 20, l: 12 },
-      text2: { h: primaryH, s: 14, l: 35 },
-      text3: { h: primaryH, s: 10, l: 58 },
+      bg0: { h: 225, s: 10, l: 96 },
+      bg1: { h: 225, s: 6, l: 100 },
+      bg2: { h: 225, s: 8, l: 97 },
+      bg3: { h: 225, s: 10, l: 93 },
+      bgInput: { h: 225, s: 6, l: 100 },
+      bgElevated: { h: 225, s: 6, l: 100 },
+      border: { h: 225, s: 12, l: 84 },
+      borderStrong: { h: 225, s: 14, l: 74 },
+      borderSubtle: { h: 225, s: 8, l: 95 },
+      text1: { h: 225, s: 30, l: 12 },
+      text2: { h: 225, s: 18, l: 32 },
+      text3: { h: 225, s: 12, l: 58 },
       textOnAccent: { h: 0, s: 0, l: 100 },
-      accent: { h: primaryH, s: 100, l: 55 },
-      accent2: { h: primaryH, s: 100, l: 65 },
-      accentSoft: { h: primaryH, s: 100, l: 55, a: 0.12 },
-      success: { h: successH, s: 50, l: 35 },
-      successSoft: { h: successH, s: 50, l: 35, a: 0.15 },
-      warning: { h: warningH, s: 80, l: 50 },
-      warningSoft: { h: warningH, s: 80, l: 50, a: 0.16 },
-      danger: { h: dangerH, s: 80, l: 55 },
-      dangerSoft: { h: dangerH, s: 80, l: 55, a: 0.16 },
-      info: { h: infoH, s: 90, l: 60 },
-      infoSoft: { h: infoH, s: 90, l: 60, a: 0.15 },
+      accent: { h: 225, s: 78, l: 55 },
+      accent2: { h: 225, s: 80, l: 68 },
+      accentSoft: { h: 225, s: 78, l: 55, a: 0.12 },
+      accentPurple: { h: 262, s: 70, l: 55 },
+      accentPurpleSoft: { h: 262, s: 70, l: 55, a: 0.12 },
+      success: { h: 155, s: 60, l: 35 },
+      successSoft: { h: 155, s: 60, l: 35, a: 0.12 },
+      warning: { h: 35, s: 80, l: 45 },
+      warningSoft: { h: 35, s: 80, l: 45, a: 0.12 },
+      danger: { h: 5, s: 75, l: 48 },
+      dangerSoft: { h: 5, s: 75, l: 48, a: 0.12 },
+      info: { h: 220, s: 85, l: 55 },
+      infoSoft: { h: 220, s: 85, l: 55, a: 0.12 },
     };
   } else {
     return {
-      bg0: { h: primaryH, s: 20, l: 4 },
-      bg1: { h: primaryH, s: 18, l: 7 },
-      bg2: { h: primaryH, s: 16, l: 10 },
-      bg3: { h: primaryH, s: 14, l: 14 },
-      bgInput: { h: primaryH, s: 18, l: 7 },
-      bgElevated: { h: primaryH, s: 20, l: 11 },
-      border: { h: primaryH, s: 18, l: 18 },
-      borderStrong: { h: primaryH, s: 18, l: 24 },
-      borderSubtle: { h: primaryH, s: 16, l: 12 },
-      text1: { h: primaryH, s: 14, l: 93 },
-      text2: { h: primaryH, s: 14, l: 62 },
-      text3: { h: primaryH, s: 12, l: 42 },
+      bg0: { h: 225, s: 30, l: 4 },
+      bg1: { h: 225, s: 28, l: 7 },
+      bg2: { h: 225, s: 26, l: 10 },
+      bg3: { h: 225, s: 24, l: 14 },
+      bgInput: { h: 225, s: 28, l: 6 },
+      bgElevated: { h: 225, s: 30, l: 11 },
+      border: { h: 225, s: 22, l: 16 },
+      borderStrong: { h: 225, s: 24, l: 24 },
+      borderSubtle: { h: 225, s: 20, l: 10 },
+      text1: { h: 225, s: 14, l: 92 },
+      text2: { h: 225, s: 12, l: 62 },
+      text3: { h: 225, s: 10, l: 44 },
       textOnAccent: { h: 0, s: 0, l: 100 },
-      accent: { h: primaryH, s: 85, l: 58 },
-      accent2: { h: primaryH, s: 85, l: 70 },
-      accentSoft: { h: primaryH, s: 85, l: 58, a: 0.12 },
-      success: { h: successH, s: 70, l: 60 },
-      successSoft: { h: successH, s: 70, l: 60, a: 0.12 },
-      warning: { h: warningH, s: 90, l: 55 },
-      warningSoft: { h: warningH, s: 90, l: 55, a: 0.12 },
-      danger: { h: dangerH, s: 90, l: 62 },
-      dangerSoft: { h: dangerH, s: 90, l: 62, a: 0.12 },
-      info: { h: infoH, s: 90, l: 68 },
-      infoSoft: { h: infoH, s: 90, l: 68, a: 0.12 },
+      accent: { h: 225, s: 70, l: 62 },
+      accent2: { h: 225, s: 72, l: 74 },
+      accentSoft: { h: 225, s: 70, l: 62, a: 0.14 },
+      accentPurple: { h: 262, s: 65, l: 68 },
+      accentPurpleSoft: { h: 262, s: 65, l: 68, a: 0.14 },
+      success: { h: 155, s: 65, l: 62 },
+      successSoft: { h: 155, s: 65, l: 62, a: 0.14 },
+      warning: { h: 39, s: 85, l: 60 },
+      warningSoft: { h: 39, s: 85, l: 60, a: 0.14 },
+      danger: { h: 0, s: 80, l: 65 },
+      dangerSoft: { h: 0, s: 80, l: 65, a: 0.14 },
+      info: { h: 220, s: 80, l: 65 },
+      infoSoft: { h: 220, s: 80, l: 65, a: 0.14 },
     };
   }
 }
@@ -190,6 +197,8 @@ class ThemeManager {
     root.setProperty('--accent', hslToRgb(src.accent.h, src.accent.s, src.accent.l));
     root.setProperty('--accent-2', hslToRgb(src.accent2.h, src.accent2.s, src.accent2.l));
     root.setProperty('--accent-soft', hslToRgba(src.accentSoft.h, src.accentSoft.s, src.accentSoft.l, src.accentSoft.a));
+    root.setProperty('--accent-purple', hslToRgb(src.accentPurple.h, src.accentPurple.s, src.accentPurple.l));
+    root.setProperty('--accent-purple-soft', hslToRgba(src.accentPurpleSoft.h, src.accentPurpleSoft.s, src.accentPurpleSoft.l, src.accentPurpleSoft.a));
     root.setProperty('--success', hslToRgb(src.success.h, src.success.s, src.success.l));
     root.setProperty('--success-soft', hslToRgba(src.successSoft.h, src.successSoft.s, src.successSoft.l, src.successSoft.a));
     root.setProperty('--warning', hslToRgb(src.warning.h, src.warning.s, src.warning.l));
@@ -199,10 +208,10 @@ class ThemeManager {
     root.setProperty('--info', hslToRgb(src.info.h, src.info.s, src.info.l));
     root.setProperty('--info-soft', hslToRgba(src.infoSoft.h, src.infoSoft.s, src.infoSoft.l, src.infoSoft.a));
 
-    root.setProperty('--shadow-1', this.targetLight ? '0 1px 3px rgba(0, 0, 0, 0.08)' : '0 1px 2px rgba(0, 0, 0, 0.4)');
-    root.setProperty('--shadow-2', this.targetLight ? '0 4px 12px rgba(0, 0, 0, 0.1)' : '0 8px 32px rgba(0, 0, 0, 0.5)');
-    root.setProperty('--shadow-glow', this.targetLight ? '0 0 20px rgba(56, 202, 238, 0.3)' : '0 0 20px rgba(34, 211, 238, 0.15)');
-    root.setProperty('--gradient-primary', this.targetLight ? 'linear-gradient(135deg, #38caee 0%, #b792eb 100%)' : 'linear-gradient(135deg, #22d3ee 0%, #a78bfa 100%)');
+    root.setProperty('--shadow-1', this.targetLight ? '0 1px 2px rgba(26, 32, 44, 0.05), 0 1px 3px rgba(26, 32, 44, 0.04)' : '0 1px 2px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3)');
+    root.setProperty('--shadow-2', this.targetLight ? '0 4px 16px rgba(26, 32, 44, 0.08), 0 2px 6px rgba(26, 32, 44, 0.05)' : '0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35)');
+    root.setProperty('--shadow-glow', this.targetLight ? '0 0 24px rgba(45, 95, 211, 0.15)' : '0 0 28px rgba(91, 141, 239, 0.18)');
+    root.setProperty('--gradient-primary', this.targetLight ? 'linear-gradient(135deg, #2d5fd3 0%, #6d3fc4 100%)' : 'linear-gradient(135deg, #5b8def 0%, #8b6fef 100%)');
   }
 
   toggle() { this.setLightTheme(!this.targetLight); }
