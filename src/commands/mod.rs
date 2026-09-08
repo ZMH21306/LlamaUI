@@ -41,7 +41,6 @@ pub mod gpu_cmd;
 pub mod hf_model_cmd;
 pub mod init_cmd;
 pub mod model_cmd;
-pub mod plugin_cmd;
 pub mod recovery_cmd;
 pub mod remote_cmd;
 pub mod server_cmd;
@@ -72,8 +71,6 @@ pub struct AppState {
     pub model_manager: std::sync::Arc<crate::model_management::ModelManager>,
     /// 远程服务器管理。
     pub remote_server_manager: std::sync::Arc<crate::remote_server::RemoteServerManager>,
-    /// 插件系统管理器。
-    pub plugin_manager: std::sync::Arc<crate::plugin_framework::PluginManager>,
 }
 
 impl AppState {
@@ -86,7 +83,6 @@ impl AppState {
             remote_server_manager: std::sync::Arc::new(
                 crate::remote_server::RemoteServerManager::new(),
             ),
-            plugin_manager: std::sync::Arc::new(crate::plugin_framework::PluginManager::new()),
         }
     }
 }
