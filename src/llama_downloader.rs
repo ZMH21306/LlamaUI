@@ -667,6 +667,7 @@ fn detect_cuda_version() -> Option<String> {
 }
 
 /// 构建下载资产名（匹配 llama.cpp 实际发布命名）
+#[allow(dead_code)]
 fn build_asset_name(tag: &str, backend: GpuBackend) -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
@@ -912,57 +913,51 @@ fn smart_find_asset<'a>(
         }
     }
 
-    // 验证每个候选 URL 的可用性（HEAD 请求）
+    // 验证每个候选 URL 的可用性（HEAD 请求）—— 并行执行以加速
     // 保存第一个候选以便最后回退
     let first_candidate = candidates.first().copied();
     let total_candidates = candidates.len() as u32;
-    for (i, asset) in candidates.iter().enumerate() {
+
+    // 先通知前端：开始验证
+    if let Some(cb) = progress_callback {
+        cb(progress_simple(
+            "finding_asset",
+            stage_progress::FETCHING_VERSION_END,
+            format!("开始匹配资产（共 {} 个候选需要验证）...", total_candidates),
+        ));
+    }
+
+    // 并行执行所有 HEAD 请求，避免串行等待
+    let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FETCHING_VERSION_END;
+    let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
+    let results: Vec<(usize, anyhow::Result<()>)> = std::thread::scope(|s| {
+        urls
+            .iter()
+            .enumerate()
+            .map(|(i, url)| {
+                let url_owned = url.clone();
+                s.spawn(move || (i, curl_head(&url_owned)))
+                    .join()
+                    .unwrap_or((i, Err(anyhow::anyhow!("thread panicked"))))
+            })
+            .collect()
+    });
+
+    // 按原始顺序遍历结果，逐个通知前端
+    for (i, (_, result)) in results.iter().enumerate() {
         let candidate_index = (i + 1) as u32;
+        let asset = &candidates[i];
         let candidate_name = &asset.name;
-        let url = &asset.browser_download_url;
 
-        tracing::info!(
-            target: "LlamaDownloader",
-            candidate_index = candidate_index,
-            total = total_candidates,
-            name = %candidate_name,
-            "验证候选资产 {}/{}",
-            candidate_index,
-            total_candidates
-        );
-
-        // 通知前端：当前验证的候选
-        // 进度区间：[FETCHING_VERSION_END, FINDING_ASSET_END] = [2%, 10%]
-        let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FETCHING_VERSION_END;
         let verify_progress = stage_progress::FETCHING_VERSION_END
             + (candidate_index as f64 / total_candidates as f64) * asset_range;
-        if let Some(cb) = progress_callback {
-            cb(progress_with(
-                "finding_asset",
-                verify_progress,
-                candidate_index as u64,
-                total_candidates as u64,
-                format!("验证候选 {}/{}：{}", candidate_index, total_candidates, candidate_name),
-                DownloadProgressDetail {
-                    step: format!("验证候选 {}/{}", candidate_index, total_candidates),
-                    step_progress: candidate_index as f64 / total_candidates as f64,
-                    candidate_index,
-                    candidate_count: total_candidates,
-                    current_candidate: Some(candidate_name.clone()),
-                    speed_mbps: 0.0,
-                    eta_secs: None,
-                },
-            ));
-        }
 
-        // 使用 HEAD 请求验证 URL
-        let result = curl_head(url);
         match result {
             Ok(_) => {
                 tracing::info!(
                     target: "LlamaDownloader",
                     name = %candidate_name,
-                    url = %url,
+                    url = %asset.browser_download_url,
                     "✅ URL 可用，选择此资产"
                 );
                 // 通知前端：验证成功
@@ -990,11 +985,11 @@ fn smart_find_asset<'a>(
             Err(e) => {
                 tracing::debug!(
                     target: "LlamaDownloader",
-                    url = %url,
+                    url = %asset.browser_download_url,
                     error = %e,
                     "❌ URL 不可用，尝试下一个"
                 );
-                // 通知前端：验证失败，尝试下一个
+                // 通知前端：验证失败
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",

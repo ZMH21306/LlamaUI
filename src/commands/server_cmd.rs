@@ -53,8 +53,9 @@ pub async fn start_server(
         .start(app, cfg)
         .await
         .map_err(|e| {
+            let msg = crate::server::lifecycle::chinese_error(&e);
             tracing::error!(target: "ServerCmd", error = %e, "启动服务失败");
-            e.to_string()
+            msg
         })
 }
 
@@ -100,8 +101,9 @@ pub async fn restart_server(
         .start(app, cfg)
         .await
         .map_err(|e| {
+            let msg = crate::server::lifecycle::chinese_error(&e);
             tracing::error!(target: "ServerCmd", error = %e, "重启服务失败");
-            e.to_string()
+            msg
         })
 }
 

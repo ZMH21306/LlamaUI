@@ -43,6 +43,7 @@ pub struct RemoteServerInfo {
 
 impl RemoteServerInfo {
     /// 创建一个新的远程服务器配置（未连接状态）。
+    #[allow(dead_code)]
     pub fn new(url: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             url: url.into(),

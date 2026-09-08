@@ -35,7 +35,6 @@ mod config;
 mod config_io;
 mod detect;
 mod error;
-pub mod error_macros;
 mod events;
 pub mod gpu_detection;
 pub mod gpu_detect;
@@ -45,7 +44,6 @@ mod log;
 pub mod log_sanitizer;
 mod llama_downloader;
 mod model_management;
-mod plugin_framework;
 mod recovery;
 mod remote_server;
 mod server;
@@ -152,6 +150,7 @@ pub fn run() {
             commands::hf_model_cmd::search_hf_models,
             commands::hf_model_cmd::get_hf_model_files,
             commands::hf_model_cmd::download_hf_model,
+            commands::hf_model_cmd::cancel_hf_download,
             commands::hf_model_cmd::set_hf_token,
             commands::hf_model_cmd::get_hf_token,
             commands::hf_model_cmd::set_hf_download_dir,
@@ -163,8 +162,6 @@ pub fn run() {
             commands::remote_cmd::list_remote_servers,
             commands::remote_cmd::get_remote_server,
             commands::remote_cmd::probe_remote_server,
-            // 插件管理
-            commands::plugin_cmd::list_plugins,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
