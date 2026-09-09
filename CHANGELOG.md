@@ -15,6 +15,9 @@
 - 优化 `remote_server.validate_url` 判定逻辑，避免 HTTP 公网地址被误判为本地地址
 
 ### 修复
+- 修复 HF 模型下载卡 0%：自动读取 Windows 系统代理（Clash/V2Ray 的 `ProxyServer`）并注入 ureq Agent，解决直连时 DNS 解析失败
+- 修复 HF 模型文件大小缺失：对 `size` 为 0 的 GGUF 文件并发执行 HEAD 请求获取 `Content-Length`，并同步给前端 `expected_size`
+- 优化 HF 下载稳定性：下载 Agent 与 API Agent 隔离，读取超时从 60 秒延长至 300 秒，并增加 `connecting` / `headers` 阶段事件反馈
 - 修复 `commands/mod.rs` 测试模块缺失 `CancelFlag` 导入导致的 E0425 编译错误
 - 解决 `gpu_cmd` / `llama_downloader` / `update_check` 等模块的 clippy 警告（unwrap/expect、冗余 match、平台依赖测试等）
 
