@@ -84,12 +84,9 @@ impl HfState {
         Self {
             hf_token: Mutex::new(token),
             download_dir: Mutex::new(default_dir),
-            // P2-3：单例 Agent（连接池），timeout 30s
-            agent: Mutex::new(
-                ureq::AgentBuilder::new()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build(),
-            ),
+            // P2-3：单例 Agent（连接池）。连接复用用于文件列表 API；
+            // 用 connect/read 超时替代全局总超时，避免长下载被 30s 总超时砍断。
+            agent: Mutex::new(build_hf_agent(30, 120)),
             // P2-4：空取消通道
             download_cancels: Mutex::new(HashMap::new()),
         }
@@ -98,7 +95,66 @@ impl HfState {
 
 const HF_API_BASE: &str = "https://huggingface.co/api";
 
-/// 格式化字节数为人类可读字符串。
+/// 读取 Windows 系统代理配置（兼容 Clash/V2Ray 等透明代理）。
+/// 优先读 `HKCU\...\ProxyServer`，再兜底环境变量（大小写不敏感）。
+/// 返回 `Some("http://host:port")` 或 `None`（无代理/读取失败）。
+fn read_system_proxy() -> Option<String> {
+    // 1) 环境变量（所有平台通用，Clash 等也支持）
+    for key in &["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    // 2) Windows 注册表：系统代理设置
+    #[cfg(windows)]
+    {
+        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        if let Ok(settings) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") {
+            if let Ok(proxy_server) = settings.get_value::<String, _>("ProxyServer") {
+                if !proxy_server.is_empty() {
+                    // ProxyServer 格式：`host:port` 或 `http=host:port;https=host:port`
+                    // Clash 输出通常是 `http=127.0.0.1:7897;https=127.0.0.1:7897`
+                    // 取第一个匹配的协议，或整体作为 HTTP 代理。
+                    let mut result = String::new();
+                    for line in proxy_server.split(';') {
+                        let line = line.trim();
+                        if line.is_empty() { continue; }
+                        if let Some((k, v)) = line.split_once('=') {
+                            if k.eq_ignore_ascii_case("http") || k.eq_ignore_ascii_case("https") {
+                                result = format!("http://{}", v.trim());
+                                break;
+                            }
+                        } else {
+                            // 纯 host:port 形式
+                            result = format!("http://{}", line);
+                            break;
+                        }
+                    }
+                    if !result.is_empty() {
+                        return Some(result);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 构建 HF 请求 Agent，自动注入系统代理（解决 ureq 不读系统代理的问题）。
+/// `connect_secs` / `read_secs` 分别为连接与读取（空闲）超时秒数。
+fn build_hf_agent(connect_secs: u64, read_secs: u64) -> ureq::Agent {
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(connect_secs))
+        .timeout_read(std::time::Duration::from_secs(read_secs));
+    if let Some(proxy_url) = read_system_proxy() {
+        if let Ok(proxy) = ureq::Proxy::new(&proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder.build()
+}
 fn format_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
@@ -153,6 +209,33 @@ async fn hf_get(state: &HfState, path: &str, token: Option<&str>) -> (String, u1
     })
     .await
     .unwrap_or_else(|_| ("Task panicked".to_string(), 0))
+}
+
+/// 对单个文件发送 HEAD 请求获取 `Content-Length`。
+/// 用于补充 `get_hf_model_files` 里 HF API 不返回 size 的 GGUF 文件大小。
+fn hf_head_size(agent: &ureq::Agent, url: &str, token: Option<&str>) -> Option<u64> {
+    let mut req = agent.head(url);
+    if let Some(t) = token {
+        req = req.set("Authorization", &format!("Bearer {}", t));
+    }
+    match req.call() {
+        Ok(resp) if resp.status() == 200 => {
+            resp.header("Content-Length")?.parse::<u64>().ok()
+        }
+        _ => None,
+    }
+}
+
+/// 异步版：在 spawn_blocking 里同步发 HEAD，避免阻塞 Tauri 事件循环。
+async fn hf_head_size_async(
+    agent: ureq::Agent,
+    url: String,
+    token: Option<String>,
+) -> Option<u64> {
+    tokio::task::spawn_blocking(move || hf_head_size(&agent, &url, token.as_deref()))
+        .await
+        .ok()
+        .unwrap_or(None)
 }
 
 #[tauri::command]
@@ -234,18 +317,66 @@ pub async fn download_hf_model(
     let model_id_c = model_id.clone();
     let filename_c = filename.clone();
     let app_c = app.clone();
-    // P2-3：从共享 Agent 取 clone（ureq::Agent 是轻量克隆，复用连接池）
-    let agent_clone = state.agent.lock().clone();
+    // P2-3 修复：下载使用独立 Agent（不复用共享连接池），避免 HEAD 并发后
+    // keep-alive 连接被复用到已被 CDN 半关闭的连接上，导致 read() 永久阻塞。
+    // 同时注入系统代理（解决 ureq 直连时 DNS/网络不通的问题）。
+    // read 超时 300s 足够 16GB GGUF；HEAD 请求（文件大小检测）不受影响。
+    let agent_for_download = build_hf_agent(30, 300);
 
     let download_id_for_cleanup = download_id.clone();
     let download_id_for_emit = download_id.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut req = agent_clone.get(&url_clone);
+        // 发送 connecting 事件，让前端立即从「等待」切到「连接中」，避免永久停在 0%
+        let _ = app_c.emit(
+            "hf-download-progress",
+            HfDownloadProgress {
+                stage: "connecting".to_string(),
+                progress: 0.0,
+                downloaded: 0,
+                total: 0,
+                speed: None,
+                eta: None,
+                model_id: model_id_c.clone(),
+                filename: filename_c.clone(),
+                message: format!("正在连接：{}", filename_c),
+                download_id: download_id_for_emit.clone(),
+            },
+        );
+
+        let mut req = agent_for_download.get(&url_clone);
         if let Some(ref t) = token_clone {
             req = req.set("Authorization", &format!("Bearer {}", t));
         }
+        let call_start = std::time::Instant::now();
         let resp = req.call().map_err(|e| format!("HTTP 请求失败：{}", e))?;
+
+        // 复制一份 expected_size，供下方 headers 事件与 total 计算共用
+        // （Option 不能直接 move 两次）。
+        let exp_size = expected_size;
+
+        // headers 已收到（call 成功返回），马上通知前端，避免连接阶段长时间无反馈
+        let content_length: u64 = resp
+            .header("Content-Length")
+            .and_then(|v| v.parse::<u64>().ok())
+            .or(exp_size)
+            .unwrap_or(0);
+        let _ = app_c.emit(
+            "hf-download-progress",
+            HfDownloadProgress {
+                stage: "headers".to_string(),
+                progress: 0.0,
+                downloaded: 0,
+                total: content_length,
+                speed: None,
+                eta: None,
+                model_id: model_id_c.clone(),
+                filename: filename_c.clone(),
+                message: format!("已连接 ({} ms)，开始下载", call_start.elapsed().as_millis()),
+                download_id: download_id_for_emit.clone(),
+            },
+        );
+
         let total = resp
             .header("Content-Length")
             .and_then(|v| v.parse::<u64>().ok())
@@ -430,11 +561,33 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, model_id: String) -> 
     }
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("JSON 解析失败：{}", e))?;
     let siblings = v["siblings"].as_array().ok_or_else(|| format!("模型 {} 没有文件列表", model_id))?;
-    let files: Vec<HfModelFile> = siblings.iter().filter_map(|s| {
+    let mut files: Vec<HfModelFile> = siblings.iter().filter_map(|s| {
         let rfilename = s["rfilename"].as_str()?;
         if !rfilename.ends_with(".gguf") { return None; }
         Some(HfModelFile { path: rfilename.to_string(), size: s["size"].as_u64().or_else(|| s["lfs"].get("size").and_then(|v| v.as_u64())).unwrap_or(0), r#type: s["type"].as_str().unwrap_or("blob").to_string() })
     }).collect();
+
+    // HF API 对 GGUF 文件（LFS 大文件）经常不返回 size/lfs 字段（实测为 null），
+    // 导致前端拿不到文件大小、进度条永远 0%。这里对 size==0 的文件并发发
+    // HEAD 请求，从 `Content-Length` 补齐真实大小。
+    let need_size: Vec<usize> = files.iter().enumerate()
+        .filter(|(_, f)| f.size == 0)
+        .map(|(i, _)| i)
+        .collect();
+    if !need_size.is_empty() {
+        let agent = state.agent.lock().clone();
+        let token_str = token.clone();
+        let mut futs = Vec::with_capacity(need_size.len());
+        for &i in &need_size {
+            let url = format!("https://huggingface.co/{}/resolve/main/{}", model_id, &files[i].path);
+            futs.push((i, hf_head_size_async(agent.clone(), url, token_str.clone())));
+        }
+        for (i, fut) in futs {
+            if let Some(sz) = fut.await {
+                files[i].size = sz;
+            }
+        }
+    }
     Ok(files)
 }
 
