@@ -108,6 +108,8 @@ fn build_key_dir_roots() -> Vec<PathBuf> {
             roots.push(home.join("Documents").join("llama.cpp"));
             roots.push(home.join("scoop").join("apps").join("llama.cpp"));
             roots.push(home.join("scoop").join("apps").join("llama.cpp").join("current"));
+            // LlamaUI 默认下载目录：~/.llamaui/llama-cpp（本应用自己下载的安装位置）
+            roots.push(home.join(".llamaui").join("llama-cpp"));
         }
     } else {
         roots.push(PathBuf::from("/usr/local/bin"));
@@ -182,6 +184,8 @@ pub(crate) fn key_dirs_models(ctx: &Ctx) -> Option<PathBuf> {
         roots.push(home.join("Desktop").join("models"));
         roots.push(home.join("Downloads").join("models"));
         roots.push(home.join("Downloads"));
+        // LlamaUI 默认下载目录：~/.llamaui/llama-cpp/models
+        roots.push(home.join(".llamaui").join("llama-cpp").join("models"));
     }
     if cfg!(windows) {
         for letter in ['C', 'D', 'E', 'F', 'G', 'H'] {
