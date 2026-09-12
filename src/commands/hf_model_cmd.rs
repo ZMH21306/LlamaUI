@@ -1,12 +1,15 @@
 //! HF Model Store Commands
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
+use futures::stream::{self, StreamExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfModelSearchResult {
@@ -58,7 +61,14 @@ pub struct HfState {
     /// `ureq::get`，没有连接池，大模型下载时 TCP 三次握手开销不可忽略。
     /// 改为单例后，所有 HF 请求复用同一个 Agent，支持 keep-alive 与
     /// DNS 缓存，下载速度可提升 10~30%。
+    #[allow(dead_code)]
     pub agent: Mutex<ureq::Agent>,
+    /// 共享 reqwest blocking Client（P2-6 修复）。
+    ///
+    /// `hf_get_sync` / `hf_head_size` 原先每次调用都新建 `reqwest::blocking::Client`，
+    /// 既不复用连接池，又与 P2-3 注释的"单例 Agent"设计矛盾。
+    /// 改为单例后，API GET 与 HEAD 请求复用同一个 Client，支持 keep-alive。
+    pub api_client: Mutex<reqwest::blocking::Client>,
     /// 下载取消通道（P2-4 修复）。
     ///
     /// key = 下载 ID（`model_id::filename`），value = `oneshot::Sender<()>`。
@@ -66,6 +76,13 @@ pub struct HfState {
     /// 的 `spawn_blocking` 闭包在每次循环迭代时检查该信号，收到后
     /// 立即退出并删除已写入的不完整文件。
     pub download_cancels: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    /// 模型商店窗口创建防重入锁（修复"打开模型商城"弹两个窗口）。
+    ///
+    /// 前端 `main.js` 与 `hf-store.js` 曾同时给 `openHfStoreBtn` 绑定
+    /// `click` 事件，导致一次点击触发两次 `open_hf_store_window`。
+    /// 即使前端已去重，后端仍用 `AtomicBool` 兜底：第一个进入创建流程的
+    /// 调用会 CAS 为 `true`，第二个直接返回 `Ok(())`，避免竞态。
+    pub store_open_lock: AtomicBool,
 }
 
 impl HfState {
@@ -87,8 +104,12 @@ impl HfState {
             // P2-3：单例 Agent（连接池）。连接复用用于文件列表 API；
             // 用 connect/read 超时替代全局总超时，避免长下载被 30s 总超时砍断。
             agent: Mutex::new(build_hf_agent(30, 120)),
+            // P2-6：共享 reqwest Client（连接池），注入系统代理。
+            api_client: Mutex::new(build_hf_api_client()),
             // P2-4：空取消通道
             download_cancels: Mutex::new(HashMap::new()),
+            // 防重入锁初始为 false（允许首次创建）
+            store_open_lock: AtomicBool::new(false),
         }
     }
 }
@@ -112,6 +133,14 @@ fn read_system_proxy() -> Option<String> {
     {
         let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
         if let Ok(settings) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") {
+            // P0-7 修复：必须同时检查 ProxyEnable。Clash 关闭后 ProxyServer 残留
+            // 127.0.0.1:7897 但 ProxyEnable=0，若只读 ProxyServer 会把已失效的代理
+            // 注入给 reqwest，导致 HTTPS 请求走明文 CONNECT 失败（SSL UNEXPECTED_EOF），
+            // 而直连又没被使用，表现为"浏览器能开 HF、程序报网络错误"。
+            let proxy_enabled = settings.get_value::<u32, _>("ProxyEnable").unwrap_or(0);
+            if proxy_enabled == 0 {
+                return None;
+            }
             if let Ok(proxy_server) = settings.get_value::<String, _>("ProxyServer") {
                 if !proxy_server.is_empty() {
                     // ProxyServer 格式：`host:port` 或 `http=host:port;https=host:port`
@@ -123,11 +152,12 @@ fn read_system_proxy() -> Option<String> {
                         if line.is_empty() { continue; }
                         if let Some((k, v)) = line.split_once('=') {
                             if k.eq_ignore_ascii_case("http") || k.eq_ignore_ascii_case("https") {
-                                result = format!("http://{}", v.trim());
+                                // Clash 通常输出 http= 形式；若为 https= 则走 HTTPS 代理
+                                result = format!("{}://{}", k.to_lowercase(), v.trim());
                                 break;
                             }
                         } else {
-                            // 纯 host:port 形式
+                            // 纯 host:port 形式（IE 风格），默认 HTTP 代理
                             result = format!("http://{}", line);
                             break;
                         }
@@ -155,6 +185,24 @@ fn build_hf_agent(connect_secs: u64, read_secs: u64) -> ureq::Agent {
     }
     builder.build()
 }
+
+/// 构建 HF API 请求用的 reqwest blocking Client（P2-6 修复）。
+///
+/// - 复用连接池，避免每次新建 TCP 连接
+/// - 自动注入系统代理（Clash/V2Ray/环境变量），否则国内直连 HF 会极慢或挂起
+/// - connect 10s / read 20s（列表 API 响应体很小，不需要 120s）
+fn build_hf_api_client() -> reqwest::blocking::Client {
+    let mut builder = reqwest::blocking::ClientBuilder::new()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(20))
+        .danger_accept_invalid_certs(true);
+    if let Some(proxy_url) = read_system_proxy() {
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder.build().unwrap_or_else(|_| reqwest::blocking::Client::new())
+}
 fn format_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
@@ -174,15 +222,10 @@ fn format_size(bytes: u64) -> String {
 ///
 /// 返回值为 (body, http_status)。调用方应检查 status 并处理错误。
 ///
-/// P2-3：使用共享 `ureq::Agent`（连接池），避免每次新建 Agent 的 TCP 开销。
-fn hf_get_sync(agent: &ureq::Agent, path: &str, token: Option<&str>) -> (String, u16) {
+/// P2-6：使用共享 `api_client`（连接池 + 系统代理注入），避免每次新建 Client 的
+/// TCP 开销，且国内能走代理直连 HF。
+fn hf_get_sync(client: &reqwest::blocking::Client, path: &str, token: Option<&str>) -> (String, u16) {
     let url = format!("{}{}", HF_API_BASE, path);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new());
     let mut req = client.get(&url).header("User-Agent", "LlamaUI/0.7.0").header("Accept", "application/json");
     if let Some(t) = token {
         req = req.bearer_auth(t);
@@ -206,9 +249,9 @@ fn hf_get_sync(agent: &ureq::Agent, path: &str, token: Option<&str>) -> (String,
 async fn hf_get(state: &HfState, path: &str, token: Option<&str>) -> (String, u16) {
     let path_owned = path.to_string();
     let token_owned = token.map(|s| s.to_string());
-    let agent = state.agent.lock().clone();
+    let client = state.api_client.lock().clone();
     tokio::task::spawn_blocking(move || {
-        hf_get_sync(&agent, &path_owned, token_owned.as_deref())
+        hf_get_sync(&client, &path_owned, token_owned.as_deref())
     })
     .await
     .unwrap_or_else(|_| ("Task panicked".to_string(), 0))
@@ -216,29 +259,36 @@ async fn hf_get(state: &HfState, path: &str, token: Option<&str>) -> (String, u1
 
 /// 对单个文件发送 HEAD 请求获取 `Content-Length`。
 /// 用于补充 `get_hf_model_files` 里 HF API 不返回 size 的 GGUF 文件大小。
-fn hf_head_size(agent: &ureq::Agent, url: &str, token: Option<&str>) -> Option<u64> {
-    let mut req = agent.head(url);
+fn hf_head_size(client: &reqwest::blocking::Client, url: &str, token: Option<&str>) -> Option<u64> {
+    let mut req = client.head(url);
     if let Some(t) = token {
-        req = req.set("Authorization", &format!("Bearer {}", t));
+        req = req.bearer_auth(t);
     }
-    match req.call() {
+    match req.send() {
         Ok(resp) if resp.status() == 200 => {
-            resp.header("Content-Length")?.parse::<u64>().ok()
+            resp.headers().get("Content-Length")?.to_str().ok()?.parse::<u64>().ok()
         }
         _ => None,
     }
 }
 
 /// 异步版：在 spawn_blocking 里同步发 HEAD，避免阻塞 Tauri 事件循环。
+/// 异步版：在 spawn_blocking 里同步发 HEAD，避免阻塞 Tauri 事件循环。
+/// 单请求最多等待 8s（超时或阻塞失败都返回 None）。
 async fn hf_head_size_async(
-    agent: ureq::Agent,
+    client: reqwest::blocking::Client,
     url: String,
     token: Option<String>,
 ) -> Option<u64> {
-    tokio::task::spawn_blocking(move || hf_head_size(&agent, &url, token.as_deref()))
-        .await
-        .ok()
-        .unwrap_or(None)
+    match tokio::time::timeout(
+        Duration::from_secs(8),
+        tokio::task::spawn_blocking(move || hf_head_size(&client, &url, token.as_deref())),
+    )
+    .await
+    {
+        Ok(Ok(Some(sz))) => Some(sz),
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -549,6 +599,7 @@ pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: O
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String) -> Result<Vec<HfModelFile>, String> {
     let token = state.hf_token.lock().clone();
     let encoded_id = modelId.split('/').map(|s| urlencoding::encode(s)).collect::<Vec<_>>().join("/");
@@ -573,20 +624,31 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String) -> R
     // HF API 对 GGUF 文件（LFS 大文件）经常不返回 size/lfs 字段（实测为 null），
     // 导致前端拿不到文件大小、进度条永远 0%。这里对 size==0 的文件并发发
     // HEAD 请求，从 `Content-Length` 补齐真实大小。
-    let need_size: Vec<usize> = files.iter().enumerate()
+    //
+    // P2-6（原 bug）：原实现用 `for (i, fut) in futs { fut.await }` 逐个串行等待，
+    // 实际变为串行执行——每次要等前一个 HEAD 完成才开始下一个。模型若有 N 个 GGUF
+    // 文件（常见 10~30 个），每个 HEAD 在国内无代理时挂满 30s 超时，总时间 = N×30s，
+    // 表现为"长时间未完成"。修复：buffer_unordered 并发 + 单请求 8s 超时 + 整体 15s
+    // 截止时间，超时未完成的保持 size=0 返回，不阻塞文件列表。
+    let need_size: Vec<(usize, String)> = files.iter().enumerate()
         .filter(|(_, f)| f.size == 0)
-        .map(|(i, _)| i)
+        .map(|(i, f)| (i, format!("https://huggingface.co/{}/resolve/main/{}", modelId, f.path)))
         .collect();
     if !need_size.is_empty() {
-        let agent = state.agent.lock().clone();
+        let client = state.api_client.lock().clone();
         let token_str = token.clone();
-        let mut futs = Vec::with_capacity(need_size.len());
-        for &i in &need_size {
-            let url = format!("https://huggingface.co/{}/resolve/main/{}", modelId, &files[i].path);
-            futs.push((i, hf_head_size_async(agent.clone(), url, token_str.clone())));
-        }
-        for (i, fut) in futs {
-            if let Some(sz) = fut.await {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let head_futs = stream::iter(need_size.into_iter().map(|(i, url)| {
+            let client = client.clone();
+            let tok = token_str.clone();
+            async move { (i, hf_head_size_async(client, url, tok).await) }
+        })).buffer_unordered(8);
+        tokio::pin!(head_futs);
+        while let Some((i, res)) = head_futs.next().await {
+            if tokio::time::Instant::now() > deadline {
+                break;
+            }
+            if let Some(sz) = res {
                 files[i].size = sz;
             }
         }
@@ -631,33 +693,45 @@ pub async fn cancel_hf_download(
 }
 
 #[tauri::command]
-pub async fn open_hf_store_window(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_hf_store_window(
+    app: tauri::AppHandle,
+    state: State<'_, HfState>,
+) -> Result<(), String> {
+    // 幂等保护：若窗口已存在则直接显示并聚焦，避免重复创建导致多开。
     if let Some(window) = app.get_webview_window("hf-store") {
         window.show().map_err(|e| format!("显示窗口失败：{}", e))?;
         window.set_focus().map_err(|e| format!("聚焦窗口失败：{}", e))?;
         return Ok(());
     }
-    let main_window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "未找到主窗口".to_string())?;
-    use tauri::WebviewWindowBuilder;
-    let url = tauri::WebviewUrl::App("hf-store.html".into());
-    let builder = WebviewWindowBuilder::new(&app, "hf-store", url)
-        .title("HuggingFace 模型商店")
-        .inner_size(920.0, 720.0)
-        .min_inner_size(760.0, 560.0)
-        .resizable(true)
-        .center();
-    let builder = builder
-        .parent(&main_window)
-        .map_err(|e| format!("设置父窗口失败：{}", e))?;
-    let window = builder
-        .build()
-        .map_err(|e| format!("创建窗口失败：{}", e))?;
-    window
-        .show()
-        .map_err(|e| format!("显示窗口失败：{}", e))?;
-    Ok(())
+    // 防重入锁：如果另一个创建流程正在进行，直接返回，避免竞态导致弹两个窗口。
+    if state
+        .store_open_lock
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(());
+    }
+    let result = async {
+        let main_window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "未找到主窗口".to_string())?;
+        use tauri::WebviewWindowBuilder;
+        let url = tauri::WebviewUrl::App("hf-store.html".into());
+        let builder = WebviewWindowBuilder::new(&app, "hf-store", url)
+            .title("HuggingFace 模型商店")
+            .inner_size(920.0, 720.0)
+            .min_inner_size(760.0, 560.0)
+            .resizable(true)
+            .center();
+        let builder = builder.parent(&main_window).map_err(|e| format!("设置父窗口失败：{}", e))?;
+        let window = builder.build().map_err(|e| format!("创建窗口失败：{}", e))?;
+        window.show().map_err(|e| format!("显示窗口失败：{}", e))?;
+        Ok(()) as Result<(), String>
+    }
+    .await;
+    // 无论成败都释放锁，允许下次打开。
+    state.store_open_lock.store(false, Ordering::SeqCst);
+    result
 }
 
 // ============================================================
