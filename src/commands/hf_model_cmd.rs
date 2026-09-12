@@ -177,17 +177,20 @@ fn format_size(bytes: u64) -> String {
 /// P2-3：使用共享 `ureq::Agent`（连接池），避免每次新建 Agent 的 TCP 开销。
 fn hf_get_sync(agent: &ureq::Agent, path: &str, token: Option<&str>) -> (String, u16) {
     let url = format!("{}{}", HF_API_BASE, path);
-    let mut req = agent
-        .get(&url)
-        .set("User-Agent", "LlamaUI/0.7.0")
-        .set("Accept", "application/json");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+    let mut req = client.get(&url).header("User-Agent", "LlamaUI/0.7.0").header("Accept", "application/json");
     if let Some(t) = token {
-        req = req.set("Authorization", &format!("Bearer {}", t));
+        req = req.bearer_auth(t);
     }
-    match req.call() {
+    match req.send() {
         Ok(resp) => {
-            let status = resp.status();
-            match resp.into_string() {
+            let status = resp.status().as_u16();
+            match resp.text() {
                 Ok(body) => (body, status),
                 Err(e) => (format!("读取响应失败：{}", e), 0),
             }
@@ -546,9 +549,9 @@ pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: O
 }
 
 #[tauri::command]
-pub async fn get_hf_model_files(state: State<'_, HfState>, model_id: String) -> Result<Vec<HfModelFile>, String> {
+pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String) -> Result<Vec<HfModelFile>, String> {
     let token = state.hf_token.lock().clone();
-    let encoded_id = model_id.split('/').map(|s| urlencoding::encode(s)).collect::<Vec<_>>().join("/");
+    let encoded_id = modelId.split('/').map(|s| urlencoding::encode(s)).collect::<Vec<_>>().join("/");
     let (body, status) = hf_get(&state, &format!("/models/{}", &encoded_id), token.as_deref()).await;
     if status == 0 {
         return Err(format!("网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。", &body));
@@ -560,7 +563,7 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, model_id: String) -> 
         return Err(format!("获取文件失败：HTTP {} {}", status, &body));
     }
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("JSON 解析失败：{}", e))?;
-    let siblings = v["siblings"].as_array().ok_or_else(|| format!("模型 {} 没有文件列表", model_id))?;
+    let siblings = v["siblings"].as_array().ok_or_else(|| format!("模型 {} 没有文件列表", modelId))?;
     let mut files: Vec<HfModelFile> = siblings.iter().filter_map(|s| {
         let rfilename = s["rfilename"].as_str()?;
         if !rfilename.ends_with(".gguf") { return None; }
@@ -579,7 +582,7 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, model_id: String) -> 
         let token_str = token.clone();
         let mut futs = Vec::with_capacity(need_size.len());
         for &i in &need_size {
-            let url = format!("https://huggingface.co/{}/resolve/main/{}", model_id, &files[i].path);
+            let url = format!("https://huggingface.co/{}/resolve/main/{}", modelId, &files[i].path);
             futs.push((i, hf_head_size_async(agent.clone(), url, token_str.clone())));
         }
         for (i, fut) in futs {
