@@ -82,19 +82,39 @@ pub async fn stop_server(
 
 /// 重启 llama-server。
 ///
-/// 等价于「先 `stop_server`，等 500ms 让端口释放，再 `start_server`」。
-/// 第二次启动若失败会向上抛错（前半 stop 失败被忽略，因为若服务未运行
-/// 时调用 stop 是合法的）。
+/// 等价于「先 `stop_server`，轮询确认端口释放，再 `start_server`」。
+/// 全程受 `start_mutex` 保护，防止与 `start_server`/`stop_server` 并发竞态。
+/// 停止后通过轮询端口可用性确认释放（而非固定 sleep），
+/// 最大等待 10 秒。
 #[tauri::command]
 pub async fn restart_server(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     tracing::info!(target: "ServerCmd", "收到重启服务请求");
+    // 通过 start_mutex 串行化整个重启流程
+    let _guard = state.server.start_mutex.lock().await;
     // Stop first (ignore error if not running)
     let _ = state.server.stop(&app).await;
-    // Small delay so the port is released
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // 轮询确认端口释放（最多 10 秒）
+    let port = state.config.get().port;
+    let released = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        async {
+            for _ in 0..100 {
+                if crate::server::port::is_port_available(port).await {
+                    return true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            false
+        },
+    )
+    .await
+    .unwrap_or(false);
+    if !released {
+        tracing::warn!(target: "ServerCmd", port = port, "端口未在 10s 内释放，强制继续");
+    }
     let cfg = state.config.get();
     state
         .server
@@ -146,8 +166,14 @@ pub fn clear_logs(state: State<'_, AppState>) {
 pub async fn force_close(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     // 停止服务（忽略错误，尽力而为）
     let _ = state.server.stop(&app).await;
-    // 等待子进程完全退出
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // 等待子进程完全退出（最多 5 秒）
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        state.server.stop(&app),
+    )
+    .await
+    .map_err(|_| "停止服务超时（5 秒）".to_string())?
+    .map_err(|e| e.to_string())?;
     // 退出应用
     app.exit(0);
     Ok(())
