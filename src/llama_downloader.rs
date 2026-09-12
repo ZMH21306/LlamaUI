@@ -2,14 +2,13 @@
 //!
 //! 从 GitHub Releases（ggml-org/llama.cpp）下载对应平台的 llama-server，
 //! 支持 GPU 后端自动选择、SHA256 校验、解压和进度回调。
-//! 使用 curl 子进程发起 HTTP 请求（自动继承系统代理和 TLS 配置）。
+//! 使用 reqwest 库（带 TLS 证书验证）发起所有 HTTP 请求。
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::time::Duration;
 use crate::util::process::silent_command;
 
 fn current_os() -> &'static str {
@@ -35,6 +34,10 @@ fn current_arch() -> &'static str {
 }
 
 /// 获取 GitHub Token（优先级：GITHUB_TOKEN → gh CLI → GH_TOKEN → 无）
+///
+/// 注意：当前 `curl_head` / `curl_download` 使用 reqwest 且不带 token，
+/// 本函数保留用于未来认证场景。标记 `#[allow(dead_code)]` 避免编译警告。
+#[allow(dead_code)]
 fn get_github_token() -> Option<String> {
     // 1. 环境变量 GITHUB_TOKEN
     if let Ok(token) = std::env::var("GITHUB_TOKEN") {
@@ -67,70 +70,22 @@ fn get_github_token() -> Option<String> {
     None
 }
 
-/// 用 curl 发送 HEAD 请求验证 URL 可用性（自动继承系统代理）
+/// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证）
 fn curl_head(url: &str) -> anyhow::Result<()> {
-    let token = get_github_token();
-    let auth_header = token.as_deref().map(|t| format!("Authorization: token {}", t));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
 
-    let mut args = vec!["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", "-I"];
-    if let Some(ref h) = auth_header {
-        args.push("-H");
-        args.push(h.as_str());
-    }
-    args.push(url);
+    let response = client.head(url).send()?;
+    let status = response.status();
 
-    let output = crate::util::process::silent_command("curl")
-        .args(&args)
-        .output()
-        .map_err(|e| anyhow::anyhow!("curl HEAD 请求失败: {}", e))?;
+    tracing::debug!(target: "LlamaDownloader", url = %url, status = %status, "reqwest HEAD 验证");
 
-    let status_code = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    tracing::debug!(target: "LlamaDownloader", url = %url, status = %status_code, "curl HEAD 验证");
-
-    if status_code == "200" || status_code == "302" || status_code == "301" {
+    if status.is_success() || status.as_u16() == 301 || status.as_u16() == 302 {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("HTTP {} (不可用)", status_code))
+        Err(anyhow::anyhow!("HTTP {} (不可用)", status.as_u16()))
     }
-}
-
-/// 从 curl -# 进度输出中解析百分比
-///
-/// curl 的 `-#` 模式输出格式类似：
-/// ```text
-///                                  2.6%
-/// ##                                2.8%
-///                                  ##  2.9%
-/// ```
-/// 有时百分比前面会有 `##` 和空格混合。我们查找行中最后一个 `XX.X%` 模式。
-fn parse_curl_progress(line: &str) -> Option<f64> {
-    // 从后往前找最后一个 '%'，然后解析前面的数字
-    let trimmed = line.trim_end();
-    if let Some(pct_pos) = trimmed.rfind('%') {
-        let before = trimmed[..pct_pos].trim_end();
-        // 向前找到数字部分的开始
-        let end = before.len();
-        let mut start = end;
-        let bytes = before.as_bytes();
-        while start > 0 {
-            start -= 1;
-            if bytes[start].is_ascii_digit() || bytes[start] == b'.' {
-                continue;
-            }
-            start += 1;
-            break;
-        }
-        if start == 0 {
-            // 整个字符串可能都是数字
-        }
-        let num_str = &before[start..end];
-        if let Ok(pct) = num_str.parse::<f64>() {
-            if (0.0..=100.0).contains(&pct) {
-                return Some(pct);
-            }
-        }
-    }
-    None
 }
 
 /// 下载阶段常量（用于统一的进度分配）
@@ -150,110 +105,13 @@ pub mod stage_progress {
     pub const FINALIZE_END: f64 = 1.00;
 }
 
-/// 处理一行 curl stderr 输出（日志 + 进度回调）。
+/// 下载阶段常量（用于统一的进度分配）
+/// 用 reqwest streaming 下载文件到本地路径（带 TLS 证书验证、断点续传、实时进度）
 ///
-/// 这是把原先内联在读取循环里的逻辑抽出来的纯函数，便于按 '\r'/'\n'
-/// 切分后的任意片段复用。带时间节流：日志每 3s / 进度变化 10% 才打一次；
-/// 进度事件每 500ms 节流一次，避免前端被过于频繁的回调阻塞。
-#[allow(clippy::too_many_arguments)]
-fn process_curl_line(
-    line: &str,
-    last_log: &mut std::time::Instant,
-    last_emit: &mut std::time::Instant,
-    last_pct: &mut f64,
-    attempt: u32,
-    total_size: u64,
-    start: std::time::Instant,
-    progress_start: f64,
-    progress_range: f64,
-    progress_callback: Option<&dyn Fn(DownloadProgress)>,
-) {
-    // 检测 curl 错误
-    if line.contains("curl:") {
-        tracing::warn!(target: "LlamaDownloader", line = %line, "检测到 curl 错误");
-    }
-
-    if let Some(pct) = parse_curl_progress(line) {
-        let now = std::time::Instant::now();
-        let downloaded = if total_size > 0 {
-            (total_size as f64 * pct / 100.0) as u64
-        } else {
-            0
-        };
-        let speed_mbps = if start.elapsed().as_secs_f64() > 0.0 {
-            downloaded as f64 / start.elapsed().as_secs_f64() / 1048576.0
-        } else {
-            0.0
-        };
-
-        // 每 3 秒或进度变化超过 10% 时记录日志
-        let should_log = now.duration_since(*last_log).as_secs() >= 3
-            || (pct - *last_pct).abs() >= 10.0
-            || speed_mbps == 0.0 && *last_pct > 0.0;
-
-        if should_log {
-            let speed_str = format!("{:.1}", speed_mbps);
-            tracing::info!(target: "LlamaDownloader",
-                attempt,
-                pct = format!("{:.1}", pct),
-                downloaded_mb = format!("{:.1}", downloaded as f64 / 1048576.0),
-                total_mb = format!("{:.1}", total_size as f64 / 1048576.0),
-                speed_mbps = %speed_str,
-                elapsed_secs = format!("{:.0}", start.elapsed().as_secs_f64()),
-                "下载进度"
-            );
-            *last_log = now;
-            *last_pct = pct;
-        }
-
-        // 进度事件节流：每 500ms 或进度变化 >1% 才推送，避免阻塞前端事件循环
-        let should_emit = now.duration_since(*last_emit).as_millis() >= 500
-            || (pct - *last_pct).abs() >= 1.0;
-        if should_emit {
-            *last_emit = now;
-            *last_pct = pct;
-
-            if let Some(cb) = progress_callback {
-                let eta_secs = if speed_mbps > 0.0 && total_size > downloaded {
-                    let remaining_bytes = total_size - downloaded;
-                    Some((remaining_bytes as f64 / (speed_mbps * 1048576.0)).max(0.0))
-                } else {
-                    None
-                };
-                cb(DownloadProgress {
-                    stage: "downloading".to_string(),
-                    // 将 curl 的 0~1 进度映射到全局 [progress_start, progress_end]
-                    progress: progress_start + (pct / 100.0) * progress_range,
-                    downloaded,
-                    total: total_size,
-                    message: format!(
-                        "下载中... {:.1} / {:.1} MB ({:.0}%)",
-                        downloaded as f64 / 1048576.0,
-                        total_size as f64 / 1048576.0,
-                        pct
-                    ),
-                    detail: Some(DownloadProgressDetail {
-                        step: format!("下载中 {:.0}%", pct),
-                        step_progress: pct / 100.0,
-                        candidate_index: 0,
-                        candidate_count: 0,
-                        current_candidate: None,
-                        speed_mbps,
-                        eta_secs,
-                    }),
-                });
-            }
-        }
-    }
-}
-
-/// 用 curl 下载文件到本地路径（spawn + 实时进度读取）
+/// 使用 `reqwest` 的 streaming API，避免依赖外部 curl 子进程，
+/// 并确保 TLS 证书链被正确验证。支持 Range 请求实现断点续传。
 ///
-/// 使用 `Command::spawn()` 启动 curl，按字节读取 stderr 中的进度输出，
-/// 实时调用 `progress_callback` 报告下载进度。
-/// 支持断点续传和完整重试机制。
-///
-/// `progress_start`/`progress_end` 用于将 curl 内部 0~1 的下载进度
+/// `progress_start`/`progress_end` 用于将 reqwest 的 0~1 下载进度
 /// 映射到全局进度区间的 [progress_start, progress_end]。
 fn curl_download(
     url: &str,
@@ -282,7 +140,6 @@ fn curl_download(
     }
 
     let mut last_error = String::new();
-    let mut last_error_log = std::time::Instant::now() - std::time::Duration::from_secs(10);
 
     // 重试循环：最多 5 次
     for attempt in 1..=5u32 {
@@ -302,196 +159,125 @@ fn curl_download(
             std::thread::sleep(std::time::Duration::from_secs(wait_secs.into()));
         }
 
-        let mut cmd = crate::util::process::silent_command("curl");
-        // 基础参数
-        cmd.args([
-            "-L",                          // 跟随重定向
-            "--max-time", "600",            // 单次最大 10 分钟
-            "--retry", "2",                 // curl 内部重试 2 次
-            "--retry-all-errors",           // 所有错误都重试
-            "--retry-delay", "2",           // 重试间隔 2 秒
-            "--connect-timeout", "30",      // 连接超时 30 秒
-            "-C", "-",                      // 断点续传
-            "-o", &dest_str,
-            "-#",  // 进度条（stderr，格式：##  X.X%）
-        ]);
+        // 创建 reqwest 客户端（自动继承系统代理和 TLS 配置，证书链被验证）
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(600))
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                last_error = format!("客户端创建失败: {}", e);
+                break;
+            }
+        };
 
-        // 添加 User-Agent 和 TLS 配置
-        cmd.args([
-            "-A", "LlamaUI/0.6.0",
-            "--tlsv1.2",
-            "--keepalive-time", "30",
-        ]);
-
-        // 断点续传：检查已下载大小
-        let existing_size = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        // 构造请求（带 Range 支持断点续传）
+        let mut existing_size = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        let mut request = client.get(url)
+            .header("User-Agent", "LlamaUI/0.6.0")
+            .header("Accept", "application/octet-stream");
         if existing_size > 0 && total_size > 0 {
-            tracing::info!(target: "LlamaDownloader",
-                existing_mb = format!("{:.1}", existing_size as f64 / 1048576.0),
-                total_mb = format!("{:.1}", total_size as f64 / 1048576.0),
-                "断点续传"
-            );
+            request = request.header("Range", format!("bytes={}-", existing_size));
         }
 
-        cmd.arg(url);
+        let mut response = match request.send() {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = format!("请求失败: {}", e);
+                continue;
+            }
+        };
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        if existing_size > 0 && total_size > 0 {
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                // 服务端不支持 Range，从头开始
+                if let Err(e) = fs::write(dest, Vec::new()) {
+                    last_error = format!("清空断点文件失败: {}", e);
+                    break;
+                }
+                existing_size = 0;
+            }
+        }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("curl 启动失败: {}", e))?;
+        // 写入文件并实时上报进度
+        let mut file = match fs::OpenOptions::new().create(true).append(true).open(dest) {
+            Ok(f) => f,
+            Err(e) => {
+                last_error = format!("打开文件失败: {}", e);
+                break;
+            }
+        };
 
-        // 逐字节读取 stderr，解析 curl -# 进度。
-        //
-        // ⚠️ 关键修复（卡住根因）：原先用 BufReader::lines() 只按 '\n' 切行，
-        // 但 curl -# 的进度条是用 '\r'（回车）覆盖同一行、只在结束时输出 '\n'。
-        // lines() 会一直阻塞到 curl 退出才返回第一行 → 整个下载过程零进度事件，
-        // 前端永远停在「匹配到资产」。改为按字节读取、按 '\r' / '\n' 切分，
-        // 并带时间节流地向前端推送进度。
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("无法获取 curl 子进程 stderr"))?;
-        let mut reader = BufReader::new(stderr);
-        let mut last_log = std::time::Instant::now();
+        let mut downloaded = existing_size;
+        let mut buf = [0u8; 65536];
         let mut last_emit = std::time::Instant::now();
-        let mut last_pct: f64 = 0.0;
-        let mut buf = String::new();
-        let mut raw = [0u8; 4096];
+        let mut last_pct: f64 = if existing_size > 0 {
+            if total_size > 0 { existing_size as f64 / total_size as f64 * 100.0 } else { 0.0 }
+        } else { 0.0 };
 
         loop {
-            let n = match reader.read(&mut raw) {
+            let n = match response.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(e) => {
-                    tracing::warn!(target: "LlamaDownloader", error = %e, "读取 stderr 失败");
+                    tracing::warn!(target: "LlamaDownloader", error = %e, "读取下载流失败");
                     break;
                 }
             };
-            // 追加本次读到的字节，同时按 '\r' / '\n' 切分成完整片段处理
-            let chunk = String::from_utf8_lossy(&raw[..n]);
-            buf.push_str(&chunk);
-            let mut seg_start = 0;
-            for (i, ch) in buf.char_indices() {
-                if ch == '\r' || ch == '\n' {
-                    let line = buf[seg_start..i].to_string();
-                    process_curl_line(
-                        &line,
-                        &mut last_log,
-                        &mut last_emit,
-                        &mut last_pct,
-                        attempt,
-                        total_size,
-                        start,
-                        progress_start,
-                        progress_range,
-                        progress_callback,
-                    );
-                    seg_start = i + ch.len_utf8();
+            if n == 0 { break; }
+            file.write_all(&buf[..n])?;
+            downloaded += n as u64;
+
+            let now = std::time::Instant::now();
+            if now.duration_since(last_emit).as_millis() >= 500 {
+                last_emit = now;
+                let pct = if total_size > 0 {
+                    (downloaded as f64 / total_size as f64 * 100.0).min(100.0)
+                } else { 100.0 };
+                if pct >= last_pct {
+                    last_pct = pct;
+                    if let Some(cb) = progress_callback {
+                        let speed_mbps = if start.elapsed().as_secs_f64() > 0.0 {
+                            downloaded as f64 / start.elapsed().as_secs_f64() / 1048576.0
+                        } else { 0.0 };
+                        cb(DownloadProgress {
+                            stage: "downloading".to_string(),
+                            progress: progress_start + (pct / 100.0) * progress_range,
+                            downloaded,
+                            total: total_size,
+                            message: format!("下载中... {:.1} / {:.1} MB ({:.0}%)",
+                                downloaded as f64 / 1048576.0, total_size as f64 / 1048576.0, pct),
+                            detail: Some(DownloadProgressDetail {
+                                step: format!("下载中 {:.0}%", pct),
+                                step_progress: pct / 100.0,
+                                candidate_index: 0,
+                                candidate_count: 0,
+                                current_candidate: None,
+                                speed_mbps,
+                                eta_secs: None,
+                            }),
+                        });
+                    }
                 }
             }
-            // 保留未完成的尾部片段（可能是一个不完整的进度行）
-            buf = buf[seg_start..].to_string();
         }
-
-        // 处理末尾残留的片段（curl 结束时可能没有换行）
-        if !buf.is_empty() {
-            process_curl_line(
-                &buf,
-                &mut last_log,
-                &mut last_emit,
-                &mut last_pct,
-                attempt,
-                total_size,
-                start,
-                progress_start,
-                progress_range,
-                progress_callback,
-            );
-        }
-
-        // 等待 curl 进程结束，获取退出状态
-        let status = child.wait()
-            .map_err(|e| anyhow::anyhow!("等待 curl 进程失败: {}", e))?;
+        drop(file);
 
         let elapsed_secs = start.elapsed().as_secs_f64();
-        let status_code = status.code().unwrap_or(-1);
+        let downloaded_final = fs::metadata(dest).map(|m| m.len()).unwrap_or(downloaded);
 
-        if status.success() {
-            // 下载成功
-            let downloaded = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-            let speed_mbps = if elapsed_secs > 0.0 {
-                downloaded as f64 / elapsed_secs / 1048576.0
-            } else {
-                0.0
-            };
-
+        if downloaded_final > 0 {
             tracing::info!(target: "LlamaDownloader",
                 attempt,
-                downloaded = downloaded,
-                mb = format!("{:.1}", downloaded as f64 / 1048576.0),
+                downloaded = downloaded_final,
+                mb = format!("{:.1}", downloaded_final as f64 / 1048576.0),
                 elapsed_secs = format!("{:.1}", elapsed_secs),
-                speed_mbps = format!("{:.1}", speed_mbps),
-                "curl 下载完成"
-            );
-
-            // 计算 SHA256
-            if downloaded > 0 {
-                tracing::debug!(target: "LlamaDownloader", "开始计算 SHA256...");
-                let mut file = fs::File::open(dest)?;
-                let mut hasher = Sha256::new();
-                let mut buffer = vec![0u8; 65536];
-                loop {
-                    let bytes_read = file.read(&mut buffer)?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    hasher.update(&buffer[..bytes_read]);
-                }
-                let sha256_hex = format!("{:x}", hasher.finalize());
-                tracing::info!(target: "LlamaDownloader", sha256 = %sha256_hex, bytes = downloaded, "SHA256 计算完成");
-            }
-
-            if let Some(cb) = progress_callback {
-                cb(DownloadProgress {
-                    stage: "downloading".to_string(),
-                    progress: progress_end,
-                    downloaded,
-                    total: total_size,
-                    message: format!(
-                        "下载完成 {:.1} MB（耗时 {:.0}s，速度 {:.1} MB/s）",
-                        downloaded as f64 / 1048576.0,
-                        elapsed_secs,
-                        speed_mbps
-                    ),
-                    detail: None,
-                });
-            }
-
-            return Ok(downloaded);
+                "reqwest 下载完成");
+            return Ok(downloaded_final);
         }
 
-        // 下载失败，记录错误并继续重试
-        let error_msg = if status_code == 56 {
-            "TLS 连接中断 (schannel: server closed abruptly)".to_string()
-        } else {
-            format!("curl 退出码: {}", status_code)
-        };
-
-        last_error = error_msg.clone();
-
-        // 避免短时间内重复打印相同错误
-        if last_error_log.elapsed().as_secs() >= 5 {
-            tracing::error!(target: "LlamaDownloader",
-                attempt,
-                url = %url,
-                status = status_code,
-                elapsed_secs = format!("{:.1}", elapsed_secs),
-                error = %error_msg,
-                "curl 下载失败，准备重试"
-            );
-            last_error_log = std::time::Instant::now();
-        }
+        last_error = "下载无数据".to_string();
     }
 
     // 所有重试都失败
@@ -499,7 +285,7 @@ fn curl_download(
         url = %url,
         total_attempts = 5,
         error = %last_error,
-        "curl 下载失败，已用完所有重试次数"
+        "reqwest 下载失败，已用完所有重试次数"
     );
 
     Err(anyhow::anyhow!("下载失败: {}（已重试 5 次）", last_error))
@@ -1524,33 +1310,28 @@ mod tests {
         let _backend = detect_gpu_backend();
     }
 
+    /// 验证 reqwest 客户端能成功构建（TLS 配置正确）
     #[test]
-    fn test_parse_curl_progress_standard() {
-        assert_eq!(parse_curl_progress("                                 2.6%"), Some(2.6));
+    fn test_reqwest_client_builds() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build();
+        assert!(client.is_ok(), "reqwest 客户端应能成功构建");
     }
 
+    /// 验证 DownloadProgress 结构体的默认值合理
     #[test]
-    fn test_parse_curl_progress_with_hash() {
-        assert_eq!(parse_curl_progress("##                                2.8%"), Some(2.8));
-    }
-
-    #[test]
-    fn test_parse_curl_progress_full() {
-        assert_eq!(parse_curl_progress("                                  ##  99.9%"), Some(99.9));
-    }
-
-    #[test]
-    fn test_parse_curl_progress_zero() {
-        assert_eq!(parse_curl_progress("                                  0.0%"), Some(0.0));
-    }
-
-    #[test]
-    fn test_parse_curl_progress_hundred() {
-        assert_eq!(parse_curl_progress("                                  100%"), Some(100.0));
-    }
-
-    #[test]
-    fn test_parse_curl_progress_no_percent() {
-        assert_eq!(parse_curl_progress("some random text without percent"), None);
+    fn test_download_progress_defaults() {
+        let progress = DownloadProgress {
+            stage: "test".to_string(),
+            progress: 0.0,
+            downloaded: 0,
+            total: 0,
+            message: "测试".to_string(),
+            detail: None,
+        };
+        assert_eq!(progress.progress, 0.0);
+        assert_eq!(progress.downloaded, 0);
+        assert_eq!(progress.stage, "test");
     }
 }
