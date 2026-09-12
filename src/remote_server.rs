@@ -75,6 +75,7 @@ impl RemoteServerInfo {
     }
 
     /// 验证 URL 格式是否合法（必须是 http:// 或 https:// 开头）。
+    /// 远程服务器必须使用 HTTPS，且主机名必须在白名单中（允许 localhost/127.0.0.1 用于本地开发）。
     pub fn validate_url(&self) -> Result<(), String> {
         if !self.url.starts_with("http://") && !self.url.starts_with("https://") {
             return Err("URL 必须以 http:// 或 https:// 开头".to_string());
@@ -86,6 +87,25 @@ impl RemoteServerInfo {
             return Err(
                 "远程服务器必须使用 HTTPS 协议（本地 localhost 允许 HTTP）".to_string(),
             );
+        }
+        // 安全校验：远程 URL 的主机名不能是敏感内部地址
+        if !is_local {
+            if let Some(host) = self.url.strip_prefix("https://").or_else(|| self.url.strip_prefix("http://")) {
+                let host = host.split('/').next().unwrap_or(host);
+                let host = host.split(':').next().unwrap_or(host);
+                let blocked_hosts: &[&str] = &[
+                    "localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254",
+                ];
+                for blocked in blocked_hosts {
+                    if host == *blocked {
+                        return Err(format!("不允许的远程主机：{}", host));
+                    }
+                }
+                // 拒绝私有 IP 段
+                if host.starts_with("192.168.") || host.starts_with("10.") || host.starts_with("172.") {
+                    return Err(format!("不允许的私有网络主机：{}", host));
+                }
+            }
         }
         Ok(())
     }
