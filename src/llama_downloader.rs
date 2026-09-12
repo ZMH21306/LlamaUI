@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use crate::util::process::silent_command;
@@ -150,9 +150,106 @@ pub mod stage_progress {
     pub const FINALIZE_END: f64 = 1.00;
 }
 
+/// 处理一行 curl stderr 输出（日志 + 进度回调）。
+///
+/// 这是把原先内联在读取循环里的逻辑抽出来的纯函数，便于按 '\r'/'\n'
+/// 切分后的任意片段复用。带时间节流：日志每 3s / 进度变化 10% 才打一次；
+/// 进度事件每 500ms 节流一次，避免前端被过于频繁的回调阻塞。
+#[allow(clippy::too_many_arguments)]
+fn process_curl_line(
+    line: &str,
+    last_log: &mut std::time::Instant,
+    last_emit: &mut std::time::Instant,
+    last_pct: &mut f64,
+    attempt: u32,
+    total_size: u64,
+    start: std::time::Instant,
+    progress_start: f64,
+    progress_range: f64,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) {
+    // 检测 curl 错误
+    if line.contains("curl:") {
+        tracing::warn!(target: "LlamaDownloader", line = %line, "检测到 curl 错误");
+    }
+
+    if let Some(pct) = parse_curl_progress(line) {
+        let now = std::time::Instant::now();
+        let downloaded = if total_size > 0 {
+            (total_size as f64 * pct / 100.0) as u64
+        } else {
+            0
+        };
+        let speed_mbps = if start.elapsed().as_secs_f64() > 0.0 {
+            downloaded as f64 / start.elapsed().as_secs_f64() / 1048576.0
+        } else {
+            0.0
+        };
+
+        // 每 3 秒或进度变化超过 10% 时记录日志
+        let should_log = now.duration_since(*last_log).as_secs() >= 3
+            || (pct - *last_pct).abs() >= 10.0
+            || speed_mbps == 0.0 && *last_pct > 0.0;
+
+        if should_log {
+            let speed_str = format!("{:.1}", speed_mbps);
+            tracing::info!(target: "LlamaDownloader",
+                attempt,
+                pct = format!("{:.1}", pct),
+                downloaded_mb = format!("{:.1}", downloaded as f64 / 1048576.0),
+                total_mb = format!("{:.1}", total_size as f64 / 1048576.0),
+                speed_mbps = %speed_str,
+                elapsed_secs = format!("{:.0}", start.elapsed().as_secs_f64()),
+                "下载进度"
+            );
+            *last_log = now;
+            *last_pct = pct;
+        }
+
+        // 进度事件节流：每 500ms 或进度变化 >1% 才推送，避免阻塞前端事件循环
+        let should_emit = now.duration_since(*last_emit).as_millis() >= 500
+            || (pct - *last_pct).abs() >= 1.0;
+        if should_emit {
+            *last_emit = now;
+            *last_pct = pct;
+
+            if let Some(cb) = progress_callback {
+                let eta_secs = if speed_mbps > 0.0 && total_size > downloaded {
+                    let remaining_bytes = total_size - downloaded;
+                    Some((remaining_bytes as f64 / (speed_mbps * 1048576.0)).max(0.0))
+                } else {
+                    None
+                };
+                cb(DownloadProgress {
+                    stage: "downloading".to_string(),
+                    // 将 curl 的 0~1 进度映射到全局 [progress_start, progress_end]
+                    progress: progress_start + (pct / 100.0) * progress_range,
+                    downloaded,
+                    total: total_size,
+                    message: format!(
+                        "下载中... {:.1} / {:.1} MB ({:.0}%)",
+                        downloaded as f64 / 1048576.0,
+                        total_size as f64 / 1048576.0,
+                        pct
+                    ),
+                    detail: Some(DownloadProgressDetail {
+                        step: format!("下载中 {:.0}%", pct),
+                        step_progress: pct / 100.0,
+                        candidate_index: 0,
+                        candidate_count: 0,
+                        current_candidate: None,
+                        speed_mbps,
+                        eta_secs,
+                    }),
+                });
+            }
+        }
+    }
+}
+
 /// 用 curl 下载文件到本地路径（spawn + 实时进度读取）
 ///
-/// 使用 `Command::spawn()` 启动 curl，逐行读取 stderr 中的进度输出，
+/// 使用 `Command::spawn()` 启动 curl，按字节读取 stderr 中的进度输出，
 /// 实时调用 `progress_callback` 报告下载进度。
 /// 支持断点续传和完整重试机制。
 ///
@@ -244,93 +341,73 @@ fn curl_download(
             .spawn()
             .map_err(|e| anyhow::anyhow!("curl 启动失败: {}", e))?;
 
-        // 逐行读取 stderr，解析 curl -# 进度
+        // 逐字节读取 stderr，解析 curl -# 进度。
+        //
+        // ⚠️ 关键修复（卡住根因）：原先用 BufReader::lines() 只按 '\n' 切行，
+        // 但 curl -# 的进度条是用 '\r'（回车）覆盖同一行、只在结束时输出 '\n'。
+        // lines() 会一直阻塞到 curl 退出才返回第一行 → 整个下载过程零进度事件，
+        // 前端永远停在「匹配到资产」。改为按字节读取、按 '\r' / '\n' 切分，
+        // 并带时间节流地向前端推送进度。
         let stderr = child
             .stderr
             .take()
             .ok_or_else(|| anyhow::anyhow!("无法获取 curl 子进程 stderr"))?;
-        let reader = BufReader::new(stderr);
+        let mut reader = BufReader::new(stderr);
         let mut last_log = std::time::Instant::now();
+        let mut last_emit = std::time::Instant::now();
         let mut last_pct: f64 = 0.0;
+        let mut buf = String::new();
+        let mut raw = [0u8; 4096];
 
-        for line_result in reader.lines() {
-            let line = match line_result {
-                Ok(l) => l,
+        loop {
+            let n = match reader.read(&mut raw) {
+                Ok(0) => break,
+                Ok(n) => n,
                 Err(e) => {
                     tracing::warn!(target: "LlamaDownloader", error = %e, "读取 stderr 失败");
                     break;
                 }
             };
-
-            // 检测 curl 错误
-            if line.contains("curl:") {
-                tracing::warn!(target: "LlamaDownloader", line = %line, "检测到 curl 错误");
-            }
-
-            if let Some(pct) = parse_curl_progress(&line) {
-                let now = std::time::Instant::now();
-                let downloaded = if total_size > 0 {
-                    (total_size as f64 * pct / 100.0) as u64
-                } else {
-                    0
-                };
-                let speed_mbps = if start.elapsed().as_secs_f64() > 0.0 {
-                    downloaded as f64 / start.elapsed().as_secs_f64() / 1048576.0
-                } else {
-                    0.0
-                };
-
-                // 每 3 秒或进度变化超过 10% 时记录日志
-                let should_log = now.duration_since(last_log).as_secs() >= 3
-                    || (pct - last_pct).abs() >= 10.0
-                    || speed_mbps == 0.0 && last_pct > 0.0;
-
-                if should_log {
-                    let speed_str = format!("{:.1}", speed_mbps);
-                    tracing::info!(target: "LlamaDownloader",
+            // 追加本次读到的字节，同时按 '\r' / '\n' 切分成完整片段处理
+            let chunk = String::from_utf8_lossy(&raw[..n]);
+            buf.push_str(&chunk);
+            let mut seg_start = 0;
+            for (i, ch) in buf.char_indices() {
+                if ch == '\r' || ch == '\n' {
+                    let line = buf[seg_start..i].to_string();
+                    process_curl_line(
+                        &line,
+                        &mut last_log,
+                        &mut last_emit,
+                        &mut last_pct,
                         attempt,
-                        pct = format!("{:.1}", pct),
-                        downloaded_mb = format!("{:.1}", downloaded as f64 / 1048576.0),
-                        total_mb = format!("{:.1}", total_size as f64 / 1048576.0),
-                        speed_mbps = %speed_str,
-                        elapsed_secs = format!("{:.0}", start.elapsed().as_secs_f64()),
-                        "下载进度"
+                        total_size,
+                        start,
+                        progress_start,
+                        progress_range,
+                        progress_callback,
                     );
-                    last_log = now;
-                    last_pct = pct;
-                }
-
-                if let Some(cb) = progress_callback {
-                    let eta_secs = if speed_mbps > 0.0 && total_size > downloaded {
-                        let remaining_bytes = total_size - downloaded;
-                        Some((remaining_bytes as f64 / (speed_mbps * 1048576.0)).max(0.0))
-                    } else {
-                        None
-                    };
-                    cb(DownloadProgress {
-                        stage: "downloading".to_string(),
-                        // 将 curl 的 0~1 进度映射到全局 [progress_start, progress_end]
-                        progress: progress_start + (pct / 100.0) * progress_range,
-                        downloaded,
-                        total: total_size,
-                        message: format!(
-                            "下载中... {:.1} / {:.1} MB ({:.0}%)",
-                            downloaded as f64 / 1048576.0,
-                            total_size as f64 / 1048576.0,
-                            pct
-                        ),
-                        detail: Some(DownloadProgressDetail {
-                            step: format!("下载中 {:.0}%", pct),
-                            step_progress: pct / 100.0,
-                            candidate_index: 0,
-                            candidate_count: 0,
-                            current_candidate: None,
-                            speed_mbps,
-                            eta_secs,
-                        }),
-                    });
+                    seg_start = i + ch.len_utf8();
                 }
             }
+            // 保留未完成的尾部片段（可能是一个不完整的进度行）
+            buf = buf[seg_start..].to_string();
+        }
+
+        // 处理末尾残留的片段（curl 结束时可能没有换行）
+        if !buf.is_empty() {
+            process_curl_line(
+                &buf,
+                &mut last_log,
+                &mut last_emit,
+                &mut last_pct,
+                attempt,
+                total_size,
+                start,
+                progress_start,
+                progress_range,
+                progress_callback,
+            );
         }
 
         // 等待 curl 进程结束，获取退出状态
