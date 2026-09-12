@@ -106,8 +106,8 @@ llama-server --models-dir <目录> --port <端口> -ngl 99 --host 127.0.0.1
 | `init` | 启动初始化（环境检查 → 驱动检查 → 自动加载） |
 | `config` | 配置持久化（JSON + schema 版本迁移） |
 | `config_io` | 配置导入/导出（JSON 格式） |
+| `model_management` | 模型管理（加载/卸载/模型信息） |
 | `recovery` | 错误诊断与恢复建议 |
-| `metrics_enhanced` | 增强版性能指标（滑动平均/趋势/峰值） |
 | `error` | 统一错误类型（AppError + 子错误） |
 | `events` | 事件名常量 + payload 类型（5 个事件） |
 | `log` | 日志发射统一入口 |
@@ -222,7 +222,7 @@ LlamaUI/
 
 ## 测试
 
-项目包含 196 个单元测试，覆盖关键安全逻辑：
+项目包含 194 个单元测试，覆盖关键安全逻辑：
 
 ```bash
 cargo test --lib
