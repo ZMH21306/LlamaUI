@@ -1,7 +1,7 @@
 ﻿# LlamaUI
 
 > LLM Desktop Console for managing llama-server
-> （当前程序处于测试版本，可能存在不稳定和各种未知问题！）
+
 [![Release](https://img.shields.io/github/v/release/ZMH21306/LlamaUI?label=version&sort=semver)](https://github.com/ZMH21306/LlamaUI/releases)
 [![License](https://img.shields.io/github/license/ZMH21306/LlamaUI)](LICENSE)
 
