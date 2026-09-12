@@ -172,6 +172,7 @@ const els = {
   themeToggle: $('themeToggle'),
   // 配置预设
   configTemplateSelect: $('configTemplateSelect'),
+
 };
 
 // ============= 工具函数 =============
@@ -2346,17 +2347,6 @@ async function init() {
     updateStatusUI(status.status);
   }, '获取状态失败');
 
-  // 加载 HF 模型商城默认下载目录
-  safeCall(async () => {
-    const dir = await invoke('get_hf_download_dir');
-    const el = $('hfDownloadDirDisplay');
-    const wrap = $('hfQuickStatus');
-    if (el && dir) {
-      el.textContent = dir;
-      if (wrap) wrap.style.display = '';
-    }
-  }, '加载HF下载目录失败');
-
   // 加载历史日志
   // 启动时只加载最近 200 行，避免构建 5000+ DOM 节点卡住 UI。
   // 后续新日志通过 rAF 批量追加，效率更高。
@@ -2490,13 +2480,54 @@ function buildLogFragment(line) {
  * 导出日志到文件。
  * 支持 txt/json/csv 三种格式。
  */
+// 自定义导出格式选择弹窗（替代原生 prompt，符合 UI 主题）
+function showExportFormatModal() {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('exportFormatModal');
+    const confirmBtn = document.getElementById('exportFormatConfirm');
+    const cancelBtn = document.getElementById('exportFormatCancel');
+    const radios = modal ? modal.querySelectorAll('input[type="radio"]') : [];
+    if (!modal) { resolve('txt'); return; }
+
+    // 默认选中 txt
+    radios.forEach(r => r.checked = r.value === 'txt');
+
+    const cleanup = (val) => {
+      modal.hidden = true;
+      confirmBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      modal.querySelectorAll('[data-modal-close]').forEach(el =>
+        el.removeEventListener('click', onCancel)
+      );
+      document.removeEventListener('keydown', onKey);
+      resolve(val);
+    };
+    const onOk = () => {
+      const checked = modal.querySelector('input[type="radio"]:checked');
+      cleanup(checked ? checked.value : 'txt');
+    };
+    const onCancel = () => cleanup(null);
+    const onKey = (e) => {
+      if (e.key === 'Escape') onCancel();
+      else if (e.key === 'Enter') onOk();
+    };
+
+    confirmBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    modal.querySelectorAll('[data-modal-close]').forEach(el =>
+      el.addEventListener('click', onCancel)
+    );
+    document.addEventListener('keydown', onKey);
+    modal.hidden = false;
+    // 聚焦第一个 radio
+    setTimeout(() => radios[0] && radios[0].focus(), 0);
+  });
+}
+
 async function handleExportLogs() {
-  // 简单格式选择
-  const format = prompt('导出格式（txt/json/csv）：', 'txt');
-  if (!format || !['txt', 'json', 'csv'].includes(format)) {
-    showNotification('请选择有效的导出格式（txt、json 或 csv）', 'warning');
-    return;
-  }
+  // 使用自定义弹窗选择导出格式（不使用原生 prompt，符合 UI 主题）
+  const format = await showExportFormatModal();
+  if (!format) return;
 
   const { save } = window.__TAURI__.dialog;
   const path = await save({
