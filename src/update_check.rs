@@ -1,13 +1,13 @@
 //! 自动更新检查。
 //!
-//! 通过 curl 调用 GitHub Releases API 检查最新版本，识别新版本目录，
-//! 检测旧版本残留并提示用户清理。使用 curl 子进程而非 ureq 库，
-//! 以确保在各种网络环境（代理、TLS）下都能正常工作。
+//! 通过 reqwest（带 TLS 证书验证）调用 GitHub Releases API 检查最新版本，
+//! 识别新版本目录，检测旧版本残留并提示用户清理。
+//! 使用 reqwest 而非 curl 子进程，确保 TLS 证书链被正确验证。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::util::process::silent_command;
+use std::time::Duration;
 
 /// 获取 GitHub Token（优先级：GITHUB_TOKEN/gh token → GH_TOKEN → 无）
 ///
@@ -21,7 +21,10 @@ fn get_github_token() -> Option<String> {
         }
     }
     // 2. gh CLI auth token（用户通过 gh auth login 登录后自动获取）
-    if let Ok(output) = silent_command("gh").args(["auth", "token"]).output() {
+    if let Ok(output) = crate::util::process::silent_command("gh")
+        .args(["auth", "token"])
+        .output()
+    {
         if output.status.success() {
             let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !token.is_empty() {
@@ -41,38 +44,34 @@ fn get_github_token() -> Option<String> {
     None
 }
 
-/// 用 curl 获取 URL 内容（自动继承系统代理和 TLS 配置）
-fn curl_get_json(url: &str) -> anyhow::Result<String> {
-    tracing::debug!(target: "UpdateCheck", url = %url, "curl GET 请求");
+/// 用 reqwest（带 TLS 证书验证）获取 GitHub API JSON。
+/// 使用系统代理配置，连接超时 10s，读取超时 15s。
+fn http_get_json(url: &str) -> anyhow::Result<String> {
+    tracing::debug!(target: "UpdateCheck", url = %url, "HTTP GET 请求");
 
     let token = get_github_token();
-    let auth_header = token.as_deref().map(|t| format!("Authorization: token {}", t));
+    let mut request = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?
+        .get(url)
+        .header("Accept", "application/vnd.github.v3+json")
+        .header("User-Agent", "LlamaUI-UpdateCheck");
 
-    let mut args: Vec<&str> = vec![
-        "-s", "-L", "--max-time", "15",
-        "-H", "Accept: application/vnd.github.v3+json",
-    ];
-    // 需要持有 auth_header 的引用
-    let auth_ref;
-    if let Some(ref h) = auth_header {
-        auth_ref = h.as_str();
-        args.push("-H");
-        args.push(auth_ref);
-    }
-    args.push(url);
-
-    let output = silent_command("curl")
-        .args(&args)
-        .output()
-        .map_err(|e| anyhow::anyhow!("curl 不存在或无法执行: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!(target: "UpdateCheck", stderr = %stderr, "curl 请求失败");
-        return Err(anyhow::anyhow!("curl 请求失败: {}", stderr));
+    if let Some(ref t) = token {
+        request = request.header("Authorization", format!("token {}", t));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let response = request.send()?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        tracing::warn!(target: "UpdateCheck", status = %status, body = %body, "HTTP 请求失败");
+        return Err(anyhow::anyhow!("HTTP {}: {}", status, body));
+    }
+
+    let body = response.text()?;
+    Ok(body)
 }
 
 /// 更新检查结果
@@ -167,7 +166,7 @@ pub fn check_for_updates() -> anyhow::Result<UpdateCheckResult> {
 fn fetch_latest_release() -> anyhow::Result<GitHubReleaseResponse> {
     let url = "https://api.github.com/repos/ZMH21306/LlamaUI/releases/latest";
 
-    let json_str = curl_get_json(url)?;
+    let json_str = http_get_json(url)?;
 
     // 检查是否被限流
     if json_str.contains("API rate limit exceeded") {
