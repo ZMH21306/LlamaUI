@@ -121,21 +121,33 @@ impl AppConfig {
                 value: self.mtp_draft_n_max,
             });
         }
-        if self.custom_command.contains('\0') {
-            return Err(ConfigError::NulInPath {
-                field: "custom_command",
-            });
-        }
-        if self.extra_args.contains('\0') {
-            return Err(ConfigError::NulInPath {
-                field: "extra_args",
-            });
+        // 安全加固：检测命令注入（shell 元字符）
+        for field_name in &["custom_command", "extra_args"] {
+            let value = if *field_name == "custom_command" {
+                &self.custom_command
+            } else {
+                &self.extra_args
+            };
+            if value.contains('\0') {
+                return Err(ConfigError::NulInPath {
+                    field: field_name.to_string(),
+                });
+            }
+            // 拒绝包含 shell 管道/重定向/命令分隔符的命令
+            for ch in &['|', '&', ';', '`', '$', '\n', '\r'] {
+                if value.contains(*ch) {
+                    return Err(ConfigError::InvalidCharInField {
+                        field: field_name.to_string(),
+                        ch: *ch,
+                    });
+                }
+            }
         }
         if let Some(p) = &self.llama_server_path {
             if !p.is_empty() {
                 if p.contains('\0') {
                     return Err(ConfigError::NulInPath {
-                        field: "llama_server_path",
+                        field: "llama_server_path".to_string(),
                     });
                 }
                 let pb = std::path::Path::new(p);
@@ -150,7 +162,7 @@ impl AppConfig {
         if !self.models_dir.is_empty() {
             if self.models_dir.contains('\0') {
                 return Err(ConfigError::NulInPath {
-                    field: "models_dir",
+                    field: "models_dir".to_string(),
                 });
             }
             let pb = std::path::Path::new(&self.models_dir);
@@ -387,6 +399,22 @@ mod tests {
     fn validate_rejects_nul_in_extra_args() {
         let mut cfg = base_cfg();
         cfg.extra_args = "--prompt \"\0evil\"".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    // ---- P0: 命令注入防护（shell 元字符）----
+    #[test]
+    fn validate_rejects_shell_metacharacters_in_custom_command() {
+        let mut cfg = base_cfg();
+        cfg.mode = "pro".to_string();
+        cfg.custom_command = "llama-server | whoami".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_shell_metacharacters_in_extra_args() {
+        let mut cfg = base_cfg();
+        cfg.extra_args = "--prompt \"x\"; touch /tmp/pwned".to_string();
         assert!(cfg.validate().is_err());
     }
 
