@@ -95,7 +95,7 @@ pub enum ConfigError {
     MtpDraftOutOfRange { value: u32 },
 
     #[error("路径中不能含 NUL 字符：`{field}`")]
-    NulInPath { field: &'static str },
+    NulInPath { field: String },
 
     #[error("路径不存在：`{0}`")]
     PathNotFound(PathBuf),
@@ -105,6 +105,10 @@ pub enum ConfigError {
 
     #[error("路径不是目录：`{0}`")]
     NotADirectory(PathBuf),
+
+    /// 字段中包含非法 shell 元字符（命令注入防护）。
+    #[error("字段 `{field}` 中包含非法字符 `{ch}`（命令注入防护）")]
+    InvalidCharInField { field: String, ch: char },
 
     /// 其他未分类配置错误。
     #[error("{0}")]
@@ -167,7 +171,7 @@ mod tests {
 
     #[test]
     fn config_error_display_includes_field_name() {
-        let e = ConfigError::NulInPath { field: "llama_server_path" };
+        let e = ConfigError::NulInPath { field: "llama_server_path".to_string() };
         let s = e.to_string();
         assert!(s.contains("llama_server_path"), "必须包含字段名：{}", s);
     }
