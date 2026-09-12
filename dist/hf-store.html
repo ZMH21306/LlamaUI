@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body class="hf-store">
+  <div id="toastContainer"></div>
   <div class="hf-store-app">
     <header class="hf-store-header">
       <div class="hf-store-title-row">
@@ -15,18 +16,6 @@
           <svg class="hf-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           <input type="search" id="hfSearchInput" class="hf-search-input" placeholder="搜索模型，如 qwen llama gemma..." autocomplete="off" />
           <button class="btn-primary hf-inline-btn" id="hfSearchBtn">搜索</button>
-        </div>
-      </div>
-      <div class="hf-settings-row">
-        <div class="hf-setting-item">
-          <label for="hfTokenInput">HF Token:</label>
-          <input type="password" id="hfTokenInput" placeholder="可选，未登录限速" class="hf-token-input" />
-          <button class="btn-secondary hf-token-save-btn" id="hfTokenSaveBtn">保存</button>
-        </div>
-        <div class="hf-setting-item">
-          <label for="hfDownloadDirInput">下载目录:</label>
-          <input type="text" id="hfDownloadDirInput" placeholder="加载中..." class="hf-download-dir-input" />
-          <button class="btn-secondary hf-download-dir-save-btn" id="hfDownloadDirSaveBtn">保存</button>
         </div>
       </div>
     </header>
