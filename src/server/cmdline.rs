@@ -71,15 +71,19 @@ pub(crate) fn osstr_to_utf8(p: &std::path::Path) -> String {
 ///
 /// 已知变量：llama_server、models_dir、port、host、llama_server_quote、models_dir_quote。
 /// 未知变量保持原样（不替换）。
+///
+/// 安全：`%%models_dir%%` 使用加引号的形式（等同于 `%%models_dir_quote%%`），
+/// 防止路径中含分号、空格等字符导致命令注入。
 pub fn expand_pro_vars(text: &str, cfg: &AppConfig) -> String {
     let program = resolve_program(cfg);
     let program_q = quote_path(&program);
     let models_q = quote_path(&cfg.models_dir);
     text
-        .replace("%%llama_server%%", &program_q)         // 默认加引号
-        .replace("%%llama_server_quote%%", &program_q)  // 兼容旧模板
-        .replace("%%models_dir%%", &models_q)           // 默认加引号
-        .replace("%%models_dir_quote%%", &models_q)     // 兼容旧模板
+        .replace("%%llama_server%%", &program_q)
+        .replace("%%llama_server_quote%%", &program_q)
+        // P0-4 安全修复：%%models_dir%% 必须加引号，防止命令注入
+        .replace("%%models_dir%%", &models_q)
+        .replace("%%models_dir_quote%%", &models_q)
         .replace("%%port%%", &cfg.port.to_string())
         .replace("%%host%%", "127.0.0.1")
 }
