@@ -49,7 +49,7 @@ mod remote_server;
 mod server;
 mod tracing_setup;
 mod update_check;
-mod util;
+pub mod util;
 
 pub use error::{AppError, ConfigError, DetectError, ProcessError};
 pub use events::{LogLine, ServerStatus, StepStatus};
@@ -84,10 +84,18 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let label = window.label();
+                // HuggingFace 模型商店窗口：关闭时隐藏而非销毁，确保后续
+                // open_hf_store_window 能通过 get_webview_window 复用同一实例，
+                // 避免 config 预创建 + builder 重建导致的"弹两个窗口"问题。
+                if label == "hf-store" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
                 if label == "main" {
                     // 关闭 hf-store 窗口（如果存在），避免其成为孤儿窗口
                     if let Some(hf_window) = window.app_handle().get_webview_window("hf-store") {
-                        let _ = hf_window.close();
+                        let _ = hf_window.hide();
                     }
                     let state = window.state::<AppState>();
                     let status = state.server.status();
