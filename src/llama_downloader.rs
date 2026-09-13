@@ -1060,13 +1060,22 @@ pub fn download_and_install(
             message: "初始化下载环境...".to_string(),
             detail: None,
         });
+        // 初始化完成后推进到 1%
+        cb(DownloadProgress {
+            stage: "init".to_string(),
+            progress: stage_progress::INIT_END,
+            downloaded: 0,
+            total: 0,
+            message: "初始化完成".to_string(),
+            detail: None,
+        });
     }
 
     // 1. 获取最新版本（带重试）
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
             stage: "fetching_version".to_string(),
-            progress: 0.0,
+            progress: stage_progress::INIT_END,
             downloaded: 0,
             total: 0,
             message: format!("获取最新版本（最多 {} 次重试）...", max_retries),
