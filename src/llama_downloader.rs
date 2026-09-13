@@ -1052,32 +1052,59 @@ pub fn download_and_install(
     let archive_path = install_dir.join(format!("llama{}{}", tag, ext));
     fs::create_dir_all(install_dir)?;
 
-    let mut download_attempt = 0;
-    let downloaded = loop {
-        download_attempt += 1;
-        match curl_download(
-            &asset.browser_download_url,
-            &archive_path,
-            total_size,
-            stage_progress::DOWNLOAD_START,
-            stage_progress::DOWNLOAD_END,
-            progress_callback,
-        ) {
-            Ok(size) => break size,
-            Err(e) => {
-                tracing::warn!(
-                    target: "LlamaDownloader",
-                    attempt = download_attempt,
-                    error = %e,
-                    "下载失败，准备重试"
-                );
-                if download_attempt >= max_retries {
-                    return Err(e);
-                }
-                std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(download_attempt)));
-            }
+    // 3a. 检查本地归档是否已存在且大小匹配（跳过重复下载，避免耗尽请求配额）
+    let archive_exists = archive_path.exists();
+    let archive_size = fs::metadata(&archive_path).map(|m| m.len()).unwrap_or(0);
+    let archive_matches = total_size > 0 && archive_size == total_size;
+
+    let downloaded: u64;
+
+    if archive_exists && archive_matches {
+        tracing::info!(
+            target: "LlamaDownloader",
+            archive = %archive_path.display(),
+            size = archive_size,
+            "本地归档已存在且大小匹配，跳过下载"
+        );
+        if let Some(cb) = progress_callback {
+            cb(DownloadProgress {
+                stage: "downloading".to_string(),
+                progress: stage_progress::DOWNLOAD_END,
+                downloaded: archive_size,
+                total: archive_size,
+                message: format!("✅ 本地归档已存在 ({:.1} MB)，跳过下载", archive_size as f64 / 1048576.0),
+                detail: None,
+            });
         }
-    };
+        downloaded = archive_size;
+    } else {
+        let mut download_attempt = 0;
+        downloaded = loop {
+            download_attempt += 1;
+            match curl_download(
+                &asset.browser_download_url,
+                &archive_path,
+                total_size,
+                stage_progress::DOWNLOAD_START,
+                stage_progress::DOWNLOAD_END,
+                progress_callback,
+            ) {
+                Ok(size) => break size,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "LlamaDownloader",
+                        attempt = download_attempt,
+                        error = %e,
+                        "下载失败，准备重试"
+                    );
+                    if download_attempt >= max_retries {
+                        return Err(e);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(download_attempt)));
+                }
+            }
+        };
+    }
 
     // 5. 解压
     tracing::info!(target: "LlamaDownloader", archive = %archive_path.display(), dest = %install_dir.display(), "开始解压");

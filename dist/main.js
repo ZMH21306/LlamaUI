@@ -1782,7 +1782,7 @@ function attachUIListeners() {
     unlisten();
     btn.disabled = false;
     btn.textContent = '🚀 自动下载 llama-server';
-    setTimeout(function() { els.downloadProgress.style.display = 'none'; }, 8000);
+    setTimeout(function() { els.downloadProgress.style.display = 'none'; }, 3000);
   });
 
 // ============ GPU 信息刷新 ============
