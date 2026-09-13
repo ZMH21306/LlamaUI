@@ -105,18 +105,21 @@ fn curl_head(url: &str) -> anyhow::Result<u64> {
 /// 下载阶段常量（用于统一的进度分配）
 ///
 /// 总进度 (0.0 ~ 1.0) 分配如下：
-/// - ① 获取最新版本     : 0% ~ 2%   （2%）
-/// - ② 智能匹配资产     : 2% ~ 10%  （8%）
-/// - ③ 下载安装包       : 10% ~ 88% （78%，主阶段）
-/// - ④ 解压归档         : 88% ~ 96% （8%）
-/// - ⑤ 设置权限+清理    : 96% ~ 100%（4%）
+/// - ① 初始化          : 0% ~ 1%   （1%）
+/// - ② 获取最新版本     : 1% ~ 5%   （4%，含重试）
+/// - ③ 智能匹配资产     : 5% ~ 12%  （7%）
+/// - ④ 下载安装包       : 12% ~ 88% （76%，主阶段）
+/// - ⑤ 解压归档         : 88% ~ 95% （7%）
+/// - ⑥ 设置权限+清理    : 95% ~ 99% （4%）
+/// - ⑦ 完成             : 99% ~ 100%（1%）
 pub mod stage_progress {
-    pub const FETCHING_VERSION_END: f64 = 0.02;
-    pub const FINDING_ASSET_END: f64 = 0.10;
-    pub const DOWNLOAD_START: f64 = 0.10;
+    pub const INIT_END: f64 = 0.01;
+    pub const FETCHING_VERSION_END: f64 = 0.05;
+    pub const FINDING_ASSET_END: f64 = 0.12;
+    pub const DOWNLOAD_START: f64 = 0.12;
     pub const DOWNLOAD_END: f64 = 0.88;
-    pub const EXTRACTING_END: f64 = 0.96;
-    pub const FINALIZE_END: f64 = 1.00;
+    pub const EXTRACTING_END: f64 = 0.95;
+    pub const COMPLETE_END: f64 = 1.00;
 }
 
 /// 下载阶段常量（用于统一的进度分配）
@@ -620,7 +623,11 @@ fn build_asset_name(tag: &str, backend: GpuBackend) -> String {
 
 /// 解压 tar.gz
 #[allow(clippy::print_stderr)]
-pub fn extract_tar_gz(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub fn extract_tar_gz(
+    archive: &Path,
+    dest: &Path,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) -> anyhow::Result<Vec<PathBuf>> {
     tracing::debug!(target: "LlamaDownloader", archive = %archive.display(), "解压 tar.gz");
     fs::create_dir_all(dest)?;
 
@@ -628,6 +635,10 @@ pub fn extract_tar_gz(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf
     let tar_gz = fs::File::open(archive)?;
     let dec = flate2::read::GzDecoder::new(tar_gz);
     let mut archive = tar::Archive::new(dec);
+
+    let total_entries = archive.entries()?.count() as u64;
+    let extraction_range = stage_progress::EXTRACTING_END - stage_progress::DOWNLOAD_END;
+    let mut processed = 0u64;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -642,6 +653,19 @@ pub fn extract_tar_gz(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf
         }
 
         entry.unpack(&out_path)?;
+        processed += 1;
+        if let Some(cb) = progress_callback {
+            let p = stage_progress::DOWNLOAD_END
+                + (processed as f64 / total_entries.max(1) as f64) * extraction_range;
+            cb(DownloadProgress {
+                stage: "extracting".to_string(),
+                progress: p,
+                downloaded: 0,
+                total: 0,
+                message: format!("解压中... 已处理 {}/{}", processed, total_entries),
+                detail: None,
+            });
+        }
     }
 
     tracing::info!(target: "LlamaDownloader", count = extracted_files.len(), "解压完成，找到 llama-server 文件");
@@ -651,14 +675,18 @@ pub fn extract_tar_gz(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf
 /// 解压 zip（Windows）
 #[cfg(windows)]
 #[allow(clippy::print_stderr)]
-pub fn extract_zip(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub fn extract_zip(
+    archive: &Path,
+    dest: &Path,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) -> anyhow::Result<Vec<PathBuf>> {
     tracing::debug!(target: "LlamaDownloader", archive = %archive.display(), "解压 zip");
     fs::create_dir_all(dest)?;
 
     let mut extracted_files = Vec::new();
 
     // 先尝试 tar
-    let result = extract_tar_gz(archive, dest);
+    let result = extract_tar_gz(archive, dest, progress_callback);
 
     match result {
         Ok(files) if !files.is_empty() => {
@@ -678,6 +706,17 @@ pub fn extract_zip(archive: &Path, dest: &Path) -> anyhow::Result<Vec<PathBuf>> 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(anyhow::anyhow!("解压失败: {}", stderr));
+            }
+            // 通知前端：PowerShell 解压完成
+            if let Some(cb) = progress_callback {
+                cb(DownloadProgress {
+                    stage: "extracting".to_string(),
+                    progress: stage_progress::EXTRACTING_END,
+                    downloaded: 0,
+                    total: 0,
+                    message: "解压完成（PowerShell）".to_string(),
+                    detail: None,
+                });
             }
         }
     }
@@ -741,7 +780,7 @@ fn smart_find_asset<'a>(
     if let Some(cb) = progress_callback {
         cb(progress_simple(
             "finding_asset",
-            stage_progress::FETCHING_VERSION_END,
+            stage_progress::INIT_END,
             format!("开始匹配资产（共 {} 个候选需要验证）...", asset_count),
         ));
     }
@@ -797,7 +836,7 @@ fn smart_find_asset<'a>(
         if let Some(cb) = progress_callback {
             cb(progress_simple(
                 "finding_asset",
-                stage_progress::FETCHING_VERSION_END,
+                stage_progress::INIT_END,
                 "精确匹配失败，尝试宽松匹配...".to_string(),
             ));
         }
@@ -822,13 +861,13 @@ fn smart_find_asset<'a>(
     if let Some(cb) = progress_callback {
         cb(progress_simple(
             "finding_asset",
-            stage_progress::FETCHING_VERSION_END,
+            stage_progress::INIT_END,
             format!("开始匹配资产（共 {} 个候选需要验证）...", total_candidates),
         ));
     }
 
     // 并行执行所有 HEAD 请求，避免串行等待
-    let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FETCHING_VERSION_END;
+    let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::INIT_END;
     let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
     let results: Vec<(usize, anyhow::Result<u64>)> = std::thread::scope(|s| {
         urls
@@ -849,7 +888,7 @@ fn smart_find_asset<'a>(
         let asset = &candidates[i];
         let candidate_name = &asset.name;
 
-        let verify_progress = stage_progress::FETCHING_VERSION_END
+        let verify_progress = stage_progress::INIT_END
             + (candidate_index as f64 / total_candidates as f64) * asset_range;
 
         match result {
@@ -944,8 +983,12 @@ fn smart_find_asset<'a>(
 }
 
 /// 带重试的 GitHub API 调用
-fn fetch_llama_latest_release_with_retry(max_retries: u32) -> anyhow::Result<GitHubRelease> {
+fn fetch_llama_latest_release_with_retry(
+    max_retries: u32,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) -> anyhow::Result<GitHubRelease> {
     let mut last_err: Option<anyhow::Error> = None;
+    let version_range = stage_progress::FETCHING_VERSION_END - stage_progress::INIT_END;
     for attempt in 1..=max_retries {
         tracing::info!(
             target: "LlamaDownloader",
@@ -953,6 +996,19 @@ fn fetch_llama_latest_release_with_retry(max_retries: u32) -> anyhow::Result<Git
             max = max_retries,
             "尝试获取最新版本"
         );
+        // 通知前端：第 N 次尝试
+        if let Some(cb) = progress_callback {
+            let p = stage_progress::INIT_END
+                + ((attempt - 1) as f64 / max_retries as f64) * version_range;
+            cb(DownloadProgress {
+                stage: "fetching_version".to_string(),
+                progress: p,
+                downloaded: 0,
+                total: 0,
+                message: format!("获取最新版本... 第 {} 次尝试", attempt),
+                detail: None,
+            });
+        }
         match fetch_llama_latest_release() {
             Ok(release) => {
                 if !release.tag_name.is_empty() {
@@ -994,6 +1050,18 @@ pub fn download_and_install(
         "开始下载安装流程（智能匹配模式）"
     );
 
+    // 0. 初始化阶段
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "init".to_string(),
+            progress: 0.0,
+            downloaded: 0,
+            total: 0,
+            message: "初始化下载环境...".to_string(),
+            detail: None,
+        });
+    }
+
     // 1. 获取最新版本（带重试）
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
@@ -1006,7 +1074,7 @@ pub fn download_and_install(
         });
     }
 
-    let release = fetch_llama_latest_release_with_retry(max_retries)?;
+    let release = fetch_llama_latest_release_with_retry(max_retries, progress_callback)?;
     let tag = &release.tag_name;
     tracing::info!(target: "LlamaDownloader", tag = %tag, count = release.assets.len(), "获取到最新版本");
 
@@ -1014,7 +1082,7 @@ pub fn download_and_install(
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
             stage: "finding_asset".to_string(),
-            progress: stage_progress::FETCHING_VERSION_END,
+            progress: stage_progress::INIT_END,
             downloaded: 0,
             total: 0,
             message: format!("查找匹配资产 (tag={})...", tag),
@@ -1120,13 +1188,13 @@ pub fn download_and_install(
     }
 
     #[cfg(windows)]
-    let extracted = extract_zip(&archive_path, install_dir).map_err(|e| {
+    let extracted = extract_zip(&archive_path, install_dir, progress_callback).map_err(|e| {
         tracing::error!(target: "LlamaDownloader", error = %e, archive = %archive_path.display(), "解压失败");
         e
     })?;
 
     #[cfg(not(windows))]
-    let extracted = extract_tar_gz(&archive_path, install_dir).map_err(|e| {
+    let extracted = extract_tar_gz(&archive_path, install_dir, progress_callback).map_err(|e| {
         tracing::error!(target: "LlamaDownloader", error = %e, archive = %archive_path.display(), "解压失败");
         e
     })?;
@@ -1177,7 +1245,7 @@ pub fn download_and_install(
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
             stage: "complete".to_string(),
-            progress: stage_progress::FINALIZE_END,
+            progress: stage_progress::COMPLETE_END,
             downloaded: file_size,
             total: file_size,
             message: format!(

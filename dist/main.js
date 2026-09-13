@@ -1637,6 +1637,7 @@ function attachUIListeners() {
       { id: 'finding_asset',    label: '匹配资产' },
       { id: 'downloading',      label: '下载' },
       { id: 'extracting',       label: '解压' },
+      { id: 'finalize',         label: '完成中' },
       { id: 'complete',         label: '完成' },
     ];
     let currentStageIdx = -1;
@@ -1744,14 +1745,19 @@ function attachUIListeners() {
         return;
       }
 
-      // retrying / extracting / complete
-      if (p.stage === 'retrying') {
-        setIndeterminate(p.message || '重试中...');
+      // extracting：显示真实解压进度
+      if (p.stage === 'extracting') {
+        clearIndeterminate();
+        const pct = p.progress * 100;
+        setProgress(pct, p.message || '解压中...');
         setMeta(0, null);
         return;
       }
-      if (p.stage === 'extracting') {
-        setIndeterminate('解压中...');
+      // finalize：最终清理
+      if (p.stage === 'finalize') {
+        clearIndeterminate();
+        const pct = p.progress * 100;
+        setProgress(pct, p.message || '正在完成安装...');
         setMeta(0, null);
         return;
       }
@@ -1767,10 +1773,11 @@ function attachUIListeners() {
     });
 
     try {
-      setStage('fetching_version');
-      setIndeterminate('检测 GPU 后端...');
+      setStage('init');
+      setIndeterminate('初始化下载环境...');
       const backend = await invoke('detect_gpu');
-      setIndeterminate('后端: ' + backend + '，准备下载...');
+      setStage('fetching_version');
+      setIndeterminate('后端: ' + backend + '，获取版本中...');
 
       const result = await invoke('download_llama_server', { backend });
       setStage('complete');
