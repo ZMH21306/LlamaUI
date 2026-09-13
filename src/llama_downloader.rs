@@ -70,8 +70,8 @@ fn get_github_token() -> Option<String> {
     None
 }
 
-/// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证）
-fn curl_head(url: &str) -> anyhow::Result<()> {
+/// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证），并返回 Content-Length 大小
+fn curl_head(url: &str) -> anyhow::Result<u64> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
@@ -79,10 +79,24 @@ fn curl_head(url: &str) -> anyhow::Result<()> {
     let response = client.head(url).send()?;
     let status = response.status();
 
-    tracing::debug!(target: "LlamaDownloader", url = %url, status = %status, "reqwest HEAD 验证");
+    // 尝试从响应头中提取文件大小（Content-Length）
+    let content_length = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    tracing::debug!(
+        target: "LlamaDownloader",
+        url = %url,
+        status = %status,
+        content_length,
+        "reqwest HEAD 验证"
+    );
 
     if status.is_success() || status.as_u16() == 301 || status.as_u16() == 302 {
-        Ok(())
+        Ok(content_length)
     } else {
         Err(anyhow::anyhow!("HTTP {} (不可用)", status.as_u16()))
     }
@@ -116,7 +130,7 @@ pub mod stage_progress {
 fn curl_download(
     url: &str,
     dest: &Path,
-    total_size: u64,
+    mut total_size: u64,
     progress_start: f64,
     progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
@@ -181,13 +195,29 @@ fn curl_download(
             request = request.header("Range", format!("bytes={}-", existing_size));
         }
 
-        let mut response = match request.send() {
+                let mut response = match request.send() {
             Ok(r) => r,
             Err(e) => {
                 last_error = format!("请求失败: {}", e);
                 continue;
             }
         };
+
+        // 从 GET 响应头获取 Content-Length（如果传入的 total_size 仍为 0）
+        if total_size == 0 {
+            if let Some(content_len) = response.headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                if existing_size > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                    // Range 响应：Content-Length 为剩余字节，需加上已下载的断点大小
+                    total_size = existing_size + content_len;
+                } else {
+                    total_size = content_len;
+                }
+            }
+        }
 
         if existing_size > 0 && total_size > 0 {
             if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
@@ -234,7 +264,11 @@ fn curl_download(
                 last_emit = now;
                 let pct = if total_size > 0 {
                     (downloaded as f64 / total_size as f64 * 100.0).min(100.0)
-                } else { 100.0 };
+                } else {
+                    // 总大小未知：不要跳到 100%，保持在下载阶段起始位置，
+                    // 仅通过 downloaded/total=0 让前端显示实时下载量
+                    0.0
+                };
                 if pct >= last_pct {
                     last_pct = pct;
                     if let Some(cb) = progress_callback {
@@ -680,11 +714,14 @@ fn find_llama_server_recursive(dir: &Path, results: &mut Vec<PathBuf>) -> anyhow
 /// 
 /// 每次候选验证都会通过 `progress_callback` 发送实时进度，
 /// 让前端能立即显示"验证候选 X/Y: xxx.zip"等详细信息。
+///
+/// 返回值：`Some((asset, head_size))`，其中 `head_size` 为 HEAD 请求获取的
+/// `Content-Length`；若 HEAD 未返回大小则为 0，由调用方结合 `asset.size` 兜底。
 fn smart_find_asset<'a>(
     release: &'a GitHubRelease,
     backend: GpuBackend,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
-) -> Option<&'a GitHubAsset> {
+) -> Option<(&'a GitHubAsset, u64)> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let tag = &release.tag_name;
@@ -793,7 +830,7 @@ fn smart_find_asset<'a>(
     // 并行执行所有 HEAD 请求，避免串行等待
     let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FETCHING_VERSION_END;
     let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
-    let results: Vec<(usize, anyhow::Result<()>)> = std::thread::scope(|s| {
+    let results: Vec<(usize, anyhow::Result<u64>)> = std::thread::scope(|s| {
         urls
             .iter()
             .enumerate()
@@ -816,7 +853,7 @@ fn smart_find_asset<'a>(
             + (candidate_index as f64 / total_candidates as f64) * asset_range;
 
         match result {
-            Ok(_) => {
+            Ok(content_length) => {
                 tracing::info!(
                     target: "LlamaDownloader",
                     name = %candidate_name,
@@ -843,7 +880,7 @@ fn smart_find_asset<'a>(
                         },
                     ));
                 }
-                return Some(asset);
+                return Some((asset, *content_length));
             }
             Err(e) => {
                 tracing::debug!(
@@ -900,7 +937,7 @@ fn smart_find_asset<'a>(
                 },
             ));
         }
-        return Some(asset);
+        return Some((asset, 0));
     }
 
     None
@@ -985,7 +1022,7 @@ pub fn download_and_install(
         });
     }
 
-    let asset = smart_find_asset(&release, backend, progress_callback).ok_or_else(|| {
+    let (asset, head_size) = smart_find_asset(&release, backend, progress_callback).ok_or_else(|| {
         let available: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
         anyhow::anyhow!(
             "未找到匹配资产。\n系统: {} {}\n后端: {}\ntag: {}\n可用资产: {:?}",
@@ -997,9 +1034,12 @@ pub fn download_and_install(
         )
     })?;
 
+    // 优先使用 HEAD 请求获取的 Content-Length，否则回退到 GitHub API 的 size 字段
+    let total_size = if head_size > 0 { head_size } else { asset.size };
+
     tracing::info!(target: "LlamaDownloader",
         name = %asset.name,
-        mb = asset.size as f64 / 1048576.0,
+        mb = total_size as f64 / 1048576.0,
         "找到匹配资产"
     );
 
@@ -1018,7 +1058,7 @@ pub fn download_and_install(
         match curl_download(
             &asset.browser_download_url,
             &archive_path,
-            asset.size,
+            total_size,
             stage_progress::DOWNLOAD_START,
             stage_progress::DOWNLOAD_END,
             progress_callback,
