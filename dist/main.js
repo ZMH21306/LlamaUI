@@ -316,7 +316,7 @@ function showNotification(text, type = 'info', duration = TOAST_DURATION) {
 }
 
 // 通用确认弹窗。返回 Promise<boolean>，true = 用户点确定。
-function showConfirm({ title = '确认', body = '', confirmText = '确定', cancelText = '取消' } = {}) {
+function showConfirm({ title = '确认', body = '', confirmText = '确定', cancelText = '取消', checkbox = null } = {}) {
   return new Promise((resolve) => {
     if (!els.modal || !els.modalBody || !els.modalTitle || !els.modalConfirm) {
       resolve(window.confirm(`${title}\n${body}`));
@@ -326,8 +326,18 @@ function showConfirm({ title = '确认', body = '', confirmText = '确定', canc
     els.modalBody.textContent = body;
     els.modalConfirm.textContent = confirmText;
     els.modalCancel.textContent = cancelText;
+    // 复选框：插入到 modalBody 之后、按钮之前
+    let checkboxEl = null;
+    if (checkbox) {
+      checkboxEl = document.createElement('div');
+      checkboxEl.style.cssText = 'display:flex;align-items:center;gap:8px;margin:12px 0 4px;cursor:pointer;font-size:13px;color:var(--text-2)';
+      checkboxEl.innerHTML = '<input type="checkbox" id="modalCheckbox" style="width:16px;height:16px;cursor:pointer" ' + (checkbox.default ? 'checked' : '') + '><span id="modalCheckboxLabel"></span>';
+      document.getElementById('modalCheckboxLabel').textContent = checkbox.label;
+      els.modalBody.parentNode.insertBefore(checkboxEl, els.modalBody.nextSibling);
+    }
     els.modal.hidden = false;
     let settled = false;
+    const getCheckbox = () => checkboxEl ? document.getElementById('modalCheckbox').checked : false;
     const cleanup = (val) => {
       if (settled) return;
       settled = true;
@@ -338,7 +348,8 @@ function showConfirm({ title = '确认', body = '', confirmText = '确定', canc
         el.removeEventListener('click', onCancel)
       );
       document.removeEventListener('keydown', onKey);
-      resolve(val);
+      if (checkboxEl) checkboxEl.remove();
+      resolve(checkbox ? { confirmed: val, checkbox: getCheckbox() } : val);
     };
     const onOk = () => cleanup(true);
     const onCancel = () => cleanup(false);
@@ -353,10 +364,9 @@ function showConfirm({ title = '确认', body = '', confirmText = '确定', canc
     );
     document.addEventListener('keydown', onKey);
     setTimeout(() => els.modalConfirm.focus(), 0);
-  });
+    });
 }
-
-// ============= 配置读写 =============
+window.showConfirm = showConfirm;
 function readConfigFromUI() {
   let extraArgs = '';
   if (state.mode === 'advanced' && els.advancedAccordion?.dataset.rendered) {

@@ -298,6 +298,7 @@ pub async fn download_hf_model(
     model_id: String,
     filename: String,
     install_dir: Option<String>,
+    use_mirror: bool,
     expected_size: Option<u64>,
 ) -> Result<HfDownloadResult, String> {
     // ===== 安全校验（P0-1 + P0-2 修复） =====
@@ -332,10 +333,9 @@ pub async fn download_hf_model(
         .map(PathBuf::from)
         .unwrap_or_else(|| state.download_dir.lock().clone());
     fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
-    let url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        model_id, filename
-    );
+    // 根据 use_mirror 选择下载域名：默认 https://huggingface.co，镜像 https://hf-mirror.com
+    let domain = if use_mirror { "https://hf-mirror.com" } else { "https://huggingface.co" };
+    let url = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
     let token = state.hf_token.lock().clone();
     let out_path = dir.join(&safe_filename);
     let out_path_str = out_path.to_string_lossy().to_string();
@@ -398,6 +398,9 @@ pub async fn download_hf_model(
         );
 
         let mut req = agent_for_download.get(&url_clone);
+        // 注入标准 Chrome User-Agent：HF CDN 对缺失/非标准 UA 的请求可能返回 403/404
+        // 或重定向到登录页，而 ureq 默认不带 UA，导致下载失败。浏览器能成功正是因为带了完整 UA。
+        req = req.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         if let Some(ref t) = token_clone {
             req = req.set("Authorization", &format!("Bearer {}", t));
         }
