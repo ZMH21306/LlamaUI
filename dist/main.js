@@ -1666,10 +1666,13 @@ function attachUIListeners() {
       }
     }
 
+    let maxProgress = 0;
     function setProgress(pct, label) {
       const clamped = Math.max(0, Math.min(100, pct));
-      if (bar) bar.style.width = clamped + '%';
-      if (percentEl) percentEl.textContent = clamped.toFixed(1) + '%';
+      const effectivePct = Math.max(maxProgress, clamped);
+      maxProgress = effectivePct;
+      if (bar) bar.style.width = effectivePct + '%';
+      if (percentEl) percentEl.textContent = effectivePct.toFixed(1) + '%';
       if (label && detailEl) detailEl.textContent = label;
     }
 
@@ -1702,6 +1705,7 @@ function attachUIListeners() {
     lastCandidate = '';
     renderSteps();
     setProgress(0, '准备中...');
+    if (els.downloadStatus) els.downloadStatus.textContent = '';
     setMeta(0, null);
     setStage('init');
 
@@ -1726,7 +1730,7 @@ function attachUIListeners() {
             d.step + (lastCandidate ? ' · ' + lastCandidate : '')
           );
         } else {
-          setProgress(0, p.message || '匹配资产中...');
+          setProgress(p.progress * 100, p.message || '匹配资产中...');
         }
         setMeta(0, null);
         return;
@@ -1735,7 +1739,8 @@ function attachUIListeners() {
       // downloading：即时显示百分比、速度、ETA
       if (p.stage === 'downloading') {
         clearIndeterminate();
-        const pct = p.progress * 100;
+        // 使用实际下载量/总大小计算百分比，而非全局进度（避免 0 字节时显示 12%）
+        const pct = p.total > 0 ? (p.downloaded / p.total * 100) : (p.progress * 100);
         const dlMB = (p.downloaded / 1048576).toFixed(2);
         const totalMB = p.total > 0 ? (p.total / 1048576).toFixed(2) : '?';
         const speed = d && d.speed_mbps ? d.speed_mbps : 0;
@@ -1799,7 +1804,8 @@ function attachUIListeners() {
     unlisten();
     btn.disabled = false;
     btn.textContent = '🚀 自动下载 llama-server';
-    setTimeout(function() { els.downloadProgress.style.display = 'none'; }, 3000);
+    // 下载完成直接关闭进度条（不再延迟 3 秒）
+    if (els.downloadProgress) els.downloadProgress.style.display = 'none';
   });
 
 // ============ GPU 信息刷新 ============
