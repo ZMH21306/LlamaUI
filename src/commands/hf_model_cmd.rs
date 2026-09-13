@@ -398,8 +398,6 @@ pub async fn download_hf_model(
         );
 
         let mut req = agent_for_download.get(&url_clone);
-        // 注入标准 Chrome User-Agent：HF CDN 对缺失/非标准 UA 的请求可能返回 403/404
-        // 或重定向到登录页，而 ureq 默认不带 UA，导致下载失败。浏览器能成功正是因为带了完整 UA。
         req = req.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         if let Some(ref t) = token_clone {
             req = req.set("Authorization", &format!("Bearer {}", t));
@@ -407,11 +405,7 @@ pub async fn download_hf_model(
         let call_start = std::time::Instant::now();
         let resp = req.call().map_err(|e| format!("HTTP 请求失败：{}", e))?;
 
-        // 复制一份 expected_size，供下方 headers 事件与 total 计算共用
-        // （Option 不能直接 move 两次）。
         let exp_size = expected_size;
-
-        // headers 已收到（call 成功返回），马上通知前端，避免连接阶段长时间无反馈
         let content_length: u64 = resp
             .header("Content-Length")
             .and_then(|v| v.parse::<u64>().ok())
@@ -433,26 +427,21 @@ pub async fn download_hf_model(
             },
         );
 
-        let total = resp
-            .header("Content-Length")
-            .and_then(|v| v.parse::<u64>().ok())
-            .or(expected_size)
-            .unwrap_or(0);
-        let mut reader = resp.into_reader();
+        let total = content_length;
         let mut file = match std::fs::File::create(&out_clone) {
             Ok(f) => f,
             Err(e) => return Err(format!("创建文件失败：{}", e)),
         };
+        let mut reader = resp.into_reader();
         let mut downloaded: u64 = 0;
         let mut buf = [0u8; 8192];
         let mut last_emit = std::time::Instant::now();
         let mut last_bytes = 0u64;
-        let mut last_time = start_time;
+        let mut last_time = std::time::Instant::now();
 
         loop {
-            // P2-4：检查取消信号。如果前端调用了 `cancel_hf_download`，
-            // 这里会立即收到，停止下载并删除不完整文件。
             if cancel_rx.try_recv().is_ok() {
+                drop(file);
                 let _ = std::fs::remove_file(&out_clone);
                 let _ = app_c.emit(
                     "hf-download-progress",
@@ -475,9 +464,7 @@ pub async fn download_hf_model(
             let n = reader
                 .read(&mut buf)
                 .map_err(|e| format!("读取网络数据失败：{}", e))?;
-            if n == 0 {
-                break;
-            }
+            if n == 0 { break; }
             file.write_all(&buf[..n])
                 .map_err(|e| format!("写入文件失败：{}", e))?;
             downloaded += n as u64;
