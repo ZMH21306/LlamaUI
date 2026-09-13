@@ -17,16 +17,77 @@ function renderF(mid,files){var b=document.getElementById('hfDetailBody');if(!fi
 function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function renderDl(it){var el=document.getElementById(it.id);var st=it.st,pg=Math.min(100,Math.round((it.p||0)*100));var dlSize=(it.dl||0),tlSize=(it.tl||0);var sp=(it.sp||0);var fn=it.fn.split('/').pop();var sizeStr=tlSize>0?(fs(dlSize)+' / '+fs(tlSize)):(it.sz?fs(it.sz):'—');var speedStr=(st==='downloading'&&sp>0)?(' '+fs(sp)+'/s'):'';var etaStr=(st==='downloading'&&it.et>0&&sp>0)?(' · '+formatEta(it.et)):'';var icon=st==='complete'?'✔':st==='error'?'✖':st==='downloading'?'▶':'⏸';var label=st==='complete'?'完成':st==='error'?'失败':st==='downloading'?pg+'%':'等待';var ic=st==='complete'?'complete':st==='error'?'error':st==='downloading'?'downloading':'pending';var barCls='hf-dl-bar-fill-'+(st==='complete'?'complete':st==='error'?'error':'downloading');var pctCls='hf-dl-percent-'+(st==='complete'?'complete':st==='error'?'error':st==='downloading'?'downloading':'pending');var html='<div class="hf-dl-row-inner"><span class="hf-dl-icon hf-dl-icon-'+ic+'">'+icon+'</span><div class="hf-dl-body"><div class="hf-dl-bar-row"><div class="hf-dl-bar-track"><div class="hf-dl-bar-fill '+barCls+'"></div></div><span class="hf-dl-percent '+pctCls+'">'+label+'</span></div><div class="hf-dl-name" title="'+escapeHtml(fn)+'">'+escapeHtml(fn)+'</div><div class="hf-dl-info">'+escapeHtml(sizeStr+speedStr+etaStr)+'</div></div><button class="hf-dl-remove" title="移除" data-id="'+it.id+'">×</button></div>';if(!el){el=document.createElement('div');el.id=it.id;el.className='hf-dl-row';var list=document.getElementById('hfDownloadsList');if(list)list.appendChild(el);}el.innerHTML=html;el.querySelector('.hf-dl-bar-fill').style.width=pg+'%';var empty=document.getElementById('hfEmptyDl');if(empty)empty.style.display='none';}
 function formatEta(secs){if(secs<60)return Math.round(secs)+'秒';if(secs<3600)return Math.floor(secs/60)+'分'+Math.round(secs%60)+'秒';return Math.floor(secs/3600)+'时'+Math.floor((secs%3600)/60)+'分';}
+
+// 通用确认弹窗（HF 商店窗口专用，不依赖 main.js）
+function showConfirm({ title = '确认', body = '', confirmText = '确定', cancelText = '取消', checkbox = null } = {}) {
+  return new Promise((resolve) => {
+    var modal = document.getElementById('modal');
+    var modalTitle = document.getElementById('modalTitle');
+    var modalBody = document.getElementById('modalBody');
+    var modalConfirm = document.getElementById('modalConfirm');
+    var modalCancel = document.getElementById('modalCancel');
+    if (!modal || !modalTitle || !modalBody || !modalConfirm) {
+      var r = window.confirm(title + '\n' + body);
+      resolve(checkbox ? { confirmed: r, checkbox: false } : r);
+      return;
+    }
+    modalTitle.textContent = title;
+    modalBody.textContent = body;
+    modalConfirm.textContent = confirmText;
+    modalCancel.textContent = cancelText;
+    // 复选框：插入到 modalBody 之后、按钮之前
+    var checkboxEl = null;
+    if (checkbox) {
+      checkboxEl = document.createElement('div');
+      checkboxEl.style.cssText = 'display:flex;align-items:center;gap:8px;margin:12px 0 4px;cursor:pointer;font-size:13px;color:var(--text-2)';
+      checkboxEl.innerHTML = '<input type="checkbox" id="modalCheckbox" style="width:16px;height:16px;cursor:pointer" ' + (checkbox.default ? 'checked' : '') + '><span id="modalCheckboxLabel"></span>';
+      modalBody.parentNode.insertBefore(checkboxEl, modalBody.nextSibling);
+      checkboxEl.querySelector('#modalCheckboxLabel').textContent = checkbox.label;
+    }
+    modal.hidden = false;
+    var settled = false;
+    var getCheckbox = function() { return checkboxEl ? document.getElementById('modalCheckbox').checked : false; };
+    var cleanup = function(val) {
+      if (settled) return;
+      settled = true;
+      modal.hidden = true;
+      modalConfirm.removeEventListener('click', onOk);
+      modalCancel.removeEventListener('click', onCancel);
+      modal.querySelectorAll('[data-modal-close]').forEach(function(el) {
+        el.removeEventListener('click', onCancel);
+      });
+      document.removeEventListener('keydown', onKey);
+      if (checkboxEl) checkboxEl.remove();
+      resolve(checkbox ? { confirmed: val, checkbox: getCheckbox() } : val);
+    };
+    var onOk = function() { cleanup(true); };
+    var onCancel = function() { cleanup(false); };
+    var onKey = function(e) {
+      if (e.key === 'Escape') onCancel();
+      else if (e.key === 'Enter') onOk();
+    };
+    modalConfirm.addEventListener('click', onOk);
+    modalCancel.addEventListener('click', onCancel);
+    modal.querySelectorAll('[data-modal-close]').forEach(function(el) {
+      el.addEventListener('click', onCancel);
+    });
+    document.addEventListener('keydown', onKey);
+    setTimeout(function() { modalConfirm.focus(); }, 0);
+  });
+}
+
 async function startD(mid,fn,sz){var dl='hf-dl-'+mid.replace(/[^a-z0-9]/gi,'-')+'-'+fn.replace(/[^a-z0-9]/gi,'-');if(_queue.find(function(d){return d.id===dl;}))return;
+    console.log('[startD] checking queue for',dl,'found:',!!_queue.find(function(d){return d.id===dl;}));
     // 下载前确认弹窗（防误触），附带镜像源复选框
     var fname=fn.split('/').pop();
-    var confirmed=await window.showConfirm({
+    var confirmed=await showConfirm({
       title:'确认下载',
       body:'模型：'+mid+'\n文件：'+fname+ (sz>0?'\n大小：'+fs(sz):''),
       confirmText:'开始下载',
       cancelText:'取消',
       checkbox:{label:'使用镜像源 hf-mirror.com（加速下载）',default:false}
     });
+    console.log('[startD] confirmed:',confirmed);
     if(!confirmed.confirmed)return;
     var useMirror=confirmed.checkbox;
     var it={id:dl,mid:mid,fn:fn,sz:sz||0,st:'downloading',p:0,dl:0,tl:sz||0,sp:0,et:0,path:''};_queue.push(it);renderDl(it);updateDc();var panel=document.getElementById('hfDownloadsPanel');if(panel&&panel.dataset.open!=='1')toggleDlPanel();(async function(){try{var r=await window.__TAURI__.core.invoke('download_hf_model',{modelId:mid,filename:fn,installDir:null,use_mirror:useMirror,expected_size:sz||0});it.st='complete';it.p=1;it.dl=it.tl||(r.file_size||0);it.path=r.path;renderDl(it);updateDc();toast('下载完成: '+fn,'success');setTimeout(function(){removeDl(it.id);},4000);}catch(e){console.error(e);it.st='error';renderDl(it);updateDc();toast('下载失败: '+e,'error');setTimeout(function(){removeDl(it.id);},6000);}})();}

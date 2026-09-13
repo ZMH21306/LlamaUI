@@ -2082,4 +2082,13 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .hf-empty-dl { text-align: center; color: var(--text-3); font-size: var(--fs-sm); padding: 12px; }
 @keyframes hf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .download-meta strong { color: var(--text-2); font-weight: 600; }
+/* HF 商店通用确认弹窗 */
+.modal[hidden] { display: none !important; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9998; }
+.modal-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 24px 28px; min-width: 320px; max-width: 90vw; z-index: 9999; box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+.modal-title { font-size: 16px; font-weight: 600; color: var(--text-1); margin: 0 0 8px; }
+.modal-body { font-size: 13px; color: var(--text-2); margin: 0 0 4px; white-space: pre-line; line-height: 1.5; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.modal-actions .btn-primary, .modal-actions .btn-secondary { padding: 6px 16px; font-size: 13px; }
+
 

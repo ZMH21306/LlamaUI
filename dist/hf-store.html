@@ -8,6 +8,18 @@
 </head>
 <body class="hf-store">
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+  <!-- 通用确认弹窗 -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h3 class="modal-title" id="modalTitle">确认</h3>
+      <p class="modal-body" id="modalBody"></p>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="modalCancel" data-modal-close>取消</button>
+        <button class="btn-primary" id="modalConfirm">确定</button>
+      </div>
+    </div>
+  </div>
   <div class="hf-store-app">
     <header class="hf-store-header">
       <div class="hf-store-title-row">
