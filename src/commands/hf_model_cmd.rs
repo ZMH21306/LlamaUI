@@ -444,8 +444,24 @@ pub async fn download_hf_model(
             return Err("下载已被用户取消".to_string());
         }
 
-        // 执行下载
-        match engine.downloader().download(&mut task) {
+        // 执行下载，带实时进度回调
+        match engine.downloader().download(&mut task, Some(&|n, total| {
+            let _ = app_c.emit(
+                "hf-download-progress",
+                HfDownloadProgress {
+                    stage: "downloading".to_string(),
+                    progress: if total > 0 { n as f64 / total as f64 } else { 0.0 },
+                    downloaded: n,
+                    total,
+                    speed: None,
+                    eta: None,
+                    model_id: model_id_c.clone(),
+                    filename: filename_c.clone(),
+                    message: format!("{:.1} / {:.1} MB", n as f64 / 1048576.0, total as f64 / 1048576.0),
+                    download_id: download_id_for_emit.clone(),
+                },
+            );
+        })) {
             Ok(path) => {
                 let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 Ok(file_size)

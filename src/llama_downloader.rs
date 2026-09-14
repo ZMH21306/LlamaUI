@@ -156,32 +156,41 @@ fn curl_download(
         }
     }
 
-    // 创建统一下载引擎
+    // 创建统一下载引擎，带实时进度回调
     let engine = create_default_engine();
     let mut task = DownloadTask::new("llama".to_string(), url.to_string(), dest.to_path_buf(), total_size, 4);
 
     // 如果服务端返回的 Content-Length 与传入值不同，使用实际值
     let mut last_error = String::new();
 
-    // 最多重试 5 次
+    // 最多重试 5 次（不阻塞 UI 线程，直接快速重试）
     for attempt in 1..=5u32 {
         if attempt > 1 {
-            let wait_secs = std::cmp::min(attempt * 2, 10);
-            tracing::warn!(target: "LlamaDownloader", attempt, wait_secs, "重试下载中...");
+            tracing::warn!(target: "LlamaDownloader", attempt, "重试下载中...");
             if let Some(cb) = progress_callback {
                 cb(DownloadProgress {
                     stage: "retrying".to_string(),
                     progress: progress_start,
                     downloaded: 0,
                     total: total_size,
-                    message: format!("重试第 {} 次 (等待 {}s)...", attempt, wait_secs),
+                    message: format!("重试第 {} 次...", attempt),
                     detail: None,
                 });
             }
-            std::thread::sleep(std::time::Duration::from_secs(wait_secs.into()));
         }
 
-        let result = engine.downloader().download(&mut task);
+        let result = engine.downloader().download(&mut task, Some(&|n, total| {
+            if let Some(cb) = progress_callback {
+                cb(DownloadProgress {
+                    stage: "downloading".to_string(),
+                    progress: if total > 0 { n as f64 / total as f64 } else { 0.0 },
+                    downloaded: n,
+                    total,
+                    message: format!("{:.1} / {:.1} MB", n as f64 / 1048576.0, total as f64 / 1048576.0),
+                    detail: None,
+                });
+            }
+        }));
         match result {
             Ok(path) => {
                 let downloaded = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
