@@ -9,7 +9,6 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use futures::stream::{self, StreamExt};
-use crate::download_engine::{create_default_engine, DownloadTask};
 use crate::llama_downloader::{download_file, DownloadProgress};
 use crate::util::proxy::read_system_proxy as get_system_proxy;
 
@@ -334,13 +333,13 @@ pub async fn download_hf_model(
     let start_time = std::time::Instant::now();
     // P2-4：注册取消通道。前端可调用 `cancel_hf_download(download_id)` 触发取消
     let download_id = format!("{}::{}", model_id, filename);
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    let (cancel_tx, _cancel_rx) = tokio::sync::oneshot::channel::<()>();
     state
         .download_cancels
         .lock()
         .insert(download_id.clone(), cancel_tx);
 
-    let api_client = state.api_client.lock().clone();
+    let _api_client = state.api_client.lock().clone();
     let _ = app.emit(
         "hf-download-progress",
         HfDownloadProgress {
@@ -357,8 +356,6 @@ pub async fn download_hf_model(
         },
     );
 
-    let url_clone = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
-    let token_clone = token.clone();
     let out_clone = out_path.clone();
     let model_id_c = model_id.clone();
     let filename_c = filename.clone();
@@ -367,7 +364,26 @@ pub async fn download_hf_model(
     let download_id_for_cleanup = download_id.clone();
     let download_id_for_emit = download_id.clone();
 
-    BLOCK
+    let result = tokio::task::spawn_blocking(move || {
+        let _ = app_c.emit("hf-download-progress", HfDownloadProgress {
+            stage: "connecting".to_string(), progress: 0.0, downloaded: 0, total: 0,
+            speed: None, eta: None, model_id: model_id_c.clone(), filename: filename_c.clone(),
+            message: format!("正在连接：{}", filename_c), download_id: download_id_for_emit.clone(),
+        });
+        let total_size = expected_size.unwrap_or(0);
+        let result = download_file(&download_url, &out_clone, total_size, Some(&|progress: DownloadProgress| {
+            let _ = app_c.emit("hf-download-progress", HfDownloadProgress {
+                stage: "downloading".to_string(),
+                progress: progress.progress, downloaded: progress.downloaded, total: progress.total,
+                speed: progress.detail.as_ref().and_then(|d| d.eta_secs.map(|v| v as u64)),
+                eta: progress.detail.and_then(|d| d.eta_secs.map(|v| v as u64)),
+                model_id: model_id_c.clone(), filename: filename_c.clone(),
+                message: progress.message, download_id: download_id_for_emit.clone(),
+            });
+        }));
+        match result { Ok(file_size) => Ok(file_size), Err(e) => Err(format!("下载失败：{}", e)) }
+    })
+    .await;
 
     // P2-4：清理取消通道。下载完成（成功/失败/cancelled）后从 Map 移除，
     // 避免内存泄漏（前端每下一次新单都会注册一个新 entry）。
