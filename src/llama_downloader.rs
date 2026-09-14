@@ -184,13 +184,29 @@ fn curl_download(
                 let raw_progress = if total > 0 { n as f64 / total as f64 } else { 0.0 };
                 let global_progress = stage_progress::DOWNLOAD_START
                     + raw_progress * (stage_progress::DOWNLOAD_END - stage_progress::DOWNLOAD_START);
+                let elapsed = start.elapsed().as_secs_f64();
+                let speed_mbps = if elapsed > 0.0 { (n as f64 / elapsed) / 1_048_576.0 } else { 0.0 };
+                let remaining_bytes = total.saturating_sub(n);
+                let eta_secs = if speed_mbps > 0.0 {
+                    (remaining_bytes as f64 / 1_048_576.0 / speed_mbps) as u64
+                } else {
+                    0
+                };
                 cb(DownloadProgress {
                     stage: "downloading".to_string(),
                     progress: global_progress,
                     downloaded: n,
                     total,
                     message: format!("{:.1} / {:.1} MB ({:.1}%)", n as f64 / 1048576.0, total as f64 / 1048576.0, global_progress * 100.0),
-                    detail: None,
+                    detail: Some(DownloadProgressDetail {
+                        step: "downloading".to_string(),
+                        step_progress: raw_progress,
+                        candidate_index: 1,
+                        candidate_count: 1,
+                        current_candidate: None,
+                        speed_mbps,
+                        eta_secs: if eta_secs > 0 { Some(eta_secs as f64) } else { None },
+                    }),
                 });
             }
         }));
