@@ -220,6 +220,7 @@ impl MultiThreadDownloader {
         let total = task.total_size;
         let mut next_idx = 0usize;
         let mut active = 0usize;
+        let mut total_downloaded = 0u64;
         loop {
             while active < concurrency_limit && next_idx < chunks_ref.len() {
                 if cancelled.load(Ordering::Relaxed) { task.set_cancelled(); return Err(anyhow::anyhow!("任务已取消: {}", task.id).into()); }
@@ -241,7 +242,8 @@ impl MultiThreadDownloader {
             match rx.recv_timeout(std::time::Duration::from_secs(60)) {
                 Ok((_idx, Ok(n))) => {
                     active -= 1;
-                    if let Some(cb) = progress_callback { cb(n, total); }
+                    total_downloaded += n;
+                    if let Some(cb) = progress_callback { cb(total_downloaded, total); }
                 }
                 Ok((idx, Err(e))) => {
                     return Err(anyhow::anyhow!("chunk {} 下载失败: {}", idx, e).into());

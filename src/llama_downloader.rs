@@ -181,12 +181,15 @@ fn curl_download(
 
         let result = engine.downloader().download(&mut task, Some(&|n, total| {
             if let Some(cb) = progress_callback {
+                let raw_progress = if total > 0 { n as f64 / total as f64 } else { 0.0 };
+                let global_progress = stage_progress::DOWNLOAD_START
+                    + raw_progress * (stage_progress::DOWNLOAD_END - stage_progress::DOWNLOAD_START);
                 cb(DownloadProgress {
                     stage: "downloading".to_string(),
-                    progress: if total > 0 { n as f64 / total as f64 } else { 0.0 },
+                    progress: global_progress,
                     downloaded: n,
                     total,
-                    message: format!("{:.1} / {:.1} MB", n as f64 / 1048576.0, total as f64 / 1048576.0),
+                    message: format!("{:.1} / {:.1} MB ({:.1}%)", n as f64 / 1048576.0, total as f64 / 1048576.0, global_progress * 100.0),
                     detail: None,
                 });
             }
