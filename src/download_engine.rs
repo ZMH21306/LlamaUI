@@ -133,7 +133,9 @@ impl Default for HttpClientConfig { fn default() -> Self { Self { connect_timeou
 pub struct HttpClient { client: Client, config: HttpClientConfig }
 impl HttpClient {
     pub fn new(config: HttpClientConfig) -> AnyResult<Self> {
-        let mut builder = Client::builder().timeout(Duration::from_secs(config.read_timeout_secs)).connect_timeout(Duration::from_secs(config.connect_timeout_secs));
+        let mut builder = Client::builder()
+            .timeout(Duration::from_secs(config.read_timeout_secs))
+            .connect_timeout(Duration::from_secs(config.connect_timeout_secs));
         if let Some(proxy_url) = &config.proxy { builder = builder.proxy(reqwest::Proxy::all(proxy_url)?); }
         Ok(Self { client: builder.build()?, config })
     }
@@ -148,6 +150,7 @@ impl HttpClient {
     pub fn download_range(&self, url: &str, start: u64, end: u64, dest: &Path) -> AnyResult<u64> {
         let resp = self.client.get(url)
             .header(reqwest::header::RANGE, format!("bytes={}-{}", start, end))
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .send()?;
         let status = resp.status();
         if !status.is_success() && status.as_u16() != 206 {
