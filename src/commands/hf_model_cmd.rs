@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use futures::stream::{self, StreamExt};
+use crate::download_engine::{create_default_engine, DownloadTask};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfModelSearchResult {
@@ -203,20 +203,6 @@ fn build_hf_api_client() -> reqwest::blocking::Client {
     }
     builder.build().unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
-fn format_size(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
-    }
-    if unit_idx == 0 {
-        format!("{} {}", bytes, UNITS[0])
-    } else {
-        format!("{:.2} {}", size, UNITS[unit_idx])
-    }
-}
 
 /// 同步 HTTP GET（在 spawn_blocking 中调用，避免阻塞 Tauri 事件循环）。
 ///
@@ -338,7 +324,7 @@ pub async fn download_hf_model(
     let url = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
     let token = state.hf_token.lock().clone();
     let out_path = dir.join(&safe_filename);
-    let out_path_str = out_path.to_string_lossy().to_string();
+    let _out_path_str = out_path.to_string_lossy().to_string();
     let start_time = std::time::Instant::now();
     // P2-4：注册取消通道。前端可调用 `cancel_hf_download(download_id)` 触发取消
     let download_id = format!("{}::{}", model_id, filename);
@@ -348,6 +334,7 @@ pub async fn download_hf_model(
         .lock()
         .insert(download_id.clone(), cancel_tx);
 
+    let api_client = state.api_client.lock().clone();
     let _ = app.emit(
         "hf-download-progress",
         HfDownloadProgress {
@@ -366,15 +353,11 @@ pub async fn download_hf_model(
 
     let url_clone = url.clone();
     let token_clone = token.clone();
-    let out_clone = out_path_str.clone();
+    let out_clone = out_path.clone();
     let model_id_c = model_id.clone();
     let filename_c = filename.clone();
     let app_c = app.clone();
-    // P2-3 修复：下载使用独立 Agent（不复用共享连接池），避免 HEAD 并发后
-    // keep-alive 连接被复用到已被 CDN 半关闭的连接上，导致 read() 永久阻塞。
-    // 同时注入系统代理（解决 ureq 直连时 DNS/网络不通的问题）。
-    // read 超时 300s 足够 16GB GGUF；HEAD 请求（文件大小检测）不受影响。
-    let agent_for_download = build_hf_agent(30, 300);
+    let _agent_for_download = build_hf_agent(30, 300);
 
     let download_id_for_cleanup = download_id.clone();
     let download_id_for_emit = download_id.clone();
@@ -397,27 +380,40 @@ pub async fn download_hf_model(
             },
         );
 
-        let mut req = agent_for_download.get(&url_clone);
-        req = req.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        if let Some(ref t) = token_clone {
-            req = req.set("Authorization", &format!("Bearer {}", t));
+        // 使用统一下载引擎，支持断点续传和多线程下载
+        let engine = create_default_engine();
+        let mut task = DownloadTask::new(
+            format!("{}::{}", model_id_c, filename_c),
+            url_clone.clone(),
+            PathBuf::from(&out_clone),
+            expected_size.unwrap_or(0),
+            4,
+        );
+        if let Some(_t) = token_clone.as_deref() {
+            // token 已在 URL 中处理
         }
-        let call_start = std::time::Instant::now();
-        let resp = req.call().map_err(|e| format!("HTTP 请求失败：{}", e))?;
 
-        let exp_size = expected_size;
-        let content_length: u64 = resp
-            .header("Content-Length")
-            .and_then(|v| v.parse::<u64>().ok())
-            .or(exp_size)
-            .unwrap_or(0);
+        let call_start = std::time::Instant::now();
+
+        // 发起 HEAD 请求获取文件大小（用于进度显示）
+        let content_length = if expected_size.is_none() {
+            Some(hf_head_size(
+                &api_client,
+                &url_clone,
+                token_clone.as_deref(),
+            ))
+        } else {
+            None
+        };
+        let total_size = content_length.flatten().unwrap_or(expected_size.unwrap_or(0));
+
         let _ = app_c.emit(
             "hf-download-progress",
             HfDownloadProgress {
                 stage: "headers".to_string(),
                 progress: 0.0,
                 downloaded: 0,
-                total: content_length,
+                total: total_size,
                 speed: None,
                 eta: None,
                 model_id: model_id_c.clone(),
@@ -427,92 +423,35 @@ pub async fn download_hf_model(
             },
         );
 
-        let total = content_length;
-        let mut file = match std::fs::File::create(&out_clone) {
-            Ok(f) => f,
-            Err(e) => return Err(format!("创建文件失败：{}", e)),
-        };
-        let mut reader = resp.into_reader();
-        let mut downloaded: u64 = 0;
-        let mut buf = [0u8; 8192];
-        let mut last_emit = std::time::Instant::now();
-        let mut last_bytes = 0u64;
-        let mut last_time = std::time::Instant::now();
-
-        loop {
-            if cancel_rx.try_recv().is_ok() {
-                drop(file);
-                let _ = std::fs::remove_file(&out_clone);
-                let _ = app_c.emit(
-                    "hf-download-progress",
-                    HfDownloadProgress {
-                        stage: "cancelled".to_string(),
-                        progress: 0.0,
-                        downloaded: 0,
-                        total: 0,
-                        speed: None,
-                        eta: None,
-                        model_id: model_id_c.clone(),
-                        filename: filename_c.clone(),
-                        message: format!("下载已取消：{}", filename_c),
-                        download_id: download_id_for_emit.clone(),
-                    },
-                );
-                return Err("下载已被用户取消".to_string());
-            }
-
-            let n = reader
-                .read(&mut buf)
-                .map_err(|e| format!("读取网络数据失败：{}", e))?;
-            if n == 0 { break; }
-            file.write_all(&buf[..n])
-                .map_err(|e| format!("写入文件失败：{}", e))?;
-            downloaded += n as u64;
-            let now = std::time::Instant::now();
-            let elapsed_ms = now.duration_since(last_time).as_millis() as u64;
-            if elapsed_ms >= 300 || downloaded == total {
-                let dt = now.duration_since(last_emit).as_secs_f64();
-                let speed = if dt > 0.0 {
-                    (downloaded - last_bytes) as f64 / dt
-                } else {
-                    0.0
-                };
-                let remaining = if speed > 0.0 && total > downloaded {
-                    (total - downloaded) as f64 / speed
-                } else {
-                    0.0
-                };
-                let progress = if total > 0 {
-                    downloaded as f64 / total as f64
-                } else {
-                    0.0
-                };
-                let _ = app_c.emit(
-                    "hf-download-progress",
-                    HfDownloadProgress {
-                        stage: "downloading".to_string(),
-                        progress,
-                        downloaded,
-                        total,
-                        speed: Some(speed as u64),
-                        eta: Some(remaining.ceil() as u64),
-                        model_id: model_id_c.clone(),
-                        filename: filename_c.clone(),
-                        message: format!(
-                            "{} ({}/{})",
-                            filename_c,
-                            format_size(downloaded),
-                            format_size(total)
-                        ),
-                        download_id: download_id_for_emit.clone(),
-                    },
-                );
-                last_emit = now;
-                last_bytes = downloaded;
-                last_time = now;
-            }
+        // 检查取消信号
+        if cancel_rx.try_recv().is_ok() {
+            let _ = std::fs::remove_file(&out_clone);
+            let _ = app_c.emit(
+                "hf-download-progress",
+                HfDownloadProgress {
+                    stage: "cancelled".to_string(),
+                    progress: 0.0,
+                    downloaded: 0,
+                    total: total_size,
+                    speed: None,
+                    eta: None,
+                    model_id: model_id_c.clone(),
+                    filename: filename_c.clone(),
+                    message: format!("下载已取消：{}", filename_c),
+                    download_id: download_id_for_emit.clone(),
+                },
+            );
+            return Err("下载已被用户取消".to_string());
         }
-        Ok::<(), String>(())
+
+        // 执行下载
+        match engine.downloader().download(&mut task) {
+            Ok(path) => {
+                let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                Ok(file_size)
+            }
+            Err(e) => Err(format!("下载失败：{}", e)),
+        }
     })
     .await;
 
