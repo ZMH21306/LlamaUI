@@ -127,8 +127,27 @@ pub struct DownloadProgress { pub stage: String, pub progress: f64, pub download
 pub struct DownloadProgressDetail { pub step: String, pub step_progress: f64, pub speed_mbps: f64, pub eta_secs: Option<u64> }
 /// HTTP 客户端配置
 #[derive(Debug, Clone)]
-pub struct HttpClientConfig { pub connect_timeout_secs: u64, pub read_timeout_secs: u64, pub max_retries: u32, pub proxy: Option<String> }
-impl Default for HttpClientConfig { fn default() -> Self { Self { connect_timeout_secs: 10, read_timeout_secs: 300, max_retries: 3, proxy: None } } }
+pub struct HttpClientConfig {
+    pub connect_timeout_secs: u64,
+    pub read_timeout_secs: u64,
+    pub max_retries: u32,
+    pub proxy: Option<String>,
+}
+impl Default for HttpClientConfig {
+    fn default() -> Self {
+        // P0 修复：从系统读取代理配置（兼容 Clash/V2Ray 等透明代理）。
+        // 原 default() 的 proxy=None 导致下载引擎完全无法走代理，
+        // 而 API 客户端（build_hf_api_client）正确注入了代理，
+        // 表现为"浏览器能下载、程序下载失败"。
+        let proxy = crate::util::proxy::read_system_proxy();
+        Self {
+            connect_timeout_secs: 10,
+            read_timeout_secs: 300,
+            max_retries: 3,
+            proxy,
+        }
+    }
+}
 /// HTTP/HTTPS 客户端
 pub struct HttpClient { client: Client, config: HttpClientConfig }
 impl HttpClient {
@@ -151,6 +170,10 @@ impl HttpClient {
         let resp = self.client.get(url)
             .header(reqwest::header::RANGE, format!("bytes={}-{}", start, end))
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            // P0 修复：添加 User-Agent。HuggingFace CDN（CloudFront/S3）
+            // 会拒绝无 User-Agent 的请求，而 reqwest 默认不发送该头，
+            // 导致下载请求被静默拒绝（浏览器自带 UA 故不受影响）。
+            .header(reqwest::header::USER_AGENT, "LlamaUI/0.7.0")
             .send()?;
         let status = resp.status();
         if !status.is_success() && status.as_u16() != 206 {
@@ -195,10 +218,23 @@ impl MultiThreadDownloader {
     pub fn calculate_num_chunks(&self, total_size: u64) -> usize { if total_size == 0 { return 1; } let mb = total_size as f64 / 1_048_576.0; if mb < 10.0 { 1 } else if mb < 100.0 { 4 } else { (num_cpus::get() * 2).min(16).max(1) } }
     pub fn download(&self, task: &mut DownloadTask, progress_callback: Option<&dyn Fn(u64, u64)>) -> AnyResult<PathBuf> {
         let num_chunks = self.calculate_num_chunks(task.total_size);
+        // P2 修复：当 total_size=0（HEAD 请求失败且无预期值时），
+        // chunk_size=(0/1)=0，导致 Range 头计算出 u64::MAX，
+        // CDN 会拒绝该请求。这里回退为单块 0 字节下载让服务端返回完整文件。
         let chunk_size = if task.total_size > 0 { (task.total_size + num_chunks as u64 - 1) / num_chunks as u64 } else { 0 };
         let temp_dir = task.dest.parent().unwrap_or(&Path::new(".")).to_path_buf();
         let mut chunks: Vec<DownloadChunk> = Vec::with_capacity(num_chunks);
-        for i in 0..num_chunks { let start = i as u64 * chunk_size; let end = (start + chunk_size - 1).min(task.total_size.saturating_sub(1)); if start >= task.total_size { break; } chunks.push(DownloadChunk::new(i, start, end, &temp_dir)); }
+        for i in 0..num_chunks {
+            if task.total_size == 0 {
+                // total_size=0 时的单块保护：start=0, end=0，发送 Range: bytes=0-0 请求
+                chunks.push(DownloadChunk::new(i, 0, 0, &temp_dir));
+                break;
+            }
+            let start = i as u64 * chunk_size;
+            let end = (start + chunk_size - 1).min(task.total_size.saturating_sub(1));
+            if start >= task.total_size { break; }
+            chunks.push(DownloadChunk::new(i, start, end, &temp_dir));
+        }
         *task.chunks.lock().unwrap() = chunks;
         task.num_chunks = num_chunks;
         self.resume_manager.save_checkpoint(task)?;
