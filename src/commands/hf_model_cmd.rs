@@ -10,6 +10,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use futures::stream::{self, StreamExt};
 use crate::download_engine::{create_default_engine, DownloadTask};
+use crate::llama_downloader::{download_file, DownloadProgress};
+use crate::util::proxy::read_system_proxy as get_system_proxy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfModelSearchResult {
@@ -119,6 +121,7 @@ const HF_API_BASE: &str = "https://huggingface.co/api";
 /// 读取 Windows 系统代理配置（兼容 Clash/V2Ray 等透明代理）。
 /// 优先读 `HKCU\...\ProxyServer`，再兜底环境变量（大小写不敏感）。
 /// 返回 `Some("http://host:port")` 或 `None`（无代理/读取失败）。
+#[allow(dead_code)]
 fn read_system_proxy() -> Option<String> {
     // 1) 环境变量（所有平台通用，Clash 等也支持）
     for key in &["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
@@ -178,7 +181,7 @@ fn build_hf_agent(connect_secs: u64, read_secs: u64) -> ureq::Agent {
     let mut builder = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(connect_secs))
         .timeout_read(std::time::Duration::from_secs(read_secs));
-    if let Some(proxy_url) = read_system_proxy() {
+    if let Some(proxy_url) = get_system_proxy() {
         if let Ok(proxy) = ureq::Proxy::new(&proxy_url) {
             builder = builder.proxy(proxy);
         }
@@ -196,7 +199,7 @@ fn build_hf_api_client() -> reqwest::blocking::Client {
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(20))
         .danger_accept_invalid_certs(true);
-    if let Some(proxy_url) = read_system_proxy() {
+    if let Some(proxy_url) = get_system_proxy() {
         if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
             builder = builder.proxy(proxy);
         }
@@ -321,8 +324,11 @@ pub async fn download_hf_model(
     fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
     // 根据 use_mirror 选择下载域名：默认 https://huggingface.co，镜像 https://hf-mirror.com
     let domain = if use_mirror { "https://hf-mirror.com" } else { "https://huggingface.co" };
-    let url = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
     let token = state.hf_token.lock().clone();
+    let mut download_url = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
+    if let Some(ref token_val) = token {
+        download_url.push_str(&format!("?token={}", token_val));
+    }
     let out_path = dir.join(&safe_filename);
     let _out_path_str = out_path.to_string_lossy().to_string();
     let start_time = std::time::Instant::now();
@@ -351,125 +357,17 @@ pub async fn download_hf_model(
         },
     );
 
-    let url_clone = url.clone();
+    let url_clone = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
     let token_clone = token.clone();
     let out_clone = out_path.clone();
     let model_id_c = model_id.clone();
     let filename_c = filename.clone();
     let app_c = app.clone();
-    let _agent_for_download = build_hf_agent(30, 300);
 
     let download_id_for_cleanup = download_id.clone();
     let download_id_for_emit = download_id.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        // 发送 connecting 事件，让前端立即从「等待」切到「连接中」，避免永久停在 0%
-        let _ = app_c.emit(
-            "hf-download-progress",
-            HfDownloadProgress {
-                stage: "connecting".to_string(),
-                progress: 0.0,
-                downloaded: 0,
-                total: 0,
-                speed: None,
-                eta: None,
-                model_id: model_id_c.clone(),
-                filename: filename_c.clone(),
-                message: format!("正在连接：{}", filename_c),
-                download_id: download_id_for_emit.clone(),
-            },
-        );
-
-        // 使用统一下载引擎，支持断点续传和多线程下载
-        let engine = create_default_engine();
-        let mut task = DownloadTask::new(
-            format!("{}::{}", model_id_c, filename_c),
-            url_clone.clone(),
-            PathBuf::from(&out_clone),
-            expected_size.unwrap_or(0),
-            4,
-        );
-        if let Some(_t) = token_clone.as_deref() {
-            // token 已在 URL 中处理
-        }
-
-        let call_start = std::time::Instant::now();
-
-        // 发起 HEAD 请求获取文件大小（用于进度显示）
-        let content_length = if expected_size.is_none() {
-            Some(hf_head_size(
-                &api_client,
-                &url_clone,
-                token_clone.as_deref(),
-            ))
-        } else {
-            None
-        };
-        let total_size = content_length.flatten().unwrap_or(expected_size.unwrap_or(0));
-
-        let _ = app_c.emit(
-            "hf-download-progress",
-            HfDownloadProgress {
-                stage: "headers".to_string(),
-                progress: 0.0,
-                downloaded: 0,
-                total: total_size,
-                speed: None,
-                eta: None,
-                model_id: model_id_c.clone(),
-                filename: filename_c.clone(),
-                message: format!("已连接 ({} ms)，开始下载", call_start.elapsed().as_millis()),
-                download_id: download_id_for_emit.clone(),
-            },
-        );
-
-        // 检查取消信号
-        if cancel_rx.try_recv().is_ok() {
-            let _ = std::fs::remove_file(&out_clone);
-            let _ = app_c.emit(
-                "hf-download-progress",
-                HfDownloadProgress {
-                    stage: "cancelled".to_string(),
-                    progress: 0.0,
-                    downloaded: 0,
-                    total: total_size,
-                    speed: None,
-                    eta: None,
-                    model_id: model_id_c.clone(),
-                    filename: filename_c.clone(),
-                    message: format!("下载已取消：{}", filename_c),
-                    download_id: download_id_for_emit.clone(),
-                },
-            );
-            return Err("下载已被用户取消".to_string());
-        }
-
-        // 执行下载，带实时进度回调
-        match engine.downloader().download(&mut task, Some(&|n, total| {
-            let _ = app_c.emit(
-                "hf-download-progress",
-                HfDownloadProgress {
-                    stage: "downloading".to_string(),
-                    progress: if total > 0 { n as f64 / total as f64 } else { 0.0 },
-                    downloaded: n,
-                    total,
-                    speed: None,
-                    eta: None,
-                    model_id: model_id_c.clone(),
-                    filename: filename_c.clone(),
-                    message: format!("{:.1} / {:.1} MB", n as f64 / 1048576.0, total as f64 / 1048576.0),
-                    download_id: download_id_for_emit.clone(),
-                },
-            );
-        })) {
-            Ok(path) => {
-                let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                Ok(file_size)
-            }
-            Err(e) => Err(format!("下载失败：{}", e)),
-        }
-    })
-    .await;
+    BLOCK
 
     // P2-4：清理取消通道。下载完成（成功/失败/cancelled）后从 Map 移除，
     // 避免内存泄漏（前端每下一次新单都会注册一个新 entry）。
