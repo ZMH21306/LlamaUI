@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -143,6 +144,20 @@ impl HttpClient {
         Ok(HeadResponse { status, content_length })
     }
     pub fn config(&self) -> &HttpClientConfig { &self.config }
+    /// 下载指定 Range 的字节到 dest 文件
+    pub fn download_range(&self, url: &str, start: u64, end: u64, dest: &Path) -> AnyResult<u64> {
+        let resp = self.client.get(url)
+            .header(reqwest::header::RANGE, format!("bytes={}-{}", start, end))
+            .send()?;
+        let status = resp.status();
+        if !status.is_success() && status.as_u16() != 206 {
+            return Err(anyhow::anyhow!("HTTP {} 下载范围失败", status.as_u16()).into());
+        }
+        let mut file = OpenOptions::new().create(true).write(true).open(dest)?;
+        let bytes = resp.bytes()?;
+        file.write_all(&bytes)?;
+        Ok(bytes.len() as u64)
+    }
 }
 /// HEAD 响应
 #[derive(Debug, Clone)]
@@ -171,9 +186,9 @@ impl ResumeManager {
     }
 }
 /// 多线程分块下载器
-pub struct MultiThreadDownloader { _http_client: Arc<HttpClient>, max_concurrent_chunks: usize, resume_manager: Arc<ResumeManager> }
+pub struct MultiThreadDownloader { http_client: Arc<HttpClient>, max_concurrent_chunks: usize, resume_manager: Arc<ResumeManager> }
 impl MultiThreadDownloader {
-    pub fn new(http_client: Arc<HttpClient>, max_concurrent_chunks: usize, resume_manager: Arc<ResumeManager>) -> Self { Self { _http_client: http_client, max_concurrent_chunks, resume_manager } }
+    pub fn new(http_client: Arc<HttpClient>, max_concurrent_chunks: usize, resume_manager: Arc<ResumeManager>) -> Self { Self { http_client, max_concurrent_chunks, resume_manager } }
     pub fn calculate_num_chunks(&self, total_size: u64) -> usize { if total_size == 0 { return 1; } let mb = total_size as f64 / 1_048_576.0; if mb < 10.0 { 1 } else if mb < 100.0 { 4 } else { (num_cpus::get() * 2).min(16).max(1) } }
     pub fn download(&self, task: &mut DownloadTask) -> AnyResult<PathBuf> {
         let num_chunks = self.calculate_num_chunks(task.total_size);
@@ -194,20 +209,43 @@ impl MultiThreadDownloader {
         let chunks = task.chunks.lock().unwrap();
         let chunks_ref: Vec<_> = chunks.iter().cloned().collect();
         drop(chunks);
-        let (tx, rx) = mpsc::channel::<usize>();
+        let (tx, rx) = mpsc::channel::<(usize, AnyResult<u64>)>();
         let concurrency_limit = self.max_concurrent_chunks;
         let mut active = 0usize;
         let cancelled = task.cancelled.clone();
+        let http_client = self.http_client.clone();
+        let url = task.url.clone();
         for chunk in &chunks_ref {
             if cancelled.load(Ordering::Relaxed) { task.set_cancelled(); return Err(anyhow::anyhow!("任务已取消: {}", task.id).into()); }
             if active >= concurrency_limit { break; }
             active += 1;
             let chunk = chunk.clone();
             let tx = tx.clone();
-            thread::spawn(move || { chunk.set_downloading(); chunk.set_complete(); tx.send(chunk.index).ok(); });
+            let http_client = http_client.clone();
+            let url = url.clone();
+            thread::spawn(move || {
+                chunk.set_downloading();
+                match http_client.download_range(&url, chunk.start, chunk.end, &chunk.temp_file) {
+                    Ok(n) => { chunk.downloaded.store(n, Ordering::Relaxed); chunk.set_complete(); tx.send((chunk.index, Ok(n))).ok(); }
+                    Err(e) => { chunk.set_failed(); tx.send((chunk.index, Err(e))).ok(); }
+                }
+            });
         }
         drop(tx);
-        for _ in 0..chunks_ref.len() { let _ = rx.recv(); }
+        let mut failed = Vec::new();
+        for _ in 0..chunks_ref.len() {
+            match rx.recv() {
+                Ok((_idx, Ok(_))) => {}
+                Ok((idx, Err(e))) => failed.push((idx, e)),
+                Err(_) => break,
+            }
+        }
+        if !failed.is_empty() {
+            let msg = failed.iter().map(|(i, e)| format!("chunk {}: {}", i, e)).collect::<Vec<_>>().join("; ");
+            return Err(anyhow::anyhow!("分块下载失败: {}", msg).into());
+        }
+        let total: u64 = chunks_ref.iter().map(|c| c.downloaded.load(Ordering::Relaxed)).sum();
+        task.downloaded.store(total, Ordering::Relaxed);
         Ok(())
     }
     fn merge_chunks(&self, task: &DownloadTask) -> AnyResult<PathBuf> {
