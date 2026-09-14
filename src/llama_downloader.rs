@@ -6,9 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use crate::download_engine::{create_default_engine, DownloadTask};
 use crate::util::process::silent_command;
 
 fn current_os() -> &'static str {
@@ -133,15 +133,15 @@ pub mod stage_progress {
 fn curl_download(
     url: &str,
     dest: &Path,
-    mut total_size: u64,
+    total_size: u64,
     progress_start: f64,
     progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<u64> {
     let start = std::time::Instant::now();
     let dest_str = dest.to_string_lossy().to_string();
-    let progress_range = progress_end - progress_start;
-    tracing::info!(target: "LlamaDownloader", url = %url, dest = %dest_str, total_size, "启动 curl 下载进程");
+    let _progress_range = progress_end - progress_start;
+    tracing::info!(target: "LlamaDownloader", url = %url, dest = %dest_str, total_size, "启动统一下载引擎");
 
     if total_size > 0 {
         if let Some(cb) = progress_callback {
@@ -156,9 +156,14 @@ fn curl_download(
         }
     }
 
+    // 创建统一下载引擎
+    let engine = create_default_engine();
+    let mut task = DownloadTask::new("llama".to_string(), url.to_string(), dest.to_path_buf(), total_size, 4);
+
+    // 如果服务端返回的 Content-Length 与传入值不同，使用实际值
     let mut last_error = String::new();
 
-    // 重试循环：最多 5 次
+    // 最多重试 5 次
     for attempt in 1..=5u32 {
         if attempt > 1 {
             let wait_secs = std::cmp::min(attempt * 2, 10);
@@ -176,153 +181,33 @@ fn curl_download(
             std::thread::sleep(std::time::Duration::from_secs(wait_secs.into()));
         }
 
-        // 创建 reqwest 客户端（自动继承系统代理和 TLS 配置，证书链被验证）
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(600))
-            .connect_timeout(Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
+        let result = engine.downloader().download(&mut task);
+        match result {
+            Ok(path) => {
+                let downloaded = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                if downloaded > 0 {
+                    tracing::info!(target: "LlamaDownloader",
+                        attempt,
+                        downloaded,
+                        mb = format!("{:.1}", downloaded as f64 / 1048576.0),
+                        elapsed_secs = format!("{:.1}", start.elapsed().as_secs_f64()),
+                        "统一下载引擎完成");
+                    return Ok(downloaded);
+                }
+                last_error = "下载无数据".to_string();
+            }
             Err(e) => {
-                last_error = format!("客户端创建失败: {}", e);
-                break;
-            }
-        };
-
-        // 构造请求（带 Range 支持断点续传）
-        let mut existing_size = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-        let mut request = client.get(url)
-            .header("User-Agent", "LlamaUI/0.6.0")
-            .header("Accept", "application/octet-stream");
-        if existing_size > 0 && total_size > 0 {
-            request = request.header("Range", format!("bytes={}-", existing_size));
-        }
-
-                let mut response = match request.send() {
-            Ok(r) => r,
-            Err(e) => {
-                last_error = format!("请求失败: {}", e);
-                continue;
-            }
-        };
-
-        // 从 GET 响应头获取 Content-Length（如果传入的 total_size 仍为 0）
-        if total_size == 0 {
-            if let Some(content_len) = response.headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                if existing_size > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-                    // Range 响应：Content-Length 为剩余字节，需加上已下载的断点大小
-                    total_size = existing_size + content_len;
-                } else {
-                    total_size = content_len;
-                }
+                last_error = e.to_string();
+                tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "统一下载引擎失败");
             }
         }
-
-        if existing_size > 0 && total_size > 0 {
-            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                // 服务端不支持 Range，从头开始
-                if let Err(e) = fs::write(dest, Vec::new()) {
-                    last_error = format!("清空断点文件失败: {}", e);
-                    break;
-                }
-                existing_size = 0;
-            }
-        }
-
-        // 写入文件并实时上报进度
-        let mut file = match fs::OpenOptions::new().create(true).append(true).open(dest) {
-            Ok(f) => f,
-            Err(e) => {
-                last_error = format!("打开文件失败: {}", e);
-                break;
-            }
-        };
-
-        let mut downloaded = existing_size;
-        let mut buf = [0u8; 65536];
-        let mut last_emit = std::time::Instant::now();
-        let mut last_pct: f64 = if existing_size > 0 {
-            if total_size > 0 { existing_size as f64 / total_size as f64 * 100.0 } else { 0.0 }
-        } else { 0.0 };
-
-        loop {
-            let n = match response.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::warn!(target: "LlamaDownloader", error = %e, "读取下载流失败");
-                    break;
-                }
-            };
-            if n == 0 { break; }
-            file.write_all(&buf[..n])?;
-            downloaded += n as u64;
-
-            let now = std::time::Instant::now();
-            if now.duration_since(last_emit).as_millis() >= 500 {
-                last_emit = now;
-                let pct = if total_size > 0 {
-                    (downloaded as f64 / total_size as f64 * 100.0).min(100.0)
-                } else {
-                    // 总大小未知：不要跳到 100%，保持在下载阶段起始位置，
-                    // 仅通过 downloaded/total=0 让前端显示实时下载量
-                    0.0
-                };
-                if pct >= last_pct {
-                    last_pct = pct;
-                    if let Some(cb) = progress_callback {
-                        let speed_mbps = if start.elapsed().as_secs_f64() > 0.0 {
-                            downloaded as f64 / start.elapsed().as_secs_f64() / 1048576.0
-                        } else { 0.0 };
-                        cb(DownloadProgress {
-                            stage: "downloading".to_string(),
-                            progress: progress_start + (pct / 100.0) * progress_range,
-                            downloaded,
-                            total: total_size,
-                            message: format!("下载中... {:.1} / {:.1} MB ({:.0}%)",
-                                downloaded as f64 / 1048576.0, total_size as f64 / 1048576.0, pct),
-                            detail: Some(DownloadProgressDetail {
-                                step: format!("下载中 {:.0}%", pct),
-                                step_progress: pct / 100.0,
-                                candidate_index: 0,
-                                candidate_count: 0,
-                                current_candidate: None,
-                                speed_mbps,
-                                eta_secs: None,
-                            }),
-                        });
-                    }
-                }
-            }
-        }
-        drop(file);
-
-        let elapsed_secs = start.elapsed().as_secs_f64();
-        let downloaded_final = fs::metadata(dest).map(|m| m.len()).unwrap_or(downloaded);
-
-        if downloaded_final > 0 {
-            tracing::info!(target: "LlamaDownloader",
-                attempt,
-                downloaded = downloaded_final,
-                mb = format!("{:.1}", downloaded_final as f64 / 1048576.0),
-                elapsed_secs = format!("{:.1}", elapsed_secs),
-                "reqwest 下载完成");
-            return Ok(downloaded_final);
-        }
-
-        last_error = "下载无数据".to_string();
     }
 
-    // 所有重试都失败
     tracing::error!(target: "LlamaDownloader",
         url = %url,
         total_attempts = 5,
         error = %last_error,
-        "reqwest 下载失败，已用完所有重试次数"
+        "统一下载引擎失败，已用完所有重试次数"
     );
 
     Err(anyhow::anyhow!("下载失败: {}（已重试 5 次）", last_error))
