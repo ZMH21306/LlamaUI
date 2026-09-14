@@ -42,7 +42,7 @@ pub mod gpu_error_transformer;
 mod init;
 mod log;
 pub mod log_sanitizer;
-mod download_engine;
+pub mod download_engine;
 mod llama_downloader;
 mod model_management;
 mod recovery;
