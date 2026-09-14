@@ -130,6 +130,15 @@ pub mod stage_progress {
 ///
 /// `progress_start`/`progress_end` 用于将 reqwest 的 0~1 下载进度
 /// 映射到全局进度区间的 [progress_start, progress_end]。
+pub fn download_file(
+    url: &str,
+    dest: &Path,
+    total_size: u64,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) -> anyhow::Result<u64> {
+    curl_download(url, dest, total_size, 0.0, 1.0, progress_callback)
+}
+
 fn curl_download(
     url: &str,
     dest: &Path,
