@@ -9,7 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use futures::stream::{self, StreamExt};
-use crate::llama_downloader::{download_file, DownloadProgress};
+use crate::hf_downloader::{HfDownloadProgress, HfDownloader};
 use crate::util::proxy::read_system_proxy as get_system_proxy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,19 +32,6 @@ pub struct HfModelFile {
     pub r#type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HfDownloadProgress {
-    pub stage: String,
-    pub progress: f64,
-    pub downloaded: u64,
-    pub total: u64,
-    pub speed: Option<u64>,
-    pub eta: Option<u64>,
-    pub model_id: String,
-    pub filename: String,
-    pub message: String,
-    pub download_id: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfDownloadResult {
@@ -356,41 +343,58 @@ pub async fn download_hf_model(
         },
     );
 
-    let out_clone = out_path.clone();
-    let model_id_c = model_id.clone();
-    let filename_c = filename.clone();
-    let app_c = app.clone();
-
-    let download_id_for_cleanup = download_id.clone();
-    let download_id_for_emit = download_id.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let _ = app_c.emit("hf-download-progress", HfDownloadProgress {
-            stage: "connecting".to_string(), progress: 0.0, downloaded: 0, total: 0,
-            speed: None, eta: None, model_id: model_id_c.clone(), filename: filename_c.clone(),
-            message: format!("正在连接：{}", filename_c), download_id: download_id_for_emit.clone(),
-        });
-        let total_size = expected_size.unwrap_or(0);
-        let result = download_file(&download_url, &out_clone, total_size, Some(&|progress: DownloadProgress| {
-            let _ = app_c.emit("hf-download-progress", HfDownloadProgress {
-                stage: "downloading".to_string(),
-                progress: progress.progress, downloaded: progress.downloaded, total: progress.total,
-                speed: progress.detail.as_ref().and_then(|d| d.eta_secs.map(|v| v as u64)),
-                eta: progress.detail.and_then(|d| d.eta_secs.map(|v| v as u64)),
-                model_id: model_id_c.clone(), filename: filename_c.clone(),
-                message: progress.message, download_id: download_id_for_emit.clone(),
+    // ʹ���µ� HF ר������������ʽ���̣߳�������ж��̷ֿ߳鷽����
+    let downloader = match HfDownloader::new() {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = app.emit("hf-download-progress", HfDownloadProgress {
+                stage: "error".to_string(),
+                progress: 0.0,
+                downloaded: 0,
+                total: expected_size.unwrap_or(0),
+                speed: None,
+                eta: None,
+                model_id: model_id.clone(),
+                filename: filename.clone(),
+                message: format!("��ʼ��������ʧ�ܣ�{}", e),
+                download_id: download_id.clone(),
             });
-        }));
-        match result { Ok(file_size) => Ok(file_size), Err(e) => Err(format!("下载失败：{}", e)) }
-    })
-    .await;
+            return Err(format!("��ʼ��������ʧ�ܣ�{}", e));
+        }
+    };
 
-    // P2-4：清理取消通道。下载完成（成功/失败/cancelled）后从 Map 移除，
-    // 避免内存泄漏（前端每下一次新单都会注册一个新 entry）。
-    state.download_cancels.lock().remove(&download_id_for_cleanup);
+    let _ = app.emit("hf-download-progress", HfDownloadProgress {
+        stage: "connecting".to_string(),
+        progress: 0.0,
+        downloaded: 0,
+        total: expected_size.unwrap_or(0),
+        speed: None,
+        eta: None,
+        model_id: model_id.clone(),
+        filename: filename.clone(),
+        message: format!("�������ӣ�{}", filename),
+        download_id: download_id.clone(),
+    });
 
-    // 处理 spawn_blocking 结果
-    result.map_err(|e| format!("下载任务执行失败：{}", e))??;
+    let result = downloader
+        .download(
+            app.clone(),
+            &model_id,
+            &download_id,
+            &download_url,
+            out_path.clone(),
+            &filename,
+            expected_size.unwrap_or(0),
+        )
+        .await
+        .map(|size| size)
+        .map_err(|e| format!("����ʧ�ܣ�{}", e));
+
+    // P2-4������ȡ��ͨ����������ɣ��ɹ�/ʧ��/cancelled����� Map �Ƴ���
+    // �����ڴ�й©��ǰ��ÿ��һ���µ�����ע��һ���� entry����
+    state.download_cancels.lock().remove(&download_id);
+
+    result.map_err(|e| format!("��������ִ��ʧ�ܣ�{}", e))?;
 
     let file_size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
     let elapsed = start_time.elapsed().as_millis() as u64;
