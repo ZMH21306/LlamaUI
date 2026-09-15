@@ -44,6 +44,7 @@ mod log;
 pub mod log_sanitizer;
 pub mod download_engine;
 mod llama_downloader;
+pub mod hf_downloader;
 mod model_management;
 mod recovery;
 mod remote_server;
