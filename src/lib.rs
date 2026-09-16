@@ -165,6 +165,7 @@ pub fn run() {
             commands::hf_model_cmd::get_hf_token,
             commands::hf_model_cmd::set_hf_download_dir,
             commands::hf_model_cmd::get_hf_download_dir,
+            commands::hf_model_cmd::precreate_hf_store_window,
             commands::hf_model_cmd::open_hf_store_window,
             // 远程服务器管理
             commands::remote_cmd::add_remote_server,

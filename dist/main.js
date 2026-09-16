@@ -1679,10 +1679,18 @@ function attachUIListeners() {
     function setMeta(speed, eta) {
       if (!metaEl) return;
       const parts = [];
-      if (speed && speed > 0.01) parts.push(speed.toFixed(2) + ' MB/s');
-      if (eta && eta > 0 && eta < 1e8) {
+      // 显示速度：即使接近完成时速度较低也显示
+      if (speed && speed > 0) parts.push(speed.toFixed(2) + ' MB/s');
+      // 显示 ETA：过滤 0 / NaN / 异常大值，但允许显示 < 1s 的情况
+      if (eta && eta >= 0 && eta < 1e8 && !Number.isNaN(eta)) {
         const s = Math.round(eta);
-        parts.push('剩余 ' + (s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + s % 60 + 's'));
+        if (s < 1) {
+          parts.push('剩余 <1s');
+        } else if (s < 60) {
+          parts.push('剩余 ' + s + 's');
+        } else {
+          parts.push('剩余 ' + Math.floor(s / 60) + 'm ' + (s % 60) + 's');
+        }
       }
       metaEl.textContent = parts.join(' · ');
     }
@@ -1821,8 +1829,10 @@ function attachUIListeners() {
       let html = '';
       for (const gpu of gpus) {
         const vendorClass = gpu.vendor === 'NVIDIA' ? 'gpu-card-nvidia' : gpu.vendor === 'AMD' ? 'gpu-card-amd' : 'gpu-card-intel';
+        const safeVendor = escapeHtml(gpu.vendor || 'GPU');
         html += `<div class="gpu-card ${vendorClass}">`;
-        html += `<div class="gpu-card-name">${escapeHtml(gpu.vendor)} ${escapeHtml(gpu.model)}</div>`;
+        html += `<div class="gpu-card-vendor-badge">${safeVendor}</div>`;
+        html += `<div class="gpu-card-name">${escapeHtml(gpu.model || 'Unknown')}</div>`;
         if (gpu.memory_mb) html += `<div class="gpu-card-info">显存: ${gpu.memory_mb} MB</div>`;
         if (gpu.cuda_version) html += `<div class="gpu-card-info">CUDA: ${escapeHtml(gpu.cuda_version)}</div>`;
         if (gpu.driver_version) html += `<div class="gpu-card-info">驱动: ${escapeHtml(gpu.driver_version)}</div>`;
@@ -2407,6 +2417,10 @@ async function init() {
   // 关键修复：必须 await + 立即 save_config（不走 debounce），
   // 否则 run_initialization 读到的是旧 config（空 models_dir → 环境检查失败）
   await autoDetectAndSave();
+
+  // 预热 HuggingFace 模型商店：后台预创建窗口，避免首次点击时卡顿
+  // 预创建使用静默模式，不阻塞启动流程
+  try { await invoke('precreate_hf_store_window'); } catch (_) {}
 
   // 启动后自动执行三步初始化（init() 顺序末尾执行）
   safeCall(async () => {

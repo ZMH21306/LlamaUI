@@ -556,6 +556,46 @@ pub async fn cancel_hf_download(
 }
 
 #[tauri::command]
+pub async fn precreate_hf_store_window(
+    app: tauri::AppHandle,
+    state: State<'_, HfState>,
+) -> Result<(), String> {
+    // 若窗口已存在，无需重复创建
+    if app.get_webview_window("hf-store").is_some() {
+        return Ok(());
+    }
+    // 若另一个创建流程正在进行，直接返回
+    if state
+        .store_open_lock
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(());
+    }
+    let result = async {
+        let main_window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "未找到主窗口".to_string())?;
+        use tauri::WebviewWindowBuilder;
+        let url = tauri::WebviewUrl::App("hf-store.html".into());
+        let builder = WebviewWindowBuilder::new(&app, "hf-store", url)
+            .title("HuggingFace 模型商店")
+            .inner_size(920.0, 720.0)
+            .min_inner_size(760.0, 560.0)
+            .resizable(true)
+            .center();
+        let builder = builder.parent(&main_window).map_err(|e| format!("设置父窗口失败：{}", e))?;
+        let _window = builder.build().map_err(|e| format!("创建窗口失败：{}", e))?;
+        // 预热：创建后保持隐藏，等待用户点击按钮时再显示
+        _window.hide().map_err(|e| format!("隐藏窗口失败：{}", e))?;
+        Ok(()) as Result<(), String>
+    }
+    .await;
+    state.store_open_lock.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
 pub async fn open_hf_store_window(
     app: tauri::AppHandle,
     state: State<'_, HfState>,

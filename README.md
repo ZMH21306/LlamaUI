@@ -1,4 +1,4 @@
-﻿# LlamaUI
+ LlamaUI
 
 > LLM Desktop Console for managing llama-server
 
@@ -276,3 +276,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) - 底层 LLM 推理引擎
 - [Tauri](https://tauri.app/) - 桌面应用框架
 - [重构说明](docs/REFACTORING.md) - 架构设计文档
+

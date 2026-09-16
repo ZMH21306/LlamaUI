@@ -1027,7 +1027,6 @@ input[type="checkbox"]:checked::after {
   padding: 11px 16px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-left: 4px solid var(--accent);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-2), 0 8px 28px rgba(0, 0, 0, 0.28);
   color: var(--text-1);
@@ -1042,7 +1041,6 @@ input[type="checkbox"]:checked::after {
     opacity 0.2s var(--ease),
     transform 0.2s var(--ease),
     background var(--dur) var(--ease),
-    border-left-color var(--dur) var(--ease),
     color var(--dur) var(--ease);
 }
 .toast.show {
@@ -1054,10 +1052,10 @@ input[type="checkbox"]:checked::after {
   0% { opacity: 0; transform: translateY(-20px) scale(0.9); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
-.toast.success { border-left-color: var(--success); }
-.toast.error   { border-left-color: var(--danger); }
-.toast.warning { border-left-color: var(--warning); }
-.toast.info    { border-left-color: var(--info); }
+.toast.success .toast-icon { background: var(--success); }
+.toast.error   .toast-icon { background: var(--danger); }
+.toast.warning .toast-icon { background: var(--warning); }
+.toast.info    .toast-icon { background: var(--info); }
 .toast-icon {
   display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px;
@@ -1066,11 +1064,8 @@ input[type="checkbox"]:checked::after {
   font-size: 12px;
   flex-shrink: 0;
   color: var(--text-on-accent);
+  background: var(--accent);
 }
-.toast.success .toast-icon { background: var(--success); }
-.toast.error   .toast-icon { background: var(--danger); }
-.toast.warning .toast-icon { background: var(--warning); }
-.toast.info    .toast-icon { background: var(--info); }
 .toast-text { flex: 1; word-break: break-word; user-select: text; }
 .toast-close {
   background: transparent;
@@ -1217,9 +1212,7 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
   min-width: 0;
 }
 /* 鎵弿涓細杈规鑹?+ spinner锛堝竷灞€鐢?.with-progress 璐熻矗锛?*/
-.toast.scanning {
-  border-left-color: var(--accent);
-}
+/* scanning 时图标旋转即可，不再需要左色条 */
 .toast.scanning .toast-icon {
   flex-shrink: 0;
   background: var(--accent);
@@ -1956,11 +1949,29 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .gpu-info-detecting,
 .gpu-info-empty { color: var(--text-3); font-size: 12px; }
 .gpu-info-error { color: var(--danger); font-size: 12px; }
-.gpu-card { margin-bottom: 8px; padding: 8px; background: var(--bg-2); border-radius: 6px; border-left: 3px solid var(--info); }
-.gpu-card.gpu-card-nvidia { border-left-color: var(--success); }
-.gpu-card.gpu-card-amd { border-left-color: var(--danger); }
-.gpu-card.gpu-card-intel { border-left-color: var(--info); }
-.gpu-card-name { font-size: 12px; font-weight: 600; color: var(--text-1); }
+.gpu-card {
+  margin-bottom: 8px;
+  padding: 8px;
+  background: var(--bg-2);
+  border-radius: 6px;
+  position: relative;
+}
+.gpu-card-vendor-badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid;
+  line-height: 1.4;
+}
+.gpu-card.gpu-card-nvidia .gpu-card-vendor-badge { color: #76b900; border-color: #76b900; }
+.gpu-card.gpu-card-amd .gpu-card-vendor-badge { color: #ed1c24; border-color: #ed1c24; }
+.gpu-card.gpu-card-intel .gpu-card-vendor-badge { color: #0071c5; border-color: #0071c5; }
+.gpu-card-name { font-size: 12px; font-weight: 600; color: var(--text-1); padding-right: 56px; }
 .gpu-card-info { font-size: 11px; color: var(--text-2); }
 .gpu-card-recommend { font-size: 11px; color: var(--accent); }
 .gpu-card-issue { font-size: 10px; margin-top: 2px; }
