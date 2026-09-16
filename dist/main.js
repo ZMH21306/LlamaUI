@@ -1713,9 +1713,23 @@ function attachUIListeners() {
     lastCandidate = '';
     renderSteps();
     setProgress(0, '准备中...');
-    if (els.downloadStatus) els.downloadStatus.textContent = '';
-    setMeta(0, null);
-    setStage('init');
+    // 启动计时
+    const downloadStartMs = Date.now();
+    let _elapsedTimer = null;
+    function updateElapsed() {
+      if (!metaEl) return;
+      const secs = Math.floor((Date.now() - downloadStartMs) / 1000);
+      metaEl.textContent = '已运行 ' + secs + 's';
+    }
+    // 每1s刷新一次耗时，仅在事件流中才启动
+    function startElapsedTimer() {
+      if (_elapsedTimer) return;
+      updateElapsed();
+      _elapsedTimer = setInterval(updateElapsed, 1000);
+    }
+    function stopElapsedTimer() {
+      if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+    }
 
     // 订阅后端实时进度事件（即时更新，无平滑插值）
     const unlisten = await listen('download-progress', (e) => {
@@ -1727,9 +1741,18 @@ function attachUIListeners() {
         setStage(p.stage);
       }
 
-      // finding_asset：展示候选验证详情
+      // fetching_version：indeterminate + 阶段文字 + 计时
+      if (p.stage === 'fetching_version') {
+        startElapsedTimer();
+        setIndeterminate('正在获取版本信息（' + backend + ' 后端）...');
+        setMeta(0, null);
+        return;
+      }
+
+      // finding_asset：indeterminate + 候选信息 + 计时
       if (p.stage === 'finding_asset') {
-        clearIndeterminate();
+        startElapsedTimer();
+        setIndeterminate('正在匹配安装包候选（' + (d?.total_candidates || '?') + ' 个待验证）...');
         if (d && d.candidate_count > 0) {
           const cur = d.current_candidate || '';
           if (cur && cur !== lastCandidate) lastCandidate = cur;
@@ -1746,6 +1769,14 @@ function attachUIListeners() {
 
       // downloading：即时显示百分比、速度、ETA
       if (p.stage === 'downloading') {
+        // 若后端尚未发送真实数据，停留在 indeterminate，避免显示 0.00 MB 的假进度
+        const hasRealData = typeof p.downloaded === 'number' && typeof p.total === 'number' && p.total > 0;
+        if (!hasRealData) {
+          startElapsedTimer();
+          setIndeterminate('等待后端开始传输数据...');
+          setMeta(0, null);
+          return;
+        }
         clearIndeterminate();
         // 使用实际下载量/总大小计算百分比，而非全局进度（避免 0 字节时显示 12%）
         const pct = p.total > 0 ? (p.downloaded / p.total * 100) : (p.progress * 100);
@@ -1769,6 +1800,7 @@ function attachUIListeners() {
       // finalize：最终清理
       if (p.stage === 'finalize') {
         clearIndeterminate();
+        stopElapsedTimer();
         const pct = p.progress * 100;
         setProgress(pct, p.message || '正在完成安装...');
         setMeta(0, null);
@@ -1776,6 +1808,7 @@ function attachUIListeners() {
       }
       if (p.stage === 'complete') {
         clearIndeterminate();
+        stopElapsedTimer();
         setProgress(100, '✅ 下载完成！');
         setMeta(0, null);
         return;
@@ -1793,14 +1826,16 @@ function attachUIListeners() {
       setIndeterminate('后端: ' + backend + '，获取版本中...');
 
       const result = await invoke('download_llama_server', { backend });
+      stopElapsedTimer();
       setStage('complete');
       setProgress(100, '✅ 安装完成！');
       setMeta(0, null);
-      if (els.downloadStatus) els.downloadStatus.textContent = '耗时 ' + (result.elapsed_ms / 1000).toFixed(1) + 's';
-      showNotification('llama-server 安装成功！耗时 ' + result.elapsed_ms + 'ms', 'success', 5000);
+      if (els.downloadStatus) els.downloadStatus.textContent = '总耗时 ' + ((Date.now() - downloadStartMs) / 1000).toFixed(1) + 's';
+      showNotification('llama-server 安装成功！总耗时 ' + ((Date.now() - downloadStartMs) / 1000).toFixed(1) + 's', 'success', 5000);
       els.llamaServerPath.value = result.path;
       try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}
     } catch (e) {
+      stopElapsedTimer();
       if (bar) { bar.classList.remove('indeterminate'); bar.style.background = 'var(--danger)'; }
       if (detailEl) detailEl.textContent = '❌ 错误: ' + e;
       if (percentEl) percentEl.textContent = '失败';
