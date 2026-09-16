@@ -122,23 +122,6 @@ pub mod stage_progress {
     pub const COMPLETE_END: f64 = 1.00;
 }
 
-/// 下载阶段常量（用于统一的进度分配）
-/// 用 reqwest streaming 下载文件到本地路径（带 TLS 证书验证、断点续传、实时进度）
-///
-/// 使用 `reqwest` 的 streaming API，避免依赖外部 curl 子进程，
-/// 并确保 TLS 证书链被正确验证。支持 Range 请求实现断点续传。
-///
-/// `progress_start`/`progress_end` 用于将 reqwest 的 0~1 下载进度
-/// 映射到全局进度区间的 [progress_start, progress_end]。
-pub fn download_file(
-    url: &str,
-    dest: &Path,
-    total_size: u64,
-    progress_callback: Option<&dyn Fn(DownloadProgress)>,
-) -> anyhow::Result<u64> {
-    curl_download(url, dest, total_size, 0.0, 1.0, progress_callback)
-}
-
 fn curl_download(
     url: &str,
     dest: &Path,
