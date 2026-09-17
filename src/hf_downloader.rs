@@ -150,6 +150,22 @@ impl HfDownloader {
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
+        // Emit headers stage after getting Content-Length
+        let _ = app.emit(
+            "hf-download-progress",
+            HfDownloadProgress {
+                stage: "headers".to_string(),
+                progress: 0.0,
+                downloaded: 0,
+                total: content_length.unwrap_or(0),
+                speed: None,
+                eta: None,
+                model_id: model_id.to_string(),
+                filename: filename.to_string(),
+                message: format!("获取文件信息：{}", content_length.map_or_else(|| "未知大小".to_string(), |v| format!("{} MB", v as f64 / 1024.0 / 1024.0))),
+                download_id: download_id.to_string(),
+            },
+        );
         tracing::info!(
             target: "HfDownloader",
             url = %url,
