@@ -1190,7 +1190,11 @@ html.hf-store, body.hf-store { height: 100%; margin: 0; }
 .hf-download-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg-2); border-radius: var(--r-sm); border: 1px solid var(--border); }
 .hf-dl-progress-track { flex: 1; height: 5px; background: var(--bg-3); border-radius: 3px; overflow: hidden; min-width: 60px; }
 .hf-dl-progress-fill { height: 100%; width: 0%; background: var(--gradient-primary); border-radius: 3px; transition: width 0.18s linear; }
-.hf-dl-info { font-size: 11px; color: var(--text-2); min-width: 70px; text-align: right; }
+.hf-dl-info { font-size: 11px; color: var(--text-2); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.hf-dl-size { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hf-dl-speed { flex: 0 0 auto; min-width: 52px; text-align: right; }
+.hf-dl-eta { flex: 0 0 auto; min-width: 44px; text-align: right; }
+
 .hf-dl-status { font-size: 11px; font-weight: 600; }
 .hf-dl-status.complete { color: var(--success, #4caf50); }
 .hf-dl-status.error { color: var(--danger, #f44336); }
