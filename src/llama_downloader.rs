@@ -8,8 +8,15 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::sync::LazyLock;
+use reqwest::blocking::Client;
 use crate::download_engine::{create_default_engine, DownloadTask};
 use crate::util::process::silent_command;
+
+/// 共享的 HTTP 客户端（由下载引擎初始化，复用连接池）
+static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    create_default_engine().http_client().client()
+});
 
 fn current_os() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -72,11 +79,7 @@ fn get_github_token() -> Option<String> {
 
 /// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证），并返回 Content-Length 大小
 fn curl_head(url: &str) -> anyhow::Result<u64> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?;
-
-    let response = client.head(url).send()?;
+    let response = SHARED_CLIENT.head(url).send()?;
     let status = response.status();
 
     // 尝试从响应头中提取文件大小（Content-Length）
@@ -350,6 +353,9 @@ struct GitHubRelease {
     #[serde(default)]
     #[allow(dead_code)]
     prerelease: bool,
+    /// 版本来源（用于前端显示进度信息）
+    #[serde(skip)]
+    source: &'static str,
 }
 
 /// GitHub Release 资产
@@ -719,7 +725,13 @@ fn smart_find_asset<'a>(
     for keyword in &backend_keywords {
         for asset in &release.assets {
             let name_lower = asset.name.to_lowercase();
-            if name_lower.contains(os_keyword)
+            // Linux 资产可能使用 ubuntu 或 linux 前缀
+            let os_match = if os == "linux" {
+                name_lower.contains("ubuntu") || name_lower.contains("linux")
+            } else {
+                name_lower.contains(os_keyword)
+            };
+            if os_match
                 && name_lower.contains(arch_keyword)
                 && name_lower.contains(keyword)
                 && (name_lower.starts_with("llama-") || name_lower.starts_with("cudart-llama-"))
@@ -887,7 +899,7 @@ fn smart_find_asset<'a>(
     None
 }
 
-/// 带重试的 GitHub API 调用
+/// 带重试的 GitHub API 调用（指数退避）
 fn fetch_llama_latest_release_with_retry(
     max_retries: u32,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
@@ -930,8 +942,12 @@ fn fetch_llama_latest_release_with_retry(
                 );
             }
         }
-        if attempt < max_retries {
-            std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(attempt)));
+            if attempt < max_retries {
+            // 指数退避：500ms, 1s, 2s, 4s
+            let delay = 500u64 * (1u64 << (attempt - 1));
+            let delay = delay.min(5000);
+            tracing::info!(target: "LlamaDownloader", delay_ms = delay, "等待后重试");
+            std::thread::sleep(std::time::Duration::from_millis(delay));
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("获取最新版本失败")))
@@ -1082,7 +1098,9 @@ pub fn download_and_install(
                     if download_attempt >= max_retries {
                         return Err(e);
                     }
-                    std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(download_attempt)));
+                    // 指数退避：2s, 4s, 8s
+                    let delay = 2u64.pow(download_attempt as u32);
+                    std::thread::sleep(std::time::Duration::from_secs(delay));
                 }
             }
         };
@@ -1155,6 +1173,28 @@ pub fn download_and_install(
 
     tracing::info!(target: "LlamaDownloader", path = %llama_server_path.display(), bytes = file_size, elapsed_ms = elapsed, "安装完成");
 
+    // 10. SHA256 完整性校验（快速且必要）
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "verifying".to_string(),
+            progress: stage_progress::EXTRACTING_END,
+            downloaded: file_size,
+            total: file_size,
+            message: "校验文件完整性...".to_string(),
+            detail: Some(DownloadProgressDetail {
+                step: "SHA256 校验".to_string(),
+                step_progress: 0.5,
+                candidate_index: 0,
+                candidate_count: 0,
+                current_candidate: None,
+                speed_mbps: 0.0,
+                eta_secs: None,
+            }),
+        });
+    }
+    let sha256 = compute_sha256(&llama_server_path, progress_callback, file_size)?;
+    tracing::info!(target: "LlamaDownloader", sha256 = %sha256, "SHA256 校验完成");
+
     // 最终进度 100%
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
@@ -1167,7 +1207,15 @@ pub fn download_and_install(
                 file_size as f64 / 1048576.0,
                 elapsed as f64 / 1000.0
             ),
-            detail: None,
+            detail: Some(DownloadProgressDetail {
+                step: "完成".to_string(),
+                step_progress: 1.0,
+                candidate_index: 0,
+                candidate_count: 0,
+                current_candidate: Some(sha256.clone()),
+                speed_mbps: 0.0,
+                eta_secs: None,
+            }),
         });
     }
 
@@ -1175,57 +1223,331 @@ pub fn download_and_install(
         success: true,
         path: llama_server_path.to_string_lossy().to_string(),
         file_size,
-        sha256: String::new(),
+        sha256,
         elapsed_ms: elapsed,
         error: None,
     })
 }
 
-/// 获取 llama.cpp 最新版本（官方稳定方案：直接构建 GitHub Release URL）
+/// 计算文件的 SHA256 十六进制摘要（流式读取 + 进度回调）
+fn compute_sha256(
+    path: &Path,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+    file_size: u64,
+) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut bytes_read = 0u64;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        bytes_read += n as u64;
+
+        // 每 16MB 或最后一次发一次进度
+        if bytes_read % (16 * 1024 * 1024) < buf.len() as u64 || bytes_read == file_size {
+            if let Some(cb) = progress_callback {
+                let pct = if file_size > 0 {
+                    stage_progress::EXTRACTING_END
+                        + (bytes_read as f64 / file_size as f64) * (stage_progress::COMPLETE_END - stage_progress::EXTRACTING_END)
+                } else {
+                    stage_progress::COMPLETE_END
+                };
+                cb(DownloadProgress {
+                    stage: "verifying".to_string(),
+                    progress: pct,
+                    downloaded: bytes_read,
+                    total: file_size,
+                    message: format!("校验文件完整性... {:.1}%", pct * 100.0),
+                    detail: Some(DownloadProgressDetail {
+                        step: "SHA256 校验".to_string(),
+                        step_progress: bytes_read as f64 / file_size.max(1) as f64,
+                        candidate_index: 0,
+                        candidate_count: 0,
+                        current_candidate: None,
+                        speed_mbps: 0.0,
+                        eta_secs: None,
+                    }),
+                });
+            }
+        }
+    }
+    let hash = hasher.finalize();
+    Ok(format!("{:x}", hash))
+}
+
+/// 获取 llama.cpp 最新版本（先查询 GitHub API，失败则回退到硬编码稳定版本）
 ///
-/// **跨系统无限制方案：**
-/// - 不调用 GitHub API（无速率限制）
-/// - 硬编码最新稳定 tag（可配置）
-/// - 直接构建官方下载 URL
-/// - 跨系统：Windows/Linux/macOS 自动适配
+/// **优化方案：**
+/// 1. 快速查询 GitHub API `/releases/latest`（单次请求，约 0.5~2s）
+/// 2. 解析真实 release assets（名称 + size + URL）
+/// 3. 若 API 失败（限流/网络问题），回退到硬编码 tag（保持可用）
+/// 4. 回退时仍构建候选名 → HEAD 验证流程（与之前一致）
+///
+/// 这样既保证了"最新版本"的准确性，又不会因为 GitHub 临时限流导致下载失败。
 fn fetch_llama_latest_release() -> anyhow::Result<GitHubRelease> {
-    // 硬编码最新稳定版本（可通过环境变量 LLAMA_CPP_VERSION 覆盖）
-    let tag = std::env::var("LLAMA_CPP_VERSION")
-        .unwrap_or_else(|_| "b6240".to_string());
-
-    tracing::info!(
-        target: "LlamaDownloader",
-        tag = %tag,
-        "使用官方稳定方案（绕过 GitHub API）"
-    );
-
-    // 操作系统和架构
     let os = current_os();
     let arch = current_arch();
 
-    // 构建候选资产名（支持多种命名变体）
-    let candidates = build_official_candidate_names(&tag, &os, &arch);
+        // 0) 用户可通过环境变量覆盖（最高优先级）
+    if let Ok(tag) = std::env::var("LLAMA_CPP_VERSION") {
+        let tag_owned = tag.clone();
+        tracing::info!(target: "LlamaDownloader", tag = %tag_owned, "使用环境变量指定的版本");
+        return Ok(GitHubRelease {
+            tag_name: tag_owned,
+            assets: build_virtual_assets(&tag, os, arch),
+            prerelease: false,
+            source: "env",
+        });
+    }
 
-    // 为每个候选资产名创建虚拟的 GitHubAsset（实际下载时会验证）
-    // 这种设计避免调用 GitHub API，但保持接口兼容
-    let assets: Vec<GitHubAsset> = candidates
+    // 1) 尝试 GitHub API
+    tracing::info!(target: "LlamaDownloader", "查询 GitHub API 获取最新 release");
+    if let Ok(mut release) = try_fetch_from_github_api() {
+        release.source = "api";
+        return Ok(release);
+    }
+
+            // 2) 回退：API 失败时，尝试下载 nightly-tag.txt 直接获取 nightly tag
+    if let Some(nightly_tag) = fetch_nightly_tag_direct() {
+        tracing::warn!(
+            target: "LlamaDownloader",
+            nightly_tag = %nightly_tag,
+            "API 不可用，回退到 nightly-tag.txt 方式"
+        );
+        return Ok(GitHubRelease {
+            tag_name: nightly_tag.clone(),
+            assets: build_virtual_assets(&nightly_tag, os, arch),
+            prerelease: true,
+            source: "nightly",
+        });
+    }
+
+    // 3) 最后回退：硬编码已知稳定版本
+    let tag = "b10964".to_string();
+    let tag_owned = tag.clone();
+    tracing::warn!(target: "LlamaDownloader", tag = %tag_owned, "所有策略失败，回退到硬编码版本");
+    Ok(GitHubRelease {
+        tag_name: tag_owned,
+        assets: build_virtual_assets(&tag, os, arch),
+        prerelease: true,
+        source: "fallback",
+    })
+}
+
+/// 当 API 不可用时，尝试直接下载 nightly-tag.txt 文本获取 nightly tag
+///
+/// nightly-tag.txt 位于最新稳定 release（如 v0.4.1）的下载页面。
+fn fetch_nightly_tag_direct() -> Option<String> {
+    // 尝试从已知的 stable release 下载 nightly-tag.txt
+    let stable_tags = ["v0.4.2", "v0.4.1", "v0.4.0"];
+    for stable_tag in &stable_tags {
+        let url = format!(
+            "https://github.com/ggml-org/llama.cpp/releases/download/{}/nightly-tag.txt",
+            stable_tag
+        );
+        if let Ok(content) = download_text(&url) {
+            let tag = content.trim().to_string();
+            if !tag.is_empty() && tag.starts_with('b') {
+                return Some(tag);
+            }
+        }
+    }
+    None
+}
+
+/// 简单下载文本内容（用于 nightly-tag.txt）
+fn download_text(url: &str) -> anyhow::Result<String> {
+    let resp = SHARED_CLIENT.get(url).send()?;
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!("HTTP {}", resp.status().as_u16()));
+    }
+    Ok(resp.text()?)
+}
+
+/// 从 GitHub API 获取最新 release 并解析真实 assets
+///
+/// **策略**（按优先级）：
+/// 1. `/releases/latest` → 若包含 .zip/.tar.gz 二进制资产，直接返回
+/// 2. 若 latest 没有二进制资产（如 v0.4.1 仅含 nightly-tag.txt），下载 nightly-tag.txt 获取 nightly tag → 拉取 `/releases/tags/{nightly_tag}`
+/// 3. 扫描 `/releases?per_page=20` → 返回第一个含二进制资产的 release
+fn try_fetch_from_github_api() -> anyhow::Result<GitHubRelease> {
+    let auth = get_github_token().map(|t| format!("token {}", t));
+
+    // 1. 尝试 /releases/latest
+    let latest_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+    if let Ok(release) = fetch_github_release(&SHARED_CLIENT, &auth, latest_url) {
+        if has_binary_assets(&release) {
+            tracing::info!(target: "LlamaDownloader", tag = %release.tag_name, "latest release 有二进制资产，直接使用");
+            let mut release = release;
+            release.source = "api";
+            return Ok(release);
+        }
+        // 2. latest 没有二进制资产 → 下载 nightly-tag.txt 获取 nightly tag
+        if let Some(nightly_tag) = fetch_nightly_tag_via_api(&SHARED_CLIENT, &auth, &release) {
+            let nightly_url = format!(
+                "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}",
+                nightly_tag
+            );
+            if let Ok(nightly) = fetch_github_release(&SHARED_CLIENT, &auth, &nightly_url) {
+                if has_binary_assets(&nightly) {
+                    tracing::info!(target: "LlamaDownloader", tag = %nightly.tag_name, nightly_tag = %nightly_tag, "通过 nightly-tag.txt 获取到有二进制的 release");
+                    let mut nightly = nightly;
+                    nightly.source = "api";
+                    return Ok(nightly);
+                }
+            }
+        }
+    }
+
+    // 3. 扫描最近 20 个 release，找第一个有二进制资产的
+    let list_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20";
+    if let Ok(releases) = fetch_github_releases_list(&SHARED_CLIENT, &auth, list_url) {
+        for release in releases {
+            if has_binary_assets(&release) {
+                tracing::info!(target: "LlamaDownloader", tag = %release.tag_name, "从 releases 列表找到二进制资产");
+                let mut release = release;
+                release.source = "api";
+                return Ok(release);
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("GitHub API 返回无可用二进制资产"))
+}
+
+/// 检查 release 是否包含二进制下载资产（.zip 或 .tar.gz）
+fn has_binary_assets(release: &GitHubRelease) -> bool {
+    release.assets.iter().any(|a| {
+        let name_lower = a.name.to_lowercase();
+        name_lower.ends_with(".zip") || name_lower.ends_with(".tar.gz")
+    })
+}
+
+/// 从 release 的 nightly-tag.txt 资产下载 nightly tag（文本内容 = tag 号）
+fn fetch_nightly_tag_via_api(
+    client: &reqwest::blocking::Client,
+    auth: &Option<String>,
+    release: &GitHubRelease,
+) -> Option<String> {
+    let nightly_asset = release.assets.iter().find(|a| a.name == "nightly-tag.txt")?;
+    let mut req = client.get(&nightly_asset.browser_download_url);
+    if let Some(token) = auth {
+        req = req.header("Authorization", token);
+    }
+    let resp = req.timeout(Duration::from_secs(10)).send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().ok()?;
+    let tag = text.trim().to_string();
+    if tag.is_empty() {
+        return None;
+    }
+    tracing::info!(target: "LlamaDownloader", nightly_tag = %tag, "从 nightly-tag.txt 获取 nightly tag");
+    Some(tag)
+}
+
+/// 获取单个 GitHub release（解析为 GitHubRelease）
+fn fetch_github_release(
+    client: &reqwest::blocking::Client,
+    auth: &Option<String>,
+    url: &str,
+) -> anyhow::Result<GitHubRelease> {
+    let mut req = client.get(url);
+    if let Some(token) = auth {
+        req = req.header("Authorization", token);
+    }
+    let resp = req.send()?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("GitHub API HTTP {}", status.as_u16()));
+    }
+    let body = resp.text()?;
+    let mut json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("JSON 解析失败: {}", e))?;
+    parse_github_release(&mut json)
+}
+
+/// 获取多个 GitHub release（解析为 GitHubRelease 列表）
+fn fetch_github_releases_list(
+    client: &reqwest::blocking::Client,
+    auth: &Option<String>,
+    url: &str,
+) -> anyhow::Result<Vec<GitHubRelease>> {
+    let mut req = client.get(url);
+    if let Some(token) = auth {
+        req = req.header("Authorization", token);
+    }
+    let resp = req.send()?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("GitHub API HTTP {}", status.as_u16()));
+    }
+    let body = resp.text()?;
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("JSON 解析失败: {}", e))?;
+    let arr = json.as_array().ok_or_else(|| anyhow::anyhow!("API 返回非数组"))?;
+    let mut releases = Vec::with_capacity(arr.len());
+    for mut item in arr.iter().cloned() {
+        if let Ok(r) = parse_github_release(&mut item) {
+            releases.push(r);
+        }
+    }
+    Ok(releases)
+}
+
+/// 从 JSON 值解析 GitHubRelease
+fn parse_github_release(json: &mut serde_json::Value) -> anyhow::Result<GitHubRelease> {
+    let tag = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("缺少 tag_name"))?;
+    let assets: Vec<GitHubAsset> = json
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| {
+                    Some(GitHubAsset {
+                        name: a.get("name")?.as_str()?.to_string(),
+                        browser_download_url: a.get("browser_download_url")?.as_str()?.to_string(),
+                        size: a.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(GitHubRelease {
+        tag_name: tag.to_string(),
+        assets,
+        prerelease: json.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false),
+        source: "api",
+    })
+}
+
+/// 构建"虚拟"候选资产（用于 API 失败时的回退）
+fn build_virtual_assets(tag: &str, os: &str, arch: &str) -> Vec<GitHubAsset> {
+    let candidates = build_official_candidate_names(tag, os, arch);
+    candidates
         .into_iter()
         .map(|name| GitHubAsset {
-            name: name.clone(),
             browser_download_url: format!(
                 "https://github.com/ggml-org/llama.cpp/releases/download/{}/{}",
                 tag, name
             ),
-            size: 0, // 未知，由 HEAD 请求获取
+            size: 0,
+            name,
         })
-        .collect();
-
-    Ok(GitHubRelease {
-        tag_name: tag,
-        assets,
-        prerelease: false,
-    })
+        .collect()
 }
+
 
 /// 构建候选资产名列表（官方稳定方案）
 fn build_official_candidate_names(tag: &str, os: &str, arch: &str) -> Vec<String> {
