@@ -1,4 +1,4 @@
-//! HF Model Store Commands
+﻿//! HF Model Store Commands
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,23 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use futures::stream::{self, StreamExt};
-use crate::hf_downloader::{HfDownloadProgress, HfDownloader};
+use crate::hf_downloader::HfDownloader;
 use crate::util::proxy::read_system_proxy as get_system_proxy;
+
+/// 下载进度事件（与前端 `hf-download-progress` 事件对齐）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HfDownloadProgress {
+    pub stage: String,
+    pub progress: f64,
+    pub downloaded: u64,
+    pub total: u64,
+    pub speed: Option<u64>,
+    pub eta: Option<u64>,
+    pub model_id: String,
+    pub filename: String,
+    pub message: String,
+    pub download_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfModelSearchResult {
@@ -103,6 +118,9 @@ impl HfState {
 }
 
 const HF_API_BASE: &str = "https://huggingface.co/api";
+
+/// 官方 resolve 下载地址（不再使用镜像源）
+const HF_RESOLVE_BASE: &str = "https://huggingface.co";
 
 /// 读取 Windows 系统代理配置（兼容 Clash/V2Ray 等透明代理）。
 /// 优先读 `HKCU\...\ProxyServer`，再兜底环境变量（大小写不敏感）。
@@ -273,7 +291,6 @@ pub async fn download_hf_model(
     model_id: String,
     filename: String,
     install_dir: Option<String>,
-    use_mirror: bool,
     expected_size: Option<u64>,
 ) -> Result<HfDownloadResult, String> {
     // ===== 安全校验（P0-1 + P0-2 修复） =====
@@ -308,10 +325,8 @@ pub async fn download_hf_model(
         .map(PathBuf::from)
         .unwrap_or_else(|| state.download_dir.lock().clone());
     fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
-    // 根据 use_mirror 选择下载域名：默认 https://huggingface.co，镜像 https://hf-mirror.com
-    let domain = if use_mirror { "https://hf-mirror.com" } else { "https://huggingface.co" };
     let token = state.hf_token.lock().clone();
-    let mut download_url = format!("{}/{}/resolve/main/{}", domain, model_id, filename);
+    let mut download_url = format!("{}/{}/resolve/main/{}", HF_RESOLVE_BASE, model_id, filename);
     if let Some(ref token_val) = token {
         download_url.push_str(&format!("?token={}", token_val));
     }
@@ -319,21 +334,22 @@ pub async fn download_hf_model(
     let _out_path_str = out_path.to_string_lossy().to_string();
     let start_time = std::time::Instant::now();
     // P2-4：注册取消通道。前端可调用 `cancel_hf_download(download_id)` 触发取消
-    let download_id = format!("{}::{}", model_id, filename);
+    let download_id = format!("{}::{}", model_id, safe_filename);
     let (cancel_tx, _cancel_rx) = tokio::sync::oneshot::channel::<()>();
     state
         .download_cancels
         .lock()
         .insert(download_id.clone(), cancel_tx);
 
-    let _api_client = state.api_client.lock().clone();
+    let download_id_for_emit = download_id.clone();
+
     let _ = app.emit(
         "hf-download-progress",
         HfDownloadProgress {
             stage: "init".to_string(),
             progress: 0.0,
             downloaded: 0,
-            total: 0,
+            total: expected_size.unwrap_or(0),
             speed: None,
             eta: None,
             model_id: model_id.clone(),
@@ -343,7 +359,22 @@ pub async fn download_hf_model(
         },
     );
 
-    // ʹ���µ� HF ר������������ʽ���̣߳�������ж��̷ֿ߳鷽����
+    // 开始真正下载前，向后端报告“downloading”阶段，便于 UI 立即更新状态。
+    let _ = app.emit(
+        "hf-download-progress",
+        HfDownloadProgress {
+            stage: "downloading".to_string(),
+            progress: 0.0,
+            downloaded: 0,
+            total: expected_size.unwrap_or(0),
+            speed: None,
+            eta: None,
+            model_id: model_id.clone(),
+            filename: filename.clone(),
+            message: format!("正在下载：{}", filename),
+            download_id: download_id_for_emit.clone(),
+        },
+    );
     let downloader = match HfDownloader::new() {
         Ok(d) => d,
         Err(e) => {
@@ -352,14 +383,14 @@ pub async fn download_hf_model(
                 progress: 0.0,
                 downloaded: 0,
                 total: expected_size.unwrap_or(0),
-                speed: None,
+                                speed: None,
                 eta: None,
                 model_id: model_id.clone(),
                 filename: filename.clone(),
-                message: format!("��ʼ��������ʧ�ܣ�{}", e),
+                message: format!("初始化下载器失败：{}", e),
                 download_id: download_id.clone(),
             });
-            return Err(format!("��ʼ��������ʧ�ܣ�{}", e));
+            return Err(format!("初始化下载器失败：{}", e));
         }
     };
 
@@ -368,11 +399,11 @@ pub async fn download_hf_model(
         progress: 0.0,
         downloaded: 0,
         total: expected_size.unwrap_or(0),
-        speed: None,
+                speed: None,
         eta: None,
         model_id: model_id.clone(),
         filename: filename.clone(),
-        message: format!("�������ӣ�{}", filename),
+        message: format!("正在连接 HuggingFace：{}", filename),
         download_id: download_id.clone(),
     });
 
@@ -388,13 +419,13 @@ pub async fn download_hf_model(
         )
         .await
         .map(|size| size)
-        .map_err(|e| format!("����ʧ�ܣ�{}", e));
+        .map_err(|e| format!("下载失败：{}", e));
 
-    // P2-4������ȡ��ͨ����������ɣ��ɹ�/ʧ��/cancelled����� Map �Ƴ���
-    // �����ڴ�й©��ǰ��ÿ��һ���µ�����ע��һ���� entry����
+    // P2-4：下载结束（成功/失败/取消），从 Map 移除 cancel sender，防止泄漊。
+    // 每次下载前注册 entry，下载结束后 remove 即可自动 drop sender。
     state.download_cancels.lock().remove(&download_id);
 
-    result.map_err(|e| format!("��������ִ��ʧ�ܣ�{}", e))?;
+    result.map_err(|e| format!("下载执行失败：{}", e))?;
 
     let file_size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
     let elapsed = start_time.elapsed().as_millis() as u64;
@@ -411,7 +442,7 @@ pub async fn download_hf_model(
             model_id: model_id.clone(),
             filename: filename.clone(),
             message: "下载完成".to_string(),
-            download_id: format!("{}::{}", model_id, filename),
+            download_id: format!("{}::{}", model_id, safe_filename),
         },
     );
 
@@ -463,7 +494,7 @@ pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: O
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String) -> Result<Vec<HfModelFile>, String> {
+pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String, expected_size: Option<u64>) -> Result<Vec<HfModelFile>, String> {
     let token = state.hf_token.lock().clone();
     let encoded_id = modelId.split('/').map(|s| urlencoding::encode(s)).collect::<Vec<_>>().join("/");
     let (body, status) = hf_get(&state, &format!("/models/{}", &encoded_id), token.as_deref()).await;
@@ -481,7 +512,7 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String) -> R
     let mut files: Vec<HfModelFile> = siblings.iter().filter_map(|s| {
         let rfilename = s["rfilename"].as_str()?;
         if !rfilename.ends_with(".gguf") { return None; }
-        Some(HfModelFile { path: rfilename.to_string(), size: s["size"].as_u64().or_else(|| s["lfs"].get("size").and_then(|v| v.as_u64())).unwrap_or(0), r#type: s["type"].as_str().unwrap_or("blob").to_string() })
+        Some(HfModelFile { path: rfilename.to_string(), size: s["size"].as_u64().or_else(|| s["lfs"].get("size").and_then(|v| v.as_u64())).or(expected_size).unwrap_or(0), r#type: s["type"].as_str().unwrap_or("blob").to_string() })
     }).collect();
 
     // HF API 对 GGUF 文件（LFS 大文件）经常不返回 size/lfs 字段（实测为 null），
@@ -537,7 +568,8 @@ pub async fn cancel_hf_download(
     model_id: String,
     filename: String,
 ) -> Result<(), String> {
-    let download_id = format!("{}::{}", model_id, filename);
+    let base = filename.rsplit('/').next().unwrap_or(&filename);
+    let download_id = format!("{}::{}", model_id, base);
     // 查找注册在 Map 中的 cancel sender
     let tx = {
         let mut cancels = state.download_cancels.lock();
@@ -583,11 +615,10 @@ pub async fn precreate_hf_store_window(
             .inner_size(920.0, 720.0)
             .min_inner_size(760.0, 560.0)
             .resizable(true)
-            .center();
+            .center()
+            .visible(false); // 关键修复：创建时即隐藏，避免闪现
         let builder = builder.parent(&main_window).map_err(|e| format!("设置父窗口失败：{}", e))?;
         let _window = builder.build().map_err(|e| format!("创建窗口失败：{}", e))?;
-        // 预热：创建后保持隐藏，等待用户点击按钮时再显示
-        _window.hide().map_err(|e| format!("隐藏窗口失败：{}", e))?;
         Ok(()) as Result<(), String>
     }
     .await;
