@@ -10,26 +10,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 
 use crate::util::proxy::read_system_proxy;
+use crate::commands::hf_model_cmd::HfDownloadProgress;
 
-/// 下载进度事件（与前端 `hf-download-progress` 事件对齐）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HfDownloadProgress {
-    pub stage: String,
-    pub progress: f64,
-    pub downloaded: u64,
-    pub total: u64,
-    pub speed: Option<u64>,
-    pub eta: Option<u64>,
-    pub model_id: String,
-    pub filename: String,
-    pub message: String,
-    pub download_id: String,
-}
+
 
 /// HF 下载器。
 pub struct HfDownloader {
