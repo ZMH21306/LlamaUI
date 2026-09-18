@@ -165,6 +165,7 @@ impl HttpClient {
         Ok(HeadResponse { status, content_length })
     }
     pub fn config(&self) -> &HttpClientConfig { &self.config }
+    pub fn client(&self) -> Client { self.client.clone() }
     /// 下载指定 Range 的字节到 dest 文件
     pub fn download_range(&self, url: &str, start: u64, end: u64, dest: &Path) -> AnyResult<u64> {
         let resp = self.client.get(url)
@@ -267,15 +268,36 @@ impl MultiThreadDownloader {
                 next_idx += 1;
                 thread::spawn(move || {
                     chunk.set_downloading();
-                    match http_client.download_range(&url, chunk.start, chunk.end, &chunk.temp_file) {
-                        Ok(n) => { chunk.downloaded.store(n, Ordering::Relaxed); chunk.set_complete(); tx.send((chunk.index, Ok(n))).ok(); }
-                        Err(e) => { chunk.set_failed(); tx.send((chunk.index, Err(e))).ok(); }
+                    // 每个块最多重试 3 次，使用指数退避
+                    let mut chunk_err = None::<anyhow::Error>;
+                    for chunk_attempt in 1..=3u32 {
+                        match http_client.download_range(&url, chunk.start, chunk.end, &chunk.temp_file) {
+                            Ok(n) => {
+                                chunk.downloaded.store(n, Ordering::Relaxed);
+                                chunk.set_complete();
+                                tx.send((chunk.index, Ok(n))).ok();
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::warn!(target: "LlamaDownloader", chunk_index = chunk.index, attempt = chunk_attempt, error = %e, "分块下载失败，准备重试");
+                                chunk_err = Some(e);
+                                if chunk_attempt < 3 {
+                                    // 指数退避：500ms, 1s, 2s
+                                    let delay = 500u64 * (1u64 << (chunk_attempt - 1));
+                                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                                }
+                            }
+                        }
+                    }
+                    if let Some(e) = chunk_err {
+                        chunk.set_failed();
+                        tx.send((chunk.index, Err(e))).ok();
                     }
                 });
                 active += 1;
             }
             if active == 0 { break; }
-            match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+            match rx.recv_timeout(std::time::Duration::from_secs(120)) {
                 Ok((_idx, Ok(n))) => {
                     active -= 1;
                     total_downloaded += n;

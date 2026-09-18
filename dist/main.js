@@ -1630,15 +1630,14 @@ function attachUIListeners() {
     const percentEl = $('downloadPercent');
     const stepsEl = $('downloadSteps');
 
-    // 阶段定义
+            // 阶段定义（去掉 finalise/complete 独立标签，结束时直接收叠显示）
     const STAGES = [
       { id: 'init',            label: '初始化' },
       { id: 'fetching_version', label: '获取版本' },
       { id: 'finding_asset',    label: '匹配资产' },
       { id: 'downloading',      label: '下载' },
       { id: 'extracting',       label: '解压' },
-      { id: 'finalize',         label: '完成中' },
-      { id: 'complete',         label: '完成' },
+      { id: 'verifying',        label: '校验' },
     ];
     let currentStageIdx = -1;
     let lastCandidate = '';
@@ -1713,24 +1712,7 @@ function attachUIListeners() {
     lastCandidate = '';
     renderSteps();
     setProgress(0, '准备中...');
-    // 启动计时
     const downloadStartMs = Date.now();
-    let _elapsedTimer = null;
-    function updateElapsed() {
-      if (!metaEl) return;
-      const secs = Math.floor((Date.now() - downloadStartMs) / 1000);
-      metaEl.textContent = '已运行 ' + secs + 's';
-    }
-    // 每1s刷新一次耗时，仅在事件流中才启动
-    function startElapsedTimer() {
-      if (_elapsedTimer) return;
-      updateElapsed();
-      _elapsedTimer = setInterval(updateElapsed, 1000);
-    }
-    function stopElapsedTimer() {
-      if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
-    }
-
     // 订阅后端实时进度事件（即时更新，无平滑插值）
     const unlisten = await listen('download-progress', (e) => {
       const p = e.payload;
@@ -1741,17 +1723,15 @@ function attachUIListeners() {
         setStage(p.stage);
       }
 
-      // fetching_version：indeterminate + 阶段文字 + 计时
+      // fetching_version：indeterminate + 阶段文字
       if (p.stage === 'fetching_version') {
-        startElapsedTimer();
         setIndeterminate('正在获取版本信息（' + backend + ' 后端）...');
         setMeta(0, null);
         return;
       }
 
-      // finding_asset：indeterminate + 候选信息 + 计时
+      // finding_asset：indeterminate + 候选信息
       if (p.stage === 'finding_asset') {
-        startElapsedTimer();
         setIndeterminate('正在匹配安装包候选（' + (d?.total_candidates || '?') + ' 个待验证）...');
         if (d && d.candidate_count > 0) {
           const cur = d.current_candidate || '';
@@ -1797,19 +1777,18 @@ function attachUIListeners() {
         setMeta(0, null);
         return;
       }
-      // finalize：最终清理
-      if (p.stage === 'finalize') {
+      // verifying：SHA256 校验（显示进度百分比）
+      if (p.stage === 'verifying') {
         clearIndeterminate();
-        stopElapsedTimer();
-        const pct = p.progress * 100;
-        setProgress(pct, p.message || '正在完成安装...');
+        const pct = typeof p.progress === 'number' ? p.progress * 100 : 0;
+        setProgress(pct, p.message || '校验文件完整性...');
         setMeta(0, null);
         return;
       }
       if (p.stage === 'complete') {
         clearIndeterminate();
         stopElapsedTimer();
-        setProgress(100, '✅ 下载完成！');
+        setProgress(100, p.message || '✅ 下载完成！');
         setMeta(0, null);
         return;
       }
