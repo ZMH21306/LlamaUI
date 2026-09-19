@@ -150,8 +150,8 @@ fn curl_download(
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<u64> {
     const MAX_ATTEMPTS: u32 = 5;
-    const PROGRESS_BYTES: u64 = 64 * 1024; // 每 64KB 累积计算进度（更频繁上报，防卡顿）
-    const PROGRESS_MIN_MS: u64 = 100; // 时间节流：至少 100ms 才上报（更流畅）
+    const PROGRESS_BYTES: u64 = 32 * 1024; // 每 32KB 累积计算进度（更频繁上报，防卡顿）
+    const PROGRESS_MIN_MS: u64 = 20;        // 时间节流：至少 20ms 才上报（更流畅）
 
     let start = std::time::Instant::now();
     tracing::info!(target: "LlamaDownloader", url = %url, total_size, "启动流式下载（reqwest）");

@@ -1777,11 +1777,10 @@ function attachUIListeners() {
           return;
         }
         // downloaded == 0 但 total 已知：数据尚未到达，显示等待提示 + 启动计时器
+        // 不调用 setProgress(0, ...)，以免 maxProgress 被锁定在 0，导致下载完成后条形图无法显示进度
         if (p.downloaded === 0) {
           startElapsedTimer();
-          clearIndeterminate();
-          const totalMB = (p.total / 1048576).toFixed(2);
-          setProgress(0, '下载中 · 0.00 / ' + totalMB + ' MB (0.0%) — 等待数据中...');
+          if (detailEl) detailEl.textContent = '0.00 / ' + (p.total / 1048576).toFixed(2) + ' MB — 等待数据中...';
           setMeta(0, null);
           return;
         }
