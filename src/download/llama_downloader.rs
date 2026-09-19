@@ -4,14 +4,14 @@
 //! 支持 GPU 后端自动选择、SHA256 校验、解压和进度回调。
 //! 使用 reqwest 库（带 TLS 证书验证）发起所有 HTTP 请求。
 
+use crate::util::process::silent_command;
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use std::sync::LazyLock;
-use reqwest::blocking::Client;
-use crate::util::process::silent_command;
+use std::time::Duration;
 
 /// 共享的阻塞 HTTP 客户端（直连 reqwest，不再依赖自研下载引擎）
 static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
@@ -129,7 +129,7 @@ pub mod stage_progress {
     pub const PREPARING_ASSET_START: f64 = 0.03;
     pub const PREPARING_ASSET_END: f64 = 0.05;
     pub const FINDING_ASSET_START: f64 = 0.05;
-        pub const FINDING_ASSET_END: f64 = 0.08;
+    pub const FINDING_ASSET_END: f64 = 0.08;
     pub const DOWNLOAD_START: f64 = 0.08;
     pub const DOWNLOAD_END: f64 = 0.90;
     pub const EXTRACTING_START: f64 = 0.90;
@@ -150,8 +150,8 @@ fn curl_download(
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<u64> {
     const MAX_ATTEMPTS: u32 = 5;
-    const PROGRESS_BYTES: u64 = 512 * 1024; // 每 512KB 累积计算进度
-    const PROGRESS_MIN_MS: u64 = 200;        // 时间节流：至少 200ms 才上报（防闪烁）
+    const PROGRESS_BYTES: u64 = 64 * 1024; // 每 64KB 累积计算进度（更频繁上报，防卡顿）
+    const PROGRESS_MIN_MS: u64 = 100; // 时间节流：至少 100ms 才上报（更流畅）
 
     let start = std::time::Instant::now();
     tracing::info!(target: "LlamaDownloader", url = %url, total_size, "启动流式下载（reqwest）");
@@ -222,8 +222,37 @@ fn curl_download(
             .write(true)
             .open(dest)?;
 
+        // 拿到响应头+大小后，立即通知前端（解决 0% 卡顿问题）
+        tracing::info!(
+            target: "LlamaDownloader",
+            url = %url,
+            file_size_mb = size as f64 / 1048576.0,
+            "开始下载文件"
+        );
+        if let Some(cb) = progress_callback {
+            cb(DownloadProgress {
+                stage: "downloading".to_string(),
+                progress: progress_start + 0.001 * (progress_end - progress_start),
+                downloaded: 0,
+                total: size,
+                message: format!("准备下载 {:.1} MB...", size as f64 / 1048576.0),
+                detail: Some(DownloadProgressDetail {
+                    step: "下载中".to_string(),
+                    step_progress: 0.0,
+                    candidate_index: 1,
+                    candidate_count: 1,
+                    current_candidate: None,
+                    speed_mbps: 0.0,
+                    eta_secs: None,
+                }),
+            });
+        }
+
         let mut downloaded: u64 = 0;
-        let mut buffer = [0u8; 8192];
+        let mut buffer = [0u8; 65536]; // 64KB 缓冲区，提升读取吞吐
+
+        // 3 秒无进展保底上报：避免网络抖动导致前端卡在 0%
+        const WATCHDOG_MS: u64 = 3000;
 
         loop {
             let n = match resp.read(&mut buffer) {
@@ -234,8 +263,61 @@ fn curl_download(
                     break;
                 }
             };
+            let now = std::time::Instant::now();
             if n == 0 {
-                break;
+                // 检查看门狗：如果超过 WATCHDOG_MS 仍未收到数据，发一次保底上报
+                if downloaded > 0
+                    && now.duration_since(last_progress_at).as_millis() as u64 >= WATCHDOG_MS
+                {
+                    if let Some(cb) = progress_callback {
+                        let raw_progress = if size > 0 {
+                            downloaded as f64 / size as f64
+                        } else {
+                            0.0
+                        };
+                        let global_progress =
+                            progress_start + raw_progress * (progress_end - progress_start);
+                        let elapsed = start.elapsed().as_secs_f64();
+                        let speed_mbps = if elapsed > 0.0 {
+                            (downloaded as f64 / elapsed) / 1_048_576.0
+                        } else {
+                            0.0
+                        };
+                        let remaining_bytes = size.saturating_sub(downloaded);
+                        let eta_secs = if speed_mbps > 0.0 {
+                            (remaining_bytes as f64 / 1_048_576.0 / speed_mbps) as u64
+                        } else {
+                            0
+                        };
+                        cb(DownloadProgress {
+                            stage: "downloading".to_string(),
+                            progress: global_progress,
+                            downloaded,
+                            total: size,
+                            message: format!(
+                                "下载中（网络缓慢，已下载 {:.1} MB）...",
+                                downloaded as f64 / 1048576.0
+                            ),
+                            detail: Some(DownloadProgressDetail {
+                                step: "downloading".to_string(),
+                                step_progress: raw_progress,
+                                candidate_index: 1,
+                                candidate_count: 1,
+                                current_candidate: None,
+                                speed_mbps,
+                                eta_secs: if eta_secs > 0 {
+                                    Some(eta_secs as f64)
+                                } else {
+                                    None
+                                },
+                            }),
+                        });
+                    }
+                    last_progress_at = now;
+                }
+                if n == 0 {
+                    break;
+                }
             }
             if let Err(e) = file.write_all(&buffer[..n]) {
                 last_error = e.to_string();
@@ -251,9 +333,13 @@ fn curl_download(
                 || downloaded == size;
             if should_emit {
                 last_progress_at = now;
-                let raw_progress = if size > 0 { downloaded as f64 / size as f64 } else { 0.0 };
-                let global_progress = progress_start
-                    + raw_progress * (progress_end - progress_start);
+                let raw_progress = if size > 0 {
+                    downloaded as f64 / size as f64
+                } else {
+                    0.0
+                };
+                let global_progress =
+                    progress_start + raw_progress * (progress_end - progress_start);
                 let elapsed = start.elapsed().as_secs_f64();
                 let speed_mbps = if elapsed > 0.0 {
                     (downloaded as f64 / elapsed) / 1_048_576.0
@@ -297,7 +383,9 @@ fn curl_download(
             }
         }
 
-        let final_size = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(downloaded);
+        let final_size = std::fs::metadata(dest)
+            .map(|m| m.len())
+            .unwrap_or(downloaded);
         if final_size > 0 {
             tracing::info!(target: "LlamaDownloader", attempt, downloaded = final_size, "下载完成");
             return Ok(final_size);
@@ -326,7 +414,14 @@ fn curl_download_parallel(
     const CHUNK_SIZE: u64 = 4 * 1024 * 1024; // 4MB per chunk
 
     if total_size == 0 {
-        return curl_download(url, dest, 0, progress_start, progress_end, progress_callback);
+        return curl_download(
+            url,
+            dest,
+            0,
+            progress_start,
+            progress_end,
+            progress_callback,
+        );
     }
 
     // 创建目标文件
@@ -390,7 +485,7 @@ fn curl_download_parallel(
                 .build()
                 .expect("构建 reqwest Client 失败");
 
-                        let mut resp = client
+            let mut resp = client
                 .get(&url)
                 .header("Range", format!("bytes={}-{}", range_start, range_end))
                 .send()
@@ -441,8 +536,7 @@ fn curl_download_parallel(
             } else {
                 0.0
             };
-            let global_progress = progress_start
-                + raw_progress * (progress_end - progress_start);
+            let global_progress = progress_start + raw_progress * (progress_end - progress_start);
             let elapsed = start.elapsed().as_secs_f64();
             let speed_mbps = if elapsed > 0.0 {
                 (total_written as f64 / elapsed) / 1_048_576.0
@@ -462,14 +556,17 @@ fn curl_download_parallel(
                     speed_mbps
                 ),
                 detail: Some(DownloadProgressDetail {
-                                        step: format!("分块下载 ({} chunks)", num_chunks),
+                    step: format!("分块下载 ({} chunks)", num_chunks),
                     step_progress: raw_progress,
                     candidate_index: 1,
                     candidate_count: 1,
                     current_candidate: None,
                     speed_mbps,
                     eta_secs: if speed_mbps > 0.0 {
-                        Some(((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64 as f64)
+                        Some(
+                            ((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64
+                                as f64,
+                        )
                     } else {
                         None
                     },
@@ -634,11 +731,7 @@ pub fn detect_gpu_backend() -> GpuBackend {
         if detect_nvidia_gpu() {
             let cuda_ver = detect_cuda_version();
             if let Some(ver) = cuda_ver {
-                if let Some(major) = ver
-                    .split('.')
-                    .next()
-                    .and_then(|s| s.parse::<u32>().ok())
-                {
+                if let Some(major) = ver.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
                     if major >= 13 {
                         tracing::info!(target: "LlamaDownloader", cuda_version = %ver, backend = "cuda-13.3", "检测到 CUDA 13+");
                         return GpuBackend::Cuda13_3;
@@ -935,7 +1028,7 @@ fn find_llama_server_recursive(dir: &Path, results: &mut Vec<PathBuf>) -> anyhow
 /// 从 release 的资产列表中智能查找匹配当前系统的资产
 /// 支持多种命名变体，自动识别 OS/arch/backend
 /// **关键改进：验证 URL 可用性，确保下载成功**
-/// 
+///
 /// 每次候选验证都会通过 `progress_callback` 发送实时进度，
 /// 让前端能立即显示"验证候选 X/Y: xxx.zip"等详细信息。
 ///
@@ -1036,7 +1129,8 @@ fn smart_find_asset<'a>(
             // 宽松匹配：只要求包含 llama 和匹配架构
             if name_lower.contains("llama")
                 && name_lower.contains(arch_keyword)
-                && !name_lower.contains("-metal") // macOS 专用
+                && !name_lower.contains("-metal")
+            // macOS 专用
             {
                 candidates.push(asset);
             }
@@ -1059,10 +1153,12 @@ fn smart_find_asset<'a>(
 
     // 并行执行所有 HEAD 请求，避免串行等待
     let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START;
-    let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
+    let urls: Vec<String> = candidates
+        .iter()
+        .map(|a| a.browser_download_url.clone())
+        .collect();
     let results: Vec<(usize, anyhow::Result<u64>)> = std::thread::scope(|s| {
-        urls
-            .iter()
+        urls.iter()
             .enumerate()
             .map(|(i, url)| {
                 let url_owned = url.clone();
@@ -1098,7 +1194,10 @@ fn smart_find_asset<'a>(
                         found_progress,
                         candidate_index as u64,
                         total_candidates as u64,
-                        format!("✅ 候选 {}/{} 可用，选中：{}", candidate_index, total_candidates, candidate_name),
+                        format!(
+                            "✅ 候选 {}/{} 可用，选中：{}",
+                            candidate_index, total_candidates, candidate_name
+                        ),
                         DownloadProgressDetail {
                             step: format!("✅ 选中：{}", candidate_name),
                             step_progress: found_progress,
@@ -1126,7 +1225,10 @@ fn smart_find_asset<'a>(
                         verify_progress,
                         candidate_index as u64,
                         total_candidates as u64,
-                        format!("❌ {}/{} 失败（{}），尝试下一个...", candidate_index, total_candidates, e),
+                        format!(
+                            "❌ {}/{} 失败（{}），尝试下一个...",
+                            candidate_index, total_candidates, e
+                        ),
                         DownloadProgressDetail {
                             step: format!("❌ {}/{} 失败", candidate_index, total_candidates),
                             step_progress: candidate_index as f64 / total_candidates as f64,
@@ -1179,7 +1281,8 @@ fn fetch_llama_latest_release_with_retry(
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<GitHubRelease> {
     let mut last_err: Option<anyhow::Error> = None;
-    let version_range = stage_progress::FETCHING_VERSION_END - stage_progress::FETCHING_VERSION_START;
+    let version_range =
+        stage_progress::FETCHING_VERSION_END - stage_progress::FETCHING_VERSION_START;
     for attempt in 1..=max_retries {
         tracing::info!(
             target: "LlamaDownloader",
@@ -1216,7 +1319,7 @@ fn fetch_llama_latest_release_with_retry(
                 );
             }
         }
-            if attempt < max_retries {
+        if attempt < max_retries {
             // 指数退避：500ms, 1s, 2s, 4s
             let delay = 500u64 * (1u64 << (attempt - 1));
             let delay = delay.min(5000);
@@ -1268,7 +1371,7 @@ pub fn download_and_install(
 
     // 1. 获取最新版本（带重试）
     if let Some(cb) = progress_callback {
-                cb(DownloadProgress {
+        cb(DownloadProgress {
             stage: "fetching_version".to_string(),
             progress: stage_progress::FETCHING_VERSION_START,
             downloaded: 0,
@@ -1284,7 +1387,7 @@ pub fn download_and_install(
 
     // 2. 智能查找资产（多模式匹配）
     if let Some(cb) = progress_callback {
-                cb(DownloadProgress {
+        cb(DownloadProgress {
             stage: "finding_asset".to_string(),
             progress: stage_progress::PREPARING_ASSET_START,
             downloaded: 0,
@@ -1294,17 +1397,18 @@ pub fn download_and_install(
         });
     }
 
-    let (asset, head_size) = smart_find_asset(&release, backend, progress_callback).ok_or_else(|| {
-        let available: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
-        anyhow::anyhow!(
-            "未找到匹配资产。\n系统: {} {}\n后端: {}\ntag: {}\n可用资产: {:?}",
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            backend.as_str(),
-            tag,
-            available
-        )
-    })?;
+    let (asset, head_size) =
+        smart_find_asset(&release, backend, progress_callback).ok_or_else(|| {
+            let available: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+            anyhow::anyhow!(
+                "未找到匹配资产。\n系统: {} {}\n后端: {}\ntag: {}\n可用资产: {:?}",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                backend.as_str(),
+                tag,
+                available
+            )
+        })?;
 
     // 优先使用 HEAD 请求获取的 Content-Length，否则回退到 GitHub API 的 size 字段
     let total_size = if head_size > 0 { head_size } else { asset.size };
@@ -1344,7 +1448,10 @@ pub fn download_and_install(
                 progress: stage_progress::DOWNLOAD_END,
                 downloaded: archive_size,
                 total: archive_size,
-                message: format!("✅ 本地归档已存在 ({:.1} MB)，跳过下载", archive_size as f64 / 1048576.0),
+                message: format!(
+                    "✅ 本地归档已存在 ({:.1} MB)，跳过下载",
+                    archive_size as f64 / 1048576.0
+                ),
                 detail: None,
             });
         }
@@ -1450,7 +1557,9 @@ pub fn download_and_install(
     let sha256 = compute_sha256_fast(&llama_server_path, progress_callback, file_size)?;
     tracing::info!(target: "LlamaDownloader", sha256 = %sha256, "SHA256 校验完成");
 
-    // 11. 发送完成事件（在 spawn_blocking 内通过 callback 发送，确保事件在 invoke 返回前入队）
+    // 11. 发送完成事件（在 spawn_blocking 内通过 callback 发送）
+    // 延时 50ms 确保前端先处理完 "verifying" 完成事件，避免事件乱序导致 UI 卡在 99%
+    std::thread::sleep(std::time::Duration::from_millis(50));
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
             stage: "complete".into(),
@@ -1475,7 +1584,7 @@ pub fn download_and_install(
 }
 
 /// 快速计算文件的 SHA256 十六进制摘要（大缓冲区 + 高频进度更新）
-/// 
+///
 /// 优化策略：
 /// - 使用 1MB 缓冲区加速文件读取（原为 64KB）
 /// - 每 1MB 或 100ms 上报一次进度（确保流畅无卡顿）
@@ -1491,15 +1600,15 @@ fn compute_sha256_fast(
 
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    
+
     // 1MB 缓冲区，大幅提升 I/O 吞吐量
     let mut buf = [0u8; 1024 * 1024];
     let mut bytes_read = 0u64;
     let mut last_progress_at = std::time::Instant::now();
     let verify_start = std::time::Instant::now();
-    
-    const PROGRESS_BYTES: u64 = 1024 * 1024;
-    const PROGRESS_MIN_MS: u64 = 100;
+
+    const PROGRESS_BYTES: u64 = 512 * 1024; // 每 512KB 累积计算进度（确保小文件也有中间上报）
+    const PROGRESS_MIN_MS: u64 = 50; // 时间节流：至少 50ms 才上报（更流畅）
 
     loop {
         let n = file.read(&mut buf)?;
@@ -1512,11 +1621,11 @@ fn compute_sha256_fast(
         // 时间节流检查
         let now = std::time::Instant::now();
         let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= PROGRESS_MIN_MS;
-        
+
         // 每 1MB 或到达末尾时上报进度（避免重复）
         let is_end = bytes_read >= file_size;
         let byte_aligned = bytes_read % PROGRESS_BYTES < n as u64;
-        
+
         // 只在中途节点发送，最后一步由循环后的代码处理
         if byte_aligned && !is_end && time_ok {
             last_progress_at = now;
@@ -1553,13 +1662,16 @@ fn compute_sha256_fast(
                         candidate_count: 0,
                         current_candidate: None,
                         speed_mbps,
-                        eta_secs: Some(((file_size - bytes_read) as f64 / 1_048_576.0 / speed_mbps.max(0.001)) as u64 as f64),
+                        eta_secs: Some(
+                            ((file_size - bytes_read) as f64 / 1_048_576.0 / speed_mbps.max(0.001))
+                                as u64 as f64,
+                        ),
                     }),
                 });
             }
         }
     }
-    
+
     // 循环结束后发送最终完成事件（97%）
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
@@ -1579,7 +1691,7 @@ fn compute_sha256_fast(
             }),
         });
     }
-    
+
     let hash = hasher.finalize();
     Ok(format!("{:x}", hash))
 }
@@ -1597,7 +1709,7 @@ fn fetch_llama_latest_release() -> anyhow::Result<GitHubRelease> {
     let os = current_os();
     let arch = current_arch();
 
-        // 0) 用户可通过环境变量覆盖（最高优先级）
+    // 0) 用户可通过环境变量覆盖（最高优先级）
     if let Ok(tag) = std::env::var("LLAMA_CPP_VERSION") {
         let tag_owned = tag.clone();
         tracing::info!(target: "LlamaDownloader", tag = %tag_owned, "使用环境变量指定的版本");
@@ -1616,7 +1728,7 @@ fn fetch_llama_latest_release() -> anyhow::Result<GitHubRelease> {
         return Ok(release);
     }
 
-            // 2) 回退：API 失败时，尝试下载 nightly-tag.txt 直接获取 nightly tag
+    // 2) 回退：API 失败时，尝试下载 nightly-tag.txt 直接获取 nightly tag
     if let Some(nightly_tag) = fetch_nightly_tag_direct() {
         tracing::warn!(
             target: "LlamaDownloader",
@@ -1738,7 +1850,10 @@ fn fetch_nightly_tag_via_api(
     auth: &Option<String>,
     release: &GitHubRelease,
 ) -> Option<String> {
-    let nightly_asset = release.assets.iter().find(|a| a.name == "nightly-tag.txt")?;
+    let nightly_asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == "nightly-tag.txt")?;
     let mut req = client.get(&nightly_asset.browser_download_url);
     if let Some(token) = auth {
         req = req.header("Authorization", token);
@@ -1795,7 +1910,9 @@ fn fetch_github_releases_list(
     let body = resp.text()?;
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| anyhow::anyhow!("JSON 解析失败: {}", e))?;
-    let arr = json.as_array().ok_or_else(|| anyhow::anyhow!("API 返回非数组"))?;
+    let arr = json
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("API 返回非数组"))?;
     let mut releases = Vec::with_capacity(arr.len());
     for mut item in arr.iter().cloned() {
         if let Ok(r) = parse_github_release(&mut item) {
@@ -1829,7 +1946,10 @@ fn parse_github_release(json: &mut serde_json::Value) -> anyhow::Result<GitHubRe
     Ok(GitHubRelease {
         tag_name: tag.to_string(),
         assets,
-        prerelease: json.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false),
+        prerelease: json
+            .get("prerelease")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         source: "api",
     })
 }
@@ -1849,7 +1969,6 @@ fn build_virtual_assets(tag: &str, os: &str, arch: &str) -> Vec<GitHubAsset> {
         })
         .collect()
 }
-
 
 /// 构建候选资产名列表（官方稳定方案）
 fn build_official_candidate_names(tag: &str, os: &str, arch: &str) -> Vec<String> {
