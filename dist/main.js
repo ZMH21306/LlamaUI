@@ -1721,7 +1721,9 @@ function attachUIListeners() {
       }
     }
 
-    // 启动
+    // 启动：清理上一轮下载残余状态，避免重下时计时器累加溢出
+    stopElapsedTimer();
+    maxProgress = 0;
     btn.disabled = true;
     btn.textContent = '⏳ 下载中...';
     els.downloadProgress.style.display = 'block';
@@ -1771,6 +1773,15 @@ function attachUIListeners() {
         if (!hasRealData) {
           startElapsedTimer();
           setIndeterminate('等待后端开始传输数据...');
+          setMeta(0, null);
+          return;
+        }
+        // downloaded == 0 但 total 已知：数据尚未到达，显示等待提示 + 启动计时器
+        if (p.downloaded === 0) {
+          startElapsedTimer();
+          clearIndeterminate();
+          const totalMB = (p.total / 1048576).toFixed(2);
+          setProgress(0, '下载中 · 0.00 / ' + totalMB + ' MB (0.0%) — 等待数据中...');
           setMeta(0, null);
           return;
         }
