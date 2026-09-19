@@ -112,33 +112,34 @@ fn curl_head(url: &str) -> anyhow::Result<u64> {
 
 /// 下载阶段常量（用于统一的进度分配）
 ///
-/// 总进度 (0.0 ~ 1.0) 分配如下（用户指定）：
-/// - ① 初始化              : 0%  ~ 1%   （1%）
-/// - ② 获取最新版本         : 1%  ~ 3%   （2%）
-/// - ③ 准备匹配资产         : 3%  ~ 5%   （2%）
-/// - ④ 匹配资产完成         : 5%  ~ 8%   （3%）
-/// - ⑤ 下载安装包           : 8%  ~ 90%  （82%，主阶段）
-/// - ⑥ 解压归档             : 90% ~ 95%  （5%）
-/// - ⑦ SHA256 校验          : 95% ~ 100% （5%，包含清理和完成）
-#[allow(dead_code)]
+/// 总进度 (0.0 ~ 1.0) 分配如下：
+/// - ① 初始化              : 0%  ~ 2%   （2%）
+/// - ② 获取最新版本         : 2%  ~ 6%   （4%）
+/// - ③ 准备匹配资产         : 6%  ~ 8%   （2%）
+/// - ④ 匹配/验证资产       : 8%  ~ 22%  （14%，并行HEAD验证）
+/// - ⑤ 下载安装包           : 22% ~ 80%  （58%，主阶段）
+/// - ⑥ 解压归档             : 80% ~ 88%  （8%）
+/// - ⑦ SHA256 校验          : 88% ~ 96%  （8%）
+/// - ⑧ 清理收尾             : 96% ~ 98%  （2%）
+/// - ⑨ 完成                 : 98% ~ 100% （2%）
 pub mod stage_progress {
     pub const INIT_START: f64 = 0.00;
-    pub const INIT_END: f64 = 0.01;
-    pub const FETCHING_VERSION_START: f64 = 0.01;
-    pub const FETCHING_VERSION_END: f64 = 0.03;
-    pub const PREPARING_ASSET_START: f64 = 0.03;
-    pub const PREPARING_ASSET_END: f64 = 0.05;
-    pub const FINDING_ASSET_START: f64 = 0.05;
-    pub const FINDING_ASSET_END: f64 = 0.08;
-    pub const DOWNLOAD_START: f64 = 0.08;
-    pub const DOWNLOAD_END: f64 = 0.90;
-    pub const EXTRACTING_START: f64 = 0.90;
-    pub const EXTRACTING_END: f64 = 0.95;
-    pub const VERIFYING_START: f64 = 0.95;
-    pub const VERIFYING_END: f64 = 0.99;
+    pub const INIT_END: f64 = 0.02;
+    pub const FETCHING_VERSION_START: f64 = 0.02;
+    pub const FETCHING_VERSION_END: f64 = 0.06;
+    pub const PREPARING_ASSET_START: f64 = 0.06;
+    pub const PREPARING_ASSET_END: f64 = 0.08;
+    pub const FINDING_ASSET_START: f64 = 0.08;
+    pub const FINDING_ASSET_END: f64 = 0.22;
+    pub const DOWNLOAD_START: f64 = 0.22;
+    pub const DOWNLOAD_END: f64 = 0.80;
+    pub const EXTRACTING_START: f64 = 0.80;
+    pub const EXTRACTING_END: f64 = 0.88;
+    pub const VERIFYING_START: f64 = 0.88;
+    pub const VERIFYING_END: f64 = 0.96;
+    pub const FINALIZING_START: f64 = 0.96;
+    pub const FINALIZING_END: f64 = 0.98;
     pub const COMPLETE_END: f64 = 1.00;
-    pub const FINALIZING_START: f64 = 0.93;
-    pub const FINALIZING_END: f64 = 0.95;
 }
 
 fn curl_download(
@@ -148,10 +149,11 @@ fn curl_download(
     progress_start: f64,
     progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
+    cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<u64> {
-    const MAX_ATTEMPTS: u32 = 5;
+    const MAX_ATTEMPTS: u32 = 3;
     const PROGRESS_BYTES: u64 = 32 * 1024; // 每 32KB 累积计算进度（更频繁上报，防卡顿）
-    const PROGRESS_MIN_MS: u64 = 20;        // 时间节流：至少 20ms 才上报（更流畅）
+    const PROGRESS_MIN_MS: u64 = 100;        // 时间节流：至少 100ms 才上报（更流畅）
 
     let start = std::time::Instant::now();
     tracing::info!(target: "LlamaDownloader", url = %url, total_size, "启动流式下载（reqwest）");
@@ -163,7 +165,9 @@ fn curl_download(
                 progress: progress_start,
                 downloaded: 0,
                 total: total_size,
-                message: format!("开始下载 ({:.1} MB)...", total_size as f64 / 1048576.0),
+                                message: format!("开始下载 ({:.1} MB)...", total_size as f64 / 1048576.0),
+                speed_mbps: 0.0,
+                eta_secs: None,
                 detail: None,
             });
         }
@@ -179,7 +183,7 @@ fn curl_download(
 
     for attempt in 1..=MAX_ATTEMPTS {
         if attempt > 1 {
-            let backoff = Duration::from_secs(2u64.pow((attempt - 1) as u32));
+            let backoff = Duration::from_millis(500 * attempt as u64).min(Duration::from_secs(2));
             tracing::warn!(target: "LlamaDownloader", attempt, ?backoff, "下载失败，准备重试");
             std::thread::sleep(backoff);
             if let Some(cb) = progress_callback {
@@ -188,13 +192,22 @@ fn curl_download(
                     progress: progress_start,
                     downloaded: 0,
                     total: total_size,
-                    message: format!("重试第 {} 次...", attempt),
+                                        message: format!("重试第 {} 次...", attempt),
+                    speed_mbps: 0.0,
+                    eta_secs: None,
                     detail: None,
                 });
             }
         }
 
-        let mut resp = match SHARED_CLIENT.get(url).send() {
+            if let Some(ct) = cancel_token {
+                if ct.load(std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!(target: "LlamaDownloader", attempt, "下载被取消");
+                    return Err(anyhow::anyhow!("下载已取消"));
+                }
+            }
+
+            let mut resp = match SHARED_CLIENT.get(url).send() {
             Ok(r) => r,
             Err(e) => {
                 last_error = e.to_string();
@@ -235,7 +248,9 @@ fn curl_download(
                 progress: progress_start + 0.001 * (progress_end - progress_start),
                 downloaded: 0,
                 total: size,
-                message: format!("准备下载 {:.1} MB...", size as f64 / 1048576.0),
+                                message: format!("准备下载 {:.1} MB...", size as f64 / 1048576.0),
+                speed_mbps: 0.0,
+                eta_secs: None,
                 detail: Some(DownloadProgressDetail {
                     step: "下载中".to_string(),
                     step_progress: 0.0,
@@ -255,6 +270,13 @@ fn curl_download(
         const WATCHDOG_MS: u64 = 3000;
 
         loop {
+            // 取消检查
+            if let Some(ct) = cancel_token {
+                if ct.load(std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!(target: "LlamaDownloader", attempt, "下载被取消（读取循环）");
+                    return Err(anyhow::anyhow!("下载已取消"));
+                }
+            }
             let n = match resp.read(&mut buffer) {
                 Ok(n) => n,
                 Err(e) => {
@@ -298,6 +320,8 @@ fn curl_download(
                                 "下载中（网络缓慢，已下载 {:.1} MB）...",
                                 downloaded as f64 / 1048576.0
                             ),
+                            speed_mbps,
+                            eta_secs: if eta_secs > 0 { Some(eta_secs) } else { None },
                             detail: Some(DownloadProgressDetail {
                                 step: "downloading".to_string(),
                                 step_progress: raw_progress,
@@ -365,6 +389,8 @@ fn curl_download(
                             size as f64 / 1048576.0,
                             global_progress * 100.0
                         ),
+                        speed_mbps,
+                        eta_secs: if eta_secs > 0 { Some(eta_secs) } else { None },
                         detail: Some(DownloadProgressDetail {
                             step: "downloading".to_string(),
                             step_progress: raw_progress,
@@ -409,6 +435,7 @@ fn curl_download_parallel(
     progress_start: f64,
     progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
+    cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<u64> {
     const MAX_CHUNKS: usize = 8;
     const CHUNK_SIZE: u64 = 4 * 1024 * 1024; // 4MB per chunk
@@ -421,6 +448,7 @@ fn curl_download_parallel(
             progress_start,
             progress_end,
             progress_callback,
+            cancel_token,
         );
     }
 
@@ -454,11 +482,13 @@ fn curl_download_parallel(
             progress: progress_start,
             downloaded: 0,
             total: total_size,
-            message: format!(
+                        message: format!(
                 "开始下载 ({:.1} MB, {} 线程)...",
                 total_size as f64 / 1_048_576.0,
                 num_chunks
             ),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -555,6 +585,12 @@ fn curl_download_parallel(
                     global_progress * 100.0,
                     speed_mbps
                 ),
+                speed_mbps,
+                eta_secs: if speed_mbps > 0.0 {
+                    Some(((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64)
+                } else {
+                    None
+                },
                 detail: Some(DownloadProgressDetail {
                     step: format!("分块下载 ({} chunks)", num_chunks),
                     step_progress: raw_progress,
@@ -594,6 +630,10 @@ pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
     pub message: String,
+    /// 当前下载速度 MB/s（仅下载阶段有效）
+    pub speed_mbps: f64,
+    /// 预计剩余秒数（仅下载阶段有效）
+    pub eta_secs: Option<u64>,
     /// 可选的细粒度进度信息（用于前端展示更详细的实时状态）
     pub detail: Option<DownloadProgressDetail>,
 }
@@ -632,6 +672,8 @@ fn progress_with(
         downloaded,
         total,
         message,
+        speed_mbps: detail.speed_mbps,
+        eta_secs: detail.eta_secs.map(|v| v as u64),
         detail: Some(detail),
     }
 }
@@ -644,6 +686,8 @@ fn progress_simple(stage: &str, progress: f64, message: String) -> DownloadProgr
         downloaded: 0,
         total: 0,
         message,
+        speed_mbps: 0.0,
+        eta_secs: None,
         detail: None,
     }
 }
@@ -939,6 +983,8 @@ pub fn extract_tar_gz(
                 downloaded: 0,
                 total: 0,
                 message: format!("解压中... 已处理 {}/{}", processed, total_entries),
+                speed_mbps: 0.0,
+                eta_secs: None,
                 detail: None,
             });
         }
@@ -995,6 +1041,8 @@ pub fn extract_zip(
             downloaded: 0,
             total: 0,
             message: format!("解压完成（耗时 {:.1}s）", start.elapsed().as_secs_f64()),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -1300,6 +1348,8 @@ fn fetch_llama_latest_release_with_retry(
                 downloaded: 0,
                 total: 0,
                 message: format!("获取最新版本... 第 {} 次尝试", attempt),
+                speed_mbps: 0.0,
+                eta_secs: None,
                 detail: None,
             });
         }
@@ -1336,6 +1386,7 @@ pub fn download_and_install(
     backend: GpuBackend,
     install_dir: &Path,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
+    cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<DownloadResult> {
     let start = std::time::Instant::now();
     let max_retries = 3;
@@ -1356,17 +1407,27 @@ pub fn download_and_install(
             downloaded: 0,
             total: 0,
             message: "初始化下载环境...".to_string(),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
-        // 初始化完成后推进到 1%
+        // 初始化完成后推进
         cb(DownloadProgress {
             stage: "init".to_string(),
             progress: stage_progress::INIT_END,
             downloaded: 0,
             total: 0,
             message: "初始化完成".to_string(),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
+    }
+    // 取消检查
+    if let Some(ct) = cancel_token {
+        if ct.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("下载已取消"));
+        }
     }
 
     // 1. 获取最新版本（带重试）
@@ -1377,6 +1438,8 @@ pub fn download_and_install(
             downloaded: 0,
             total: 0,
             message: format!("获取最新版本（最多 {} 次重试）...", max_retries),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -1393,6 +1456,8 @@ pub fn download_and_install(
             downloaded: 0,
             total: 0,
             message: format!("查找匹配资产 (tag={})...", tag),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -1452,6 +1517,8 @@ pub fn download_and_install(
                     "✅ 本地归档已存在 ({:.1} MB)，跳过下载",
                     archive_size as f64 / 1048576.0
                 ),
+                speed_mbps: 0.0,
+                eta_secs: None,
                 detail: None,
             });
         }
@@ -1467,6 +1534,7 @@ pub fn download_and_install(
                 stage_progress::DOWNLOAD_START,
                 stage_progress::DOWNLOAD_END,
                 progress_callback,
+                cancel_token,
             ) {
                 Ok(size) => break size,
                 Err(e) => {
@@ -1496,6 +1564,8 @@ pub fn download_and_install(
             downloaded,
             total: downloaded,
             message: "解压中...".to_string(),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -1545,6 +1615,8 @@ pub fn download_and_install(
             downloaded,
             total: downloaded,
             message: "清理临时文件...".to_string(),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -1554,7 +1626,7 @@ pub fn download_and_install(
     tracing::info!(target: "LlamaDownloader", path = %llama_server_path.display(), bytes = file_size, "安装完成");
 
     // 10. SHA256 完整性校验（快速校验）
-    let sha256 = compute_sha256_fast(&llama_server_path, progress_callback, file_size)?;
+    let sha256 = compute_sha256_fast(&llama_server_path, progress_callback, file_size, cancel_token)?;
     tracing::info!(target: "LlamaDownloader", sha256 = %sha256, "SHA256 校验完成");
 
     // 11. 发送完成事件（在 spawn_blocking 内通过 callback 发送）
@@ -1567,6 +1639,8 @@ pub fn download_and_install(
             downloaded: file_size,
             total: file_size,
             message: "✅ 安装完成".into(),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         });
     }
@@ -1594,6 +1668,7 @@ fn compute_sha256_fast(
     path: &Path,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
     file_size: u64,
+    cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -1655,6 +1730,10 @@ fn compute_sha256_fast(
                         file_size as f64 / 1_048_576.0,
                         speed_mbps
                     ),
+                    speed_mbps,
+                                        eta_secs: Some(
+                        ((file_size - bytes_read) as f64 / 1_048_576.0 / speed_mbps.max(0.001)) as u64,
+                    ),
                     detail: Some(DownloadProgressDetail {
                         step: "SHA256 校验".to_string(),
                         step_progress: bytes_read as f64 / file_size.max(1) as f64,
@@ -1680,6 +1759,8 @@ fn compute_sha256_fast(
             downloaded: file_size,
             total: file_size,
             message: "校验文件完整性... 完成".to_string(),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: Some(DownloadProgressDetail {
                 step: "SHA256 校验完成".to_string(),
                 step_progress: 1.0,
@@ -1693,6 +1774,14 @@ fn compute_sha256_fast(
     }
 
     let hash = hasher.finalize();
+
+    // 取消检查
+    if let Some(ct) = cancel_token {
+        if ct.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("SHA256 校验已取消"));
+        }
+    }
+
     Ok(format!("{:x}", hash))
 }
 
@@ -2121,6 +2210,8 @@ mod tests {
             total: 0,
             message: "测试".to_string(),
             detail: None,
+            speed_mbps: 0.0,
+            eta_secs: None,
         };
         assert_eq!(progress.progress, 0.0);
         assert_eq!(progress.downloaded, 0);

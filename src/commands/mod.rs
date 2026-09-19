@@ -30,6 +30,7 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
+use std::sync::Arc;
 use parking_lot::Mutex;
 
 pub mod config_io_cmd;
@@ -67,6 +68,8 @@ pub struct AppState {
     pub config: std::sync::Arc<crate::config::ConfigStore>,
     /// 当前正在进行的检测的取消标志列表（支持并发检测场景）。
     pub detect_cancels: Mutex<Vec<crate::detect::CancelFlag>>,
+    /// 当前 llama 下载的取消标志（AtomicBool，支持取消进行中的下载）
+    pub download_cancel: Arc<std::sync::atomic::AtomicBool>,
     /// 多模型管理（目录索引 + 快速切换）。
     pub model_manager: std::sync::Arc<crate::models::ModelManager>,
     /// 远程服务器管理。
@@ -79,6 +82,7 @@ impl AppState {
             server: std::sync::Arc::new(crate::server::ServerProcess::new()),
             config: std::sync::Arc::new(crate::config::ConfigStore::new()),
             detect_cancels: Mutex::new(Vec::new()),
+            download_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             model_manager: std::sync::Arc::new(crate::models::ModelManager::new()),
             remote_server_manager: std::sync::Arc::new(
                 crate::remote::RemoteServerManager::new(),

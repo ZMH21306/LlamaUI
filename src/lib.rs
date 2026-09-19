@@ -148,6 +148,7 @@ pub fn run() {
             commands::update_cmd::cleanup_old_version,
             // llama 自动下载
             commands::download_cmd::download_llama_server,
+            commands::download_cmd::cancel_download_llama_server,
             commands::download_cmd::detect_gpu,
             commands::download_cmd::list_gpu_backends,
             // GPU 检测与诊断

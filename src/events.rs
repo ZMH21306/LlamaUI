@@ -50,6 +50,26 @@ pub enum ServerStatus {
     Crashed,
 }
 
+/// 下载状态事件（llama-server 下载流程）
+pub const EVT_DOWNLOAD_STATE: &str = "download-state";
+
+/// 下载状态变更事件（llama-server 下载流程）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadState {
+    /// 开始下载
+    Started { backend: String },
+    /// 下载进行中
+    Running,
+    /// 正在取消
+    Cancelling,
+    /// 已取消
+    Cancelled,
+    /// 下载完成
+    Completed { path: String, file_size: u64, sha256: String, elapsed_ms: u64 },
+    /// 下载失败
+    Failed { error: String },
+}
+
 /// 单行日志。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogLine {

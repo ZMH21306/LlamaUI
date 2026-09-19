@@ -4,7 +4,12 @@ use crate::download::llama_downloader::{
     detect_gpu_backend, download_and_install, DownloadProgress, DownloadResult, GpuBackend,
 };
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use tauri::Emitter;
+use tauri::State;
+
+use crate::commands::AppState;
+use crate::events::{DownloadState, EVT_DOWNLOAD_STATE};
 
 /// 下载并安装 llama-server（通过 Tauri event 实时推送进度）
 #[tauri::command]
@@ -12,7 +17,11 @@ pub async fn download_llama_server(
     app: tauri::AppHandle,
     install_dir: Option<String>,
     backend: Option<String>,
+    state: State<'_, AppState>,
 ) -> Result<DownloadResult, String> {
+    // 重置取消标志
+    state.download_cancel.store(false, Ordering::Relaxed);
+
     // 确定安装目录
     let dir = install_dir
         .map(PathBuf::from)
@@ -35,7 +44,10 @@ pub async fn download_llama_server(
         "开始下载"
     );
 
-    // 发送开始事件
+    // 发送开始状态 + 初始进度事件
+    let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Started {
+        backend: gpu_backend.as_str().to_string(),
+    });
     let _ = app.emit(
         "download-progress",
         DownloadProgress {
@@ -44,39 +56,67 @@ pub async fn download_llama_server(
             downloaded: 0,
             total: 0,
             message: format!("开始下载 (后端: {})", gpu_backend.as_str()),
+            speed_mbps: 0.0,
+            eta_secs: None,
             detail: None,
         },
     );
 
     // 克隆 AppHandle 用于 spawn_blocking 中的回调
     let app_clone = app.clone();
+    let cancel_flag = state.download_cancel.clone();
 
     // 执行下载，实时推送进度
     let result = tokio::task::spawn_blocking(move || {
-        download_and_install(gpu_backend, &dir, Some(&|progress| {
-            tracing::debug!(
-                target: "DownloadCmd",
-                stage = %progress.stage,
-                progress = progress.progress,
-                downloaded = progress.downloaded,
-                total = progress.total,
-                message = %progress.message,
-                "下载进度"
-            );
-            let _ = app_clone.emit("download-progress", &progress);
-        }))
+        download_and_install(
+            gpu_backend,
+            &dir,
+            Some(&|progress| {
+                tracing::debug!(
+                    target: "DownloadCmd",
+                    stage = %progress.stage,
+                    progress = progress.progress,
+                    downloaded = progress.downloaded,
+                    total = progress.total,
+                    message = %progress.message,
+                    "下载进度"
+                );
+                let _ = app_clone.emit("download-progress", &progress);
+            }),
+            Some(&cancel_flag),
+        )
     })
     .await
     .map_err(|e| {
         let msg = format!("下载任务执行失败: {}", e);
         tracing::error!(target: "DownloadCmd", error = %e, "spawn_blocking 失败");
+        // 发送失败状态
+        let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Failed {
+            error: msg.clone(),
+        });
         msg
     })?
     .map_err(|e| {
         let msg = format!("{}", e);
         tracing::error!(target: "DownloadCmd", error = %e, "下载安装失败");
+        // 如果是取消导致的错误，发送 Cancelled 状态
+        if msg.contains("取消") {
+            let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelled);
+        } else {
+            let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Failed {
+                error: msg.clone(),
+            });
+        }
         msg
     })?;
+
+    // 发送完成状态
+    let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Completed {
+        path: result.path.clone(),
+        file_size: result.file_size,
+        sha256: result.sha256.clone(),
+        elapsed_ms: result.elapsed_ms,
+    });
 
     tracing::info!(
         target: "DownloadCmd",
@@ -87,6 +127,18 @@ pub async fn download_llama_server(
     );
 
     Ok(result)
+}
+
+/// 取消当前正在进行的 llama-server 下载
+#[tauri::command]
+pub async fn cancel_download_llama_server(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.download_cancel.store(true, Ordering::Relaxed);
+    tracing::info!(target: "DownloadCmd", "收到取消下载请求");
+    let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelling);
+        Ok(())
 }
 
 /// 检测 GPU 后端
