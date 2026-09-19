@@ -1637,6 +1637,7 @@ function attachUIListeners() {
       { id: 'finding_asset',    label: '匹配资产' },
       { id: 'downloading',      label: '下载' },
       { id: 'extracting',       label: '解压' },
+      { id: 'finalizing',       label: '清理' },
       { id: 'verifying',        label: '校验' },
     ];
     let currentStageIdx = -1;
@@ -1702,6 +1703,22 @@ function attachUIListeners() {
 
     function clearIndeterminate() {
       if (bar) bar.classList.remove('indeterminate');
+    }
+
+    // Elapsed timer management
+    let elapsedTimerId = null;
+    function startElapsedTimer() {
+      if (elapsedTimerId) return; // already running
+      elapsedTimerId = setInterval(() => {
+        const elapsedSec = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
+        if (metaEl) metaEl.textContent = '已用时间: ' + elapsedSec + 's';
+      }, 500);
+    }
+    function stopElapsedTimer() {
+      if (elapsedTimerId) {
+        clearInterval(elapsedTimerId);
+        elapsedTimerId = null;
+      }
     }
 
     // 启动
@@ -1777,6 +1794,14 @@ function attachUIListeners() {
         setMeta(0, null);
         return;
       }
+      // finalizing：清理临时文件
+      if (p.stage === 'finalizing') {
+        clearIndeterminate();
+        const pct = typeof p.progress === 'number' ? p.progress * 100 : 0;
+        setProgress(pct, p.message || '清理临时文件...');
+        setMeta(0, null);
+        return;
+      }
       // verifying：SHA256 校验（显示进度百分比）
       if (p.stage === 'verifying') {
         clearIndeterminate();
@@ -1788,8 +1813,11 @@ function attachUIListeners() {
       if (p.stage === 'complete') {
         clearIndeterminate();
         stopElapsedTimer();
-        setProgress(100, p.message || '✅ 下载完成！');
-        setMeta(0, null);
+        maxProgress = 100;
+        if (bar) bar.style.width = '100%';
+        if (percentEl) percentEl.textContent = '100.0%';
+        if (detailEl) detailEl.textContent = p.message || '✅ 安装完成！';
+        if (metaEl) metaEl.textContent = '';
         return;
       }
 
