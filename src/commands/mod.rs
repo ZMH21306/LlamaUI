@@ -68,9 +68,9 @@ pub struct AppState {
     /// 当前正在进行的检测的取消标志列表（支持并发检测场景）。
     pub detect_cancels: Mutex<Vec<crate::detect::CancelFlag>>,
     /// 多模型管理（目录索引 + 快速切换）。
-    pub model_manager: std::sync::Arc<crate::model_management::ModelManager>,
+    pub model_manager: std::sync::Arc<crate::models::ModelManager>,
     /// 远程服务器管理。
-    pub remote_server_manager: std::sync::Arc<crate::remote_server::RemoteServerManager>,
+    pub remote_server_manager: std::sync::Arc<crate::remote::RemoteServerManager>,
 }
 
 impl AppState {
@@ -79,9 +79,9 @@ impl AppState {
             server: std::sync::Arc::new(crate::server::ServerProcess::new()),
             config: std::sync::Arc::new(crate::config::ConfigStore::new()),
             detect_cancels: Mutex::new(Vec::new()),
-            model_manager: std::sync::Arc::new(crate::model_management::ModelManager::new()),
+            model_manager: std::sync::Arc::new(crate::models::ModelManager::new()),
             remote_server_manager: std::sync::Arc::new(
-                crate::remote_server::RemoteServerManager::new(),
+                crate::remote::RemoteServerManager::new(),
             ),
         }
     }

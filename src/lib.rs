@@ -32,30 +32,33 @@
 
 mod commands;
 mod config;
-mod config_io;
 mod detect;
-mod error;
+mod download;
+mod errors;
 mod events;
-pub mod gpu_detection;
-pub mod gpu_detect;
-pub mod gpu_error_transformer;
+mod gpu;
 mod init;
 mod log;
-pub mod log_sanitizer;
-pub mod download_engine;
-mod llama_downloader;
-pub mod hf_downloader;
-mod model_management;
+mod models;
+mod remote;
 mod recovery;
-mod remote_server;
 mod server;
-mod tracing_setup;
-mod update_check;
+mod update;
 pub mod util;
 
-pub use error::{AppError, ConfigError, DetectError, ProcessError};
+// reqwest 0.12 与 reqwest-middleware 0.5（依赖 reqwest 0.13）版本冲突，
+// 暂时回退到纯 reqwest + 应用层重试（指数退避）。后续需升级 reqwest 到 0.13 再启用中间件。
+
+pub use config::{export_config, import_config, AppConfig, ConfigStore, CURRENT_CONFIG_VERSION, DEFAULT_PRO_CUSTOM_COMMAND};
+pub use errors::{AppError, ConfigError, DetectError, ProcessError};
 pub use events::{LogLine, ServerStatus, StepStatus};
-pub use log::{emit_log, emit_log_to, emit_status, emit_step};
+pub use log::{emit_log, emit_log_to, emit_status, emit_step, sanitize_log, get_log_file_path, init};
+pub use gpu::detection::{auto_fix_gpu_issue, diagnose_gpu_issues, detect_all_gpus_async, GpuInfo, GpuIssue};
+pub use models::{ModelCatalog, ModelInfo, ModelManager};
+pub use remote::{probe_remote_server, RemoteServerInfo, RemoteServerManager};
+pub use recovery::{diagnose, DiagnosisIssue, DiagnosisResult, IssueType};
+pub use update::{check_for_updates, cleanup_old_installation, is_newer_version, get_platform, OldInstallation, UpdateCheckResult};
+pub use download::llama_downloader::{detect_gpu_backend, download_and_install, DownloadProgress, DownloadResult, GpuBackend};
 
 use commands::AppState;
 use tauri::Emitter;
@@ -68,7 +71,7 @@ use commands::hf_model_cmd::HfState;
 pub fn run() {
     // 1. 初始化 tracing 日志系统（控制台彩色 + 文件滚动 + panic hook）
     //    这必须在所有其他初始化之前，包括旧的 panic hook。
-    tracing_setup::init();
+    init();
 
     tracing::info!(
         target: "LlamaUI",

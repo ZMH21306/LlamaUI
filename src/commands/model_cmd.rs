@@ -7,7 +7,7 @@ use tauri::State;
 
 /// 列出所有已扫描的模型。
 #[tauri::command]
-pub fn list_models(state: State<'_, AppState>) -> Vec<crate::model_management::ModelInfo> {
+pub fn list_models(state: State<'_, AppState>) -> Vec<crate::models::ModelInfo> {
     state.model_manager.all_models()
 }
 
@@ -16,7 +16,7 @@ pub fn list_models(state: State<'_, AppState>) -> Vec<crate::model_management::M
 pub fn filter_models_by_tag(
     state: State<'_, AppState>,
     tag: String,
-) -> Vec<crate::model_management::ModelInfo> {
+) -> Vec<crate::models::ModelInfo> {
     state.model_manager.filter_models_by_tag(&tag)
 }
 

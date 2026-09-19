@@ -1,6 +1,6 @@
 //! llama.cpp 自动下载命令。
 
-use crate::llama_downloader::{
+use crate::download::llama_downloader::{
     detect_gpu_backend, download_and_install, DownloadProgress, DownloadResult, GpuBackend,
 };
 use std::path::PathBuf;
@@ -84,19 +84,6 @@ pub async fn download_llama_server(
         file_size = result.file_size,
         elapsed_ms = result.elapsed_ms,
         "下载完成"
-    );
-
-    // 发送完成事件
-    let _ = app.emit(
-        "download-progress",
-        DownloadProgress {
-            stage: "complete".into(),
-            progress: 1.0,
-            downloaded: result.file_size,
-            total: result.file_size,
-            message: "下载完成".into(),
-            detail: None,
-        },
     );
 
     Ok(result)

@@ -12,7 +12,7 @@
 //! # 使用方式
 //!
 //! ```rust
-//! use llama_ui_lib::log_sanitizer::sanitize_log;
+//! use llama_ui_lib::sanitize_log;
 //!
 //! let sensitive = "Connected to https://admin:secret@example.com/api?key=abc123";
 //! let safe = sanitize_log(sensitive);
@@ -65,7 +65,7 @@ fn sensitive_path_segments() -> &'static Regex {
 /// # 示例
 ///
 /// ```
-/// use llama_ui_lib::log_sanitizer::sanitize_log;
+/// use llama_ui_lib::sanitize_log;
 ///
 /// // URL 认证信息被移除
 /// assert!(!sanitize_log("url=https://user:pass@example.com").contains("pass"));

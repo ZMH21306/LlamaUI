@@ -2,11 +2,11 @@
 // Reads/writes user config (model path, parameters, llama-server path) to a JSON file.
 //
 // 重构说明：
-//   - validate() 改用 `crate::error::ConfigError` 作为返回类型，提供更精确的错误分类。
+//   - validate() 改用 `crate::errors::ConfigError` 作为返回类型，提供更精确的错误分类。
 //   - 默认 ConfigStore::set() 仍返回 anyhow::Result 以兼容既有调用方，
 //     内部转换 ConfigError → anyhow::Error。
 
-use crate::error::ConfigError;
+use crate::errors::ConfigError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

@@ -6,16 +6,21 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::sync::LazyLock;
 use reqwest::blocking::Client;
-use crate::download_engine::{create_default_engine, DownloadTask};
 use crate::util::process::silent_command;
 
-/// 共享的 HTTP 客户端（由下载引擎初始化，复用连接池）
+/// 共享的阻塞 HTTP 客户端（直连 reqwest，不再依赖自研下载引擎）
 static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    create_default_engine().http_client().client()
+    Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(30))
+        .user_agent("LlamaUI/0.7.0")
+        .build()
+        .expect("构建 reqwest blocking Client 失败")
 });
 
 fn current_os() -> &'static str {
@@ -107,22 +112,33 @@ fn curl_head(url: &str) -> anyhow::Result<u64> {
 
 /// 下载阶段常量（用于统一的进度分配）
 ///
-/// 总进度 (0.0 ~ 1.0) 分配如下：
-/// - ① 初始化          : 0% ~ 1%   （1%）
-/// - ② 获取最新版本     : 1% ~ 5%   （4%，含重试）
-/// - ③ 智能匹配资产     : 5% ~ 12%  （7%）
-/// - ④ 下载安装包       : 12% ~ 88% （76%，主阶段）
-/// - ⑤ 解压归档         : 88% ~ 95% （7%）
-/// - ⑥ 设置权限+清理    : 95% ~ 99% （4%）
-/// - ⑦ 完成             : 99% ~ 100%（1%）
+/// 总进度 (0.0 ~ 1.0) 分配如下（用户指定）：
+/// - ① 初始化              : 0%  ~ 1%   （1%）
+/// - ② 获取最新版本         : 1%  ~ 3%   （2%）
+/// - ③ 准备匹配资产         : 3%  ~ 5%   （2%）
+/// - ④ 匹配资产完成         : 5%  ~ 8%   （3%）
+/// - ⑤ 下载安装包           : 8%  ~ 90%  （82%，主阶段）
+/// - ⑥ 解压归档             : 90% ~ 95%  （5%）
+/// - ⑦ SHA256 校验          : 95% ~ 100% （5%，包含清理和完成）
+#[allow(dead_code)]
 pub mod stage_progress {
+    pub const INIT_START: f64 = 0.00;
     pub const INIT_END: f64 = 0.01;
-    pub const FETCHING_VERSION_END: f64 = 0.05;
-    pub const FINDING_ASSET_END: f64 = 0.12;
-    pub const DOWNLOAD_START: f64 = 0.12;
-    pub const DOWNLOAD_END: f64 = 0.88;
+    pub const FETCHING_VERSION_START: f64 = 0.01;
+    pub const FETCHING_VERSION_END: f64 = 0.03;
+    pub const PREPARING_ASSET_START: f64 = 0.03;
+    pub const PREPARING_ASSET_END: f64 = 0.05;
+    pub const FINDING_ASSET_START: f64 = 0.05;
+        pub const FINDING_ASSET_END: f64 = 0.08;
+    pub const DOWNLOAD_START: f64 = 0.08;
+    pub const DOWNLOAD_END: f64 = 0.90;
+    pub const EXTRACTING_START: f64 = 0.90;
     pub const EXTRACTING_END: f64 = 0.95;
+    pub const VERIFYING_START: f64 = 0.95;
+    pub const VERIFYING_END: f64 = 0.99;
     pub const COMPLETE_END: f64 = 1.00;
+    pub const FINALIZING_START: f64 = 0.93;
+    pub const FINALIZING_END: f64 = 0.95;
 }
 
 fn curl_download(
@@ -133,10 +149,12 @@ fn curl_download(
     progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<u64> {
+    const MAX_ATTEMPTS: u32 = 5;
+    const PROGRESS_BYTES: u64 = 512 * 1024; // 每 512KB 累积计算进度
+    const PROGRESS_MIN_MS: u64 = 200;        // 时间节流：至少 200ms 才上报（防闪烁）
+
     let start = std::time::Instant::now();
-    let dest_str = dest.to_string_lossy().to_string();
-    let _progress_range = progress_end - progress_start;
-    tracing::info!(target: "LlamaDownloader", url = %url, dest = %dest_str, total_size, "启动统一下载引擎");
+    tracing::info!(target: "LlamaDownloader", url = %url, total_size, "启动流式下载（reqwest）");
 
     if total_size > 0 {
         if let Some(cb) = progress_callback {
@@ -151,17 +169,19 @@ fn curl_download(
         }
     }
 
-    // 创建统一下载引擎，带实时进度回调
-    let engine = create_default_engine();
-    let mut task = DownloadTask::new("llama".to_string(), url.to_string(), dest.to_path_buf(), total_size, 4);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(dest);
 
-    // 如果服务端返回的 Content-Length 与传入值不同，使用实际值
     let mut last_error = String::new();
+    let mut last_progress_at = std::time::Instant::now();
 
-    // 最多重试 5 次（不阻塞 UI 线程，直接快速重试）
-    for attempt in 1..=5u32 {
+    for attempt in 1..=MAX_ATTEMPTS {
         if attempt > 1 {
-            tracing::warn!(target: "LlamaDownloader", attempt, "重试下载中...");
+            let backoff = Duration::from_secs(2u64.pow((attempt - 1) as u32));
+            tracing::warn!(target: "LlamaDownloader", attempt, ?backoff, "下载失败，准备重试");
+            std::thread::sleep(backoff);
             if let Some(cb) = progress_callback {
                 cb(DownloadProgress {
                     stage: "retrying".to_string(),
@@ -174,66 +194,299 @@ fn curl_download(
             }
         }
 
-        let result = engine.downloader().download(&mut task, Some(&|n, total| {
-            if let Some(cb) = progress_callback {
-                let raw_progress = if total > 0 { n as f64 / total as f64 } else { 0.0 };
-                let global_progress = stage_progress::DOWNLOAD_START
-                    + raw_progress * (stage_progress::DOWNLOAD_END - stage_progress::DOWNLOAD_START);
+        let mut resp = match SHARED_CLIENT.get(url).send() {
+            Ok(r) => r,
+            Err(e) => {
+                last_error = e.to_string();
+                tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "请求失败");
+                continue;
+            }
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            last_error = format!("HTTP {}", status.as_u16());
+            tracing::warn!(target: "LlamaDownloader", attempt, %status, "非成功状态码");
+            continue;
+        }
+
+        let size = resp
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(total_size);
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(dest)?;
+
+        let mut downloaded: u64 = 0;
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let n = match resp.read(&mut buffer) {
+                Ok(n) => n,
+                Err(e) => {
+                    last_error = e.to_string();
+                    tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "读取数据失败");
+                    break;
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            if let Err(e) = file.write_all(&buffer[..n]) {
+                last_error = e.to_string();
+                tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "写入文件失败");
+                break;
+            }
+            downloaded += n as u64;
+
+            // 时间节流：每 512KB 累积且距上次上报 >= 200ms 才触发回调（平滑防闪烁）
+            let now = std::time::Instant::now();
+            let should_emit = (downloaded % PROGRESS_BYTES < n as u64
+                && now.duration_since(last_progress_at).as_millis() as u64 >= PROGRESS_MIN_MS)
+                || downloaded == size;
+            if should_emit {
+                last_progress_at = now;
+                let raw_progress = if size > 0 { downloaded as f64 / size as f64 } else { 0.0 };
+                let global_progress = progress_start
+                    + raw_progress * (progress_end - progress_start);
                 let elapsed = start.elapsed().as_secs_f64();
-                let speed_mbps = if elapsed > 0.0 { (n as f64 / elapsed) / 1_048_576.0 } else { 0.0 };
-                let remaining_bytes = total.saturating_sub(n);
+                let speed_mbps = if elapsed > 0.0 {
+                    (downloaded as f64 / elapsed) / 1_048_576.0
+                } else {
+                    0.0
+                };
+                let remaining_bytes = size.saturating_sub(downloaded);
                 let eta_secs = if speed_mbps > 0.0 {
                     (remaining_bytes as f64 / 1_048_576.0 / speed_mbps) as u64
                 } else {
                     0
                 };
-                cb(DownloadProgress {
-                    stage: "downloading".to_string(),
-                    progress: global_progress,
-                    downloaded: n,
-                    total,
-                    message: format!("{:.1} / {:.1} MB ({:.1}%)", n as f64 / 1048576.0, total as f64 / 1048576.0, global_progress * 100.0),
-                    detail: Some(DownloadProgressDetail {
-                        step: "downloading".to_string(),
-                        step_progress: raw_progress,
-                        candidate_index: 1,
-                        candidate_count: 1,
-                        current_candidate: None,
-                        speed_mbps,
-                        eta_secs: if eta_secs > 0 { Some(eta_secs as f64) } else { None },
-                    }),
-                });
-            }
-        }));
-        match result {
-            Ok(path) => {
-                let downloaded = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                if downloaded > 0 {
-                    tracing::info!(target: "LlamaDownloader",
-                        attempt,
+
+                if let Some(cb) = progress_callback {
+                    cb(DownloadProgress {
+                        stage: "downloading".to_string(),
+                        progress: global_progress,
                         downloaded,
-                        mb = format!("{:.1}", downloaded as f64 / 1048576.0),
-                        elapsed_secs = format!("{:.1}", start.elapsed().as_secs_f64()),
-                        "统一下载引擎完成");
-                    return Ok(downloaded);
+                        total: size,
+                        message: format!(
+                            "{:.1} / {:.1} MB ({:.1}%)",
+                            downloaded as f64 / 1048576.0,
+                            size as f64 / 1048576.0,
+                            global_progress * 100.0
+                        ),
+                        detail: Some(DownloadProgressDetail {
+                            step: "downloading".to_string(),
+                            step_progress: raw_progress,
+                            candidate_index: 1,
+                            candidate_count: 1,
+                            current_candidate: None,
+                            speed_mbps,
+                            eta_secs: if eta_secs > 0 {
+                                Some(eta_secs as f64)
+                            } else {
+                                None
+                            },
+                        }),
+                    });
                 }
-                last_error = "下载无数据".to_string();
             }
-            Err(e) => {
-                last_error = e.to_string();
-                tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "统一下载引擎失败");
+        }
+
+        let final_size = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(downloaded);
+        if final_size > 0 {
+            tracing::info!(target: "LlamaDownloader", attempt, downloaded = final_size, "下载完成");
+            return Ok(final_size);
+        }
+        last_error = "下载无数据（文件大小为 0）".to_string();
+    }
+
+    tracing::error!(target: "LlamaDownloader", error = %last_error, "下载失败，已用完所有重试次数");
+    Err(anyhow::anyhow!(
+        "下载失败: {}（已重试 {} 次）",
+        last_error,
+        MAX_ATTEMPTS
+    ))
+}
+
+/// 多线程分块下载，利用 Range 请求并行下载提升速度
+fn curl_download_parallel(
+    url: &str,
+    dest: &Path,
+    total_size: u64,
+    progress_start: f64,
+    progress_end: f64,
+    progress_callback: Option<&dyn Fn(DownloadProgress)>,
+) -> anyhow::Result<u64> {
+    const MAX_CHUNKS: usize = 8;
+    const CHUNK_SIZE: u64 = 4 * 1024 * 1024; // 4MB per chunk
+
+    if total_size == 0 {
+        return curl_download(url, dest, 0, progress_start, progress_end, progress_callback);
+    }
+
+    // 创建目标文件
+    std::fs::create_dir_all(dest.parent().unwrap_or(Path::new(".")))?;
+    let _ = fs::remove_file(dest);
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(dest)?;
+
+    // 计算分块数量和范围
+    let num_chunks = (total_size as f64 / CHUNK_SIZE as f64).ceil() as usize;
+    let num_chunks = num_chunks.min(MAX_CHUNKS);
+    let chunk_size = (total_size as f64 / num_chunks as f64).ceil() as u64;
+
+    tracing::info!(
+        target: "LlamaDownloader",
+        url = %url,
+        total_size,
+        num_chunks,
+        chunk_size,
+        "启动分块下载"
+    );
+
+    // 通知前端：开始下载
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "downloading".into(),
+            progress: progress_start,
+            downloaded: 0,
+            total: total_size,
+            message: format!(
+                "开始下载 ({:.1} MB, {} 线程)...",
+                total_size as f64 / 1_048_576.0,
+                num_chunks
+            ),
+            detail: None,
+        });
+    }
+
+    // 并发下载各分块
+    let downloaded = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    let mut handles = Vec::new();
+    let cb = progress_callback;
+
+    for chunk_idx in 0..num_chunks {
+        let range_start = chunk_idx as u64 * chunk_size;
+        let range_end = (range_start + chunk_size).min(total_size) - 1;
+        if range_start >= total_size {
+            break;
+        }
+
+        let url = url.to_string();
+        let downloaded_clone = downloaded.clone();
+
+        let handle = std::thread::spawn(move || {
+            let client = Client::builder()
+                .timeout(Duration::from_secs(300))
+                .user_agent("LlamaUI/0.7.0")
+                .build()
+                .expect("构建 reqwest Client 失败");
+
+                        let mut resp = client
+                .get(&url)
+                .header("Range", format!("bytes={}-{}", range_start, range_end))
+                .send()
+                .map_err(|e| anyhow::anyhow!("Range 请求失败: {}", e))?;
+
+            if !resp.status().is_success() {
+                return Err(anyhow::anyhow!("HTTP {}", resp.status()));
             }
+
+            let mut chunk_data = Vec::new();
+            resp.copy_to(&mut chunk_data)
+                .map_err(|e| anyhow::anyhow!("读取响应体失败: {}", e))?;
+
+            {
+                let mut d = downloaded_clone.lock().unwrap();
+                *d += chunk_data.len() as u64;
+            }
+
+            Ok::<_, anyhow::Error>((range_start, chunk_data))
+        });
+        handles.push(handle);
+    }
+
+    // 收集所有分块结果
+    let mut chunks: Vec<(u64, Vec<u8>)> = Vec::new();
+    for handle in handles {
+        let chunk = match handle.join() {
+            Ok(result) => result.map_err(|e| anyhow::anyhow!("下载线程失败: {:?}", e))?,
+            Err(e) => anyhow::bail!("下载线程 panic: {:?}", e),
+        };
+        chunks.push(chunk);
+    }
+
+    // 按偏移量排序并写入文件
+    chunks.sort_by_key(|(offset, _)| *offset);
+    let mut total_written = 0u64;
+    let start = std::time::Instant::now();
+
+    for (offset, data) in chunks {
+        file.seek(std::io::SeekFrom::Start(offset))?;
+        file.write_all(&data)?;
+        total_written += data.len() as u64;
+
+        // 发送进度
+        if let Some(cb) = cb {
+            let raw_progress = if total_size > 0 {
+                total_written as f64 / total_size as f64
+            } else {
+                0.0
+            };
+            let global_progress = progress_start
+                + raw_progress * (progress_end - progress_start);
+            let elapsed = start.elapsed().as_secs_f64();
+            let speed_mbps = if elapsed > 0.0 {
+                (total_written as f64 / elapsed) / 1_048_576.0
+            } else {
+                0.0
+            };
+            cb(DownloadProgress {
+                stage: "downloading".into(),
+                progress: global_progress,
+                downloaded: total_written,
+                total: total_size,
+                message: format!(
+                    "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
+                    total_written as f64 / 1_048_576.0,
+                    total_size as f64 / 1_048_576.0,
+                    global_progress * 100.0,
+                    speed_mbps
+                ),
+                detail: Some(DownloadProgressDetail {
+                                        step: format!("分块下载 ({} chunks)", num_chunks),
+                    step_progress: raw_progress,
+                    candidate_index: 1,
+                    candidate_count: 1,
+                    current_candidate: None,
+                    speed_mbps,
+                    eta_secs: if speed_mbps > 0.0 {
+                        Some(((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64 as f64)
+                    } else {
+                        None
+                    },
+                }),
+            });
         }
     }
 
-    tracing::error!(target: "LlamaDownloader",
+    let final_size = fs::metadata(dest)?.len();
+    tracing::info!(
+        target: "LlamaDownloader",
         url = %url,
-        total_attempts = 5,
-        error = %last_error,
-        "统一下载引擎失败，已用完所有重试次数"
+        downloaded = final_size,
+        num_chunks,
+        "分块下载完成"
     );
-
-    Err(anyhow::anyhow!("下载失败: {}（已重试 5 次）", last_error))
+    Ok(final_size)
 }
 
 /// 下载进度
@@ -543,6 +796,25 @@ pub fn extract_tar_gz(
     fs::create_dir_all(dest)?;
 
     let mut extracted_files = Vec::new();
+
+    // 检查是否是有效的 tar.gz 文件
+    let is_tar_gz = {
+        let mut magic = [0u8; 2];
+        if let Ok(mut f) = fs::File::open(archive) {
+            use std::io::Read;
+            let _ = f.read(&mut magic);
+            magic == [0x1f, 0x8b] // gzip magic bytes
+        } else {
+            false
+        }
+    };
+
+    if !is_tar_gz {
+        // 不是 tar.gz，直接返回空结果（由调用方处理）
+        tracing::debug!(target: "LlamaDownloader", "文件不是有效的 tar.gz，跳过 tar 解压");
+        return Ok(Vec::new());
+    }
+
     let tar_gz = fs::File::open(archive)?;
     let dec = flate2::read::GzDecoder::new(tar_gz);
     let mut archive = tar::Archive::new(dec);
@@ -595,8 +867,9 @@ pub fn extract_zip(
     fs::create_dir_all(dest)?;
 
     let mut extracted_files = Vec::new();
+    let start = std::time::Instant::now();
 
-    // 先尝试 tar
+    // 先尝试 tar（仅当文件是 tar.gz 时）
     let result = extract_tar_gz(archive, dest, progress_callback);
 
     match result {
@@ -618,18 +891,19 @@ pub fn extract_zip(
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(anyhow::anyhow!("解压失败: {}", stderr));
             }
-            // 通知前端：PowerShell 解压完成
-            if let Some(cb) = progress_callback {
-                cb(DownloadProgress {
-                    stage: "extracting".to_string(),
-                    progress: stage_progress::EXTRACTING_END,
-                    downloaded: 0,
-                    total: 0,
-                    message: "解压完成（PowerShell）".to_string(),
-                    detail: None,
-                });
-            }
         }
+    }
+
+    // 发送解压完成进度（在查找 llama-server 之前）
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "extracting".to_string(),
+            progress: stage_progress::EXTRACTING_END,
+            downloaded: 0,
+            total: 0,
+            message: format!("解压完成（耗时 {:.1}s）", start.elapsed().as_secs_f64()),
+            detail: None,
+        });
     }
 
     find_llama_server_recursive(dest, &mut extracted_files)?;
@@ -691,7 +965,7 @@ fn smart_find_asset<'a>(
     if let Some(cb) = progress_callback {
         cb(progress_simple(
             "finding_asset",
-            stage_progress::INIT_END,
+            stage_progress::FINDING_ASSET_START,
             format!("开始匹配资产（共 {} 个候选需要验证）...", asset_count),
         ));
     }
@@ -753,7 +1027,7 @@ fn smart_find_asset<'a>(
         if let Some(cb) = progress_callback {
             cb(progress_simple(
                 "finding_asset",
-                stage_progress::INIT_END,
+                stage_progress::FINDING_ASSET_START,
                 "精确匹配失败，尝试宽松匹配...".to_string(),
             ));
         }
@@ -778,13 +1052,13 @@ fn smart_find_asset<'a>(
     if let Some(cb) = progress_callback {
         cb(progress_simple(
             "finding_asset",
-            stage_progress::INIT_END,
+            stage_progress::FINDING_ASSET_START,
             format!("开始匹配资产（共 {} 个候选需要验证）...", total_candidates),
         ));
     }
 
     // 并行执行所有 HEAD 请求，避免串行等待
-    let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::INIT_END;
+    let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START;
     let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
     let results: Vec<(usize, anyhow::Result<u64>)> = std::thread::scope(|s| {
         urls
@@ -805,7 +1079,7 @@ fn smart_find_asset<'a>(
         let asset = &candidates[i];
         let candidate_name = &asset.name;
 
-        let verify_progress = stage_progress::INIT_END
+        let verify_progress = stage_progress::FINDING_ASSET_START
             + (candidate_index as f64 / total_candidates as f64) * asset_range;
 
         match result {
@@ -884,7 +1158,7 @@ fn smart_find_asset<'a>(
                 format!("⚠️ 所有候选验证失败，回退到：{}", asset.name),
                 DownloadProgressDetail {
                     step: format!("⚠️ 回退到：{}", asset.name),
-                    step_progress: stage_progress::FINDING_ASSET_END,
+                    step_progress: stage_progress::PREPARING_ASSET_END,
                     candidate_index: total_candidates,
                     candidate_count: total_candidates,
                     current_candidate: Some(asset.name.clone()),
@@ -905,7 +1179,7 @@ fn fetch_llama_latest_release_with_retry(
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<GitHubRelease> {
     let mut last_err: Option<anyhow::Error> = None;
-    let version_range = stage_progress::FETCHING_VERSION_END - stage_progress::INIT_END;
+    let version_range = stage_progress::FETCHING_VERSION_END - stage_progress::FETCHING_VERSION_START;
     for attempt in 1..=max_retries {
         tracing::info!(
             target: "LlamaDownloader",
@@ -915,7 +1189,7 @@ fn fetch_llama_latest_release_with_retry(
         );
         // 通知前端：第 N 次尝试
         if let Some(cb) = progress_callback {
-            let p = stage_progress::INIT_END
+            let p = stage_progress::FETCHING_VERSION_START
                 + ((attempt - 1) as f64 / max_retries as f64) * version_range;
             cb(DownloadProgress {
                 stage: "fetching_version".to_string(),
@@ -994,9 +1268,9 @@ pub fn download_and_install(
 
     // 1. 获取最新版本（带重试）
     if let Some(cb) = progress_callback {
-        cb(DownloadProgress {
+                cb(DownloadProgress {
             stage: "fetching_version".to_string(),
-            progress: stage_progress::INIT_END,
+            progress: stage_progress::FETCHING_VERSION_START,
             downloaded: 0,
             total: 0,
             message: format!("获取最新版本（最多 {} 次重试）...", max_retries),
@@ -1010,9 +1284,9 @@ pub fn download_and_install(
 
     // 2. 智能查找资产（多模式匹配）
     if let Some(cb) = progress_callback {
-        cb(DownloadProgress {
+                cb(DownloadProgress {
             stage: "finding_asset".to_string(),
-            progress: stage_progress::INIT_END,
+            progress: stage_progress::PREPARING_ASSET_START,
             downloaded: 0,
             total: 0,
             message: format!("查找匹配资产 (tag={})...", tag),
@@ -1079,7 +1353,7 @@ pub fn download_and_install(
         let mut download_attempt = 0;
         downloaded = loop {
             download_attempt += 1;
-            match curl_download(
+            match curl_download_parallel(
                 &asset.browser_download_url,
                 &archive_path,
                 total_size,
@@ -1159,8 +1433,8 @@ pub fn download_and_install(
     // 9. 完成（finalize 阶段）
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
-            stage: "finalize".to_string(),
-            progress: stage_progress::EXTRACTING_END,
+            stage: "finalizing".to_string(),
+            progress: stage_progress::FINALIZING_START,
             downloaded,
             total: downloaded,
             message: "清理临时文件...".to_string(),
@@ -1168,56 +1442,27 @@ pub fn download_and_install(
         });
     }
 
-    let elapsed = start.elapsed().as_millis() as u64;
     let file_size = fs::metadata(&llama_server_path)?.len();
 
-    tracing::info!(target: "LlamaDownloader", path = %llama_server_path.display(), bytes = file_size, elapsed_ms = elapsed, "安装完成");
+    tracing::info!(target: "LlamaDownloader", path = %llama_server_path.display(), bytes = file_size, "安装完成");
 
-    // 10. SHA256 完整性校验（快速且必要）
-    if let Some(cb) = progress_callback {
-        cb(DownloadProgress {
-            stage: "verifying".to_string(),
-            progress: stage_progress::EXTRACTING_END,
-            downloaded: file_size,
-            total: file_size,
-            message: "校验文件完整性...".to_string(),
-            detail: Some(DownloadProgressDetail {
-                step: "SHA256 校验".to_string(),
-                step_progress: 0.5,
-                candidate_index: 0,
-                candidate_count: 0,
-                current_candidate: None,
-                speed_mbps: 0.0,
-                eta_secs: None,
-            }),
-        });
-    }
-    let sha256 = compute_sha256(&llama_server_path, progress_callback, file_size)?;
+    // 10. SHA256 完整性校验（快速校验）
+    let sha256 = compute_sha256_fast(&llama_server_path, progress_callback, file_size)?;
     tracing::info!(target: "LlamaDownloader", sha256 = %sha256, "SHA256 校验完成");
 
-    // 最终进度 100%
+    // 11. 发送完成事件（在 spawn_blocking 内通过 callback 发送，确保事件在 invoke 返回前入队）
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
-            stage: "complete".to_string(),
+            stage: "complete".into(),
             progress: stage_progress::COMPLETE_END,
             downloaded: file_size,
             total: file_size,
-            message: format!(
-                "✅ 安装完成 ({:.1} MB，耗时 {:.1}s)",
-                file_size as f64 / 1048576.0,
-                elapsed as f64 / 1000.0
-            ),
-            detail: Some(DownloadProgressDetail {
-                step: "完成".to_string(),
-                step_progress: 1.0,
-                candidate_index: 0,
-                candidate_count: 0,
-                current_candidate: Some(sha256.clone()),
-                speed_mbps: 0.0,
-                eta_secs: None,
-            }),
+            message: "✅ 安装完成".into(),
+            detail: None,
         });
     }
+
+    let elapsed = start.elapsed().as_millis() as u64;
 
     Ok(DownloadResult {
         success: true,
@@ -1229,8 +1474,14 @@ pub fn download_and_install(
     })
 }
 
-/// 计算文件的 SHA256 十六进制摘要（流式读取 + 进度回调）
-fn compute_sha256(
+/// 快速计算文件的 SHA256 十六进制摘要（大缓冲区 + 高频进度更新）
+/// 
+/// 优化策略：
+/// - 使用 1MB 缓冲区加速文件读取（原为 64KB）
+/// - 每 1MB 或 100ms 上报一次进度（确保流畅无卡顿）
+/// - 消息格式包含实时 MB 进度，便于用户感知
+/// - 确保最后一定发出 VERIFYING_END 进度
+fn compute_sha256_fast(
     path: &Path,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
     file_size: u64,
@@ -1240,8 +1491,16 @@ fn compute_sha256(
 
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    
+    // 1MB 缓冲区，大幅提升 I/O 吞吐量
+    let mut buf = [0u8; 1024 * 1024];
     let mut bytes_read = 0u64;
+    let mut last_progress_at = std::time::Instant::now();
+    let verify_start = std::time::Instant::now();
+    
+    const PROGRESS_BYTES: u64 = 1024 * 1024;
+    const PROGRESS_MIN_MS: u64 = 100;
+
     loop {
         let n = file.read(&mut buf)?;
         if n == 0 {
@@ -1250,34 +1509,77 @@ fn compute_sha256(
         hasher.update(&buf[..n]);
         bytes_read += n as u64;
 
-        // 每 16MB 或最后一次发一次进度
-        if bytes_read % (16 * 1024 * 1024) < buf.len() as u64 || bytes_read == file_size {
+        // 时间节流检查
+        let now = std::time::Instant::now();
+        let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= PROGRESS_MIN_MS;
+        
+        // 每 1MB 或到达末尾时上报进度（避免重复）
+        let is_end = bytes_read >= file_size;
+        let byte_aligned = bytes_read % PROGRESS_BYTES < n as u64;
+        
+        // 只在中途节点发送，最后一步由循环后的代码处理
+        if byte_aligned && !is_end && time_ok {
+            last_progress_at = now;
             if let Some(cb) = progress_callback {
                 let pct = if file_size > 0 {
-                    stage_progress::EXTRACTING_END
-                        + (bytes_read as f64 / file_size as f64) * (stage_progress::COMPLETE_END - stage_progress::EXTRACTING_END)
+                    stage_progress::VERIFYING_START
+                        + (bytes_read as f64 / file_size as f64)
+                            * (stage_progress::VERIFYING_END - stage_progress::VERIFYING_START)
                 } else {
-                    stage_progress::COMPLETE_END
+                    stage_progress::VERIFYING_END
+                };
+                let elapsed_ms = now.duration_since(verify_start).as_millis();
+                let speed_mbps = if elapsed_ms > 0 {
+                    (bytes_read as f64 / 1_048_576.0) / (elapsed_ms as f64 / 1000.0)
+                } else {
+                    0.0
                 };
                 cb(DownloadProgress {
                     stage: "verifying".to_string(),
                     progress: pct,
                     downloaded: bytes_read,
                     total: file_size,
-                    message: format!("校验文件完整性... {:.1}%", pct * 100.0),
+                    message: format!(
+                        "校验文件完整性... {:.1}%（{:.1} MB / {:.1} MB，{:.1} MB/s）",
+                        pct * 100.0,
+                        bytes_read as f64 / 1_048_576.0,
+                        file_size as f64 / 1_048_576.0,
+                        speed_mbps
+                    ),
                     detail: Some(DownloadProgressDetail {
                         step: "SHA256 校验".to_string(),
                         step_progress: bytes_read as f64 / file_size.max(1) as f64,
                         candidate_index: 0,
                         candidate_count: 0,
                         current_candidate: None,
-                        speed_mbps: 0.0,
-                        eta_secs: None,
+                        speed_mbps,
+                        eta_secs: Some(((file_size - bytes_read) as f64 / 1_048_576.0 / speed_mbps.max(0.001)) as u64 as f64),
                     }),
                 });
             }
         }
     }
+    
+    // 循环结束后发送最终完成事件（97%）
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "verifying".to_string(),
+            progress: stage_progress::VERIFYING_END,
+            downloaded: file_size,
+            total: file_size,
+            message: "校验文件完整性... 完成".to_string(),
+            detail: Some(DownloadProgressDetail {
+                step: "SHA256 校验完成".to_string(),
+                step_progress: 1.0,
+                candidate_index: 0,
+                candidate_count: 0,
+                current_candidate: None,
+                speed_mbps: 0.0,
+                eta_secs: None,
+            }),
+        });
+    }
+    
     let hash = hasher.finalize();
     Ok(format!("{:x}", hash))
 }

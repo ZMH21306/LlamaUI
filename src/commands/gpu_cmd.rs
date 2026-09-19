@@ -8,9 +8,9 @@ use std::collections::HashMap;
 
 use tokio::sync::RwLock;
 
-use crate::gpu_detection::{self, GpuInfo, GpuIssue};
+use crate::gpu::detection::{GpuInfo, GpuIssue};
 
-/// 智能缓存系统
+    // 智能缓存系统
 pub struct GpuCache {
     /// 缓存条目：(平台哈希值, (GPU 信息, 过期时间))
     cache: Arc<RwLock<HashMap<u64, (GpuInfo, Instant)>>>,
@@ -131,7 +131,7 @@ pub async fn detect_gpus_enhanced() -> Result<Vec<GpuInfo>, String> {
         let mut gpus = vec![cached_gpu];
 
         // 添加其他 GPU 信息
-        if let Ok(other_gpus) = gpu_detection::detect_all_gpus_async().await {
+        if let Ok(other_gpus) = crate::gpu::detection::detect_all_gpus_async().await {
             for gpu in other_gpus {
                 if !gpus.iter().any(|g| g.model == gpu.model) {
                     gpus.push(gpu);
@@ -143,7 +143,7 @@ pub async fn detect_gpus_enhanced() -> Result<Vec<GpuInfo>, String> {
     }
 
     // 执行实际检测
-    let result = gpu_detection::detect_all_gpus_async().await;
+    let result = crate::gpu::detection::detect_all_gpus_async().await;
 
     match result {
         Ok(gpus) => {
@@ -175,7 +175,7 @@ pub async fn diagnose_gpu_enhanced() -> Result<Vec<GpuIssue>, String> {
     let start_time = Instant::now();
 
     // 执行诊断
-    let result = gpu_detection::diagnose_gpu_issues_async().await;
+    let result = crate::gpu::detection::diagnose_gpu_issues_async().await;
 
     let elapsed = start_time.elapsed();
 

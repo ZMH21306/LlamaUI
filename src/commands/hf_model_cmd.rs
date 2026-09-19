@@ -9,7 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use futures::stream::{self, StreamExt};
-use crate::hf_downloader::HfDownloader;
+use crate::download::hf_downloader::HfDownloader;
 use crate::util::proxy::read_system_proxy as get_system_proxy;
 
 /// 下载进度事件（与前端 `hf-download-progress` 事件对齐）。

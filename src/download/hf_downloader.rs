@@ -9,26 +9,24 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
-use reqwest::Client;
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 
 use crate::util::proxy::read_system_proxy;
 use crate::commands::hf_model_cmd::HfDownloadProgress;
 
-
-
-/// HF 下载器。
+/// HF 下载器（基于 reqwest async Client，指数退避重试）。
 pub struct HfDownloader {
-    client: Client,
+    client: reqwest::Client,
 }
 
 impl HfDownloader {
-    /// 创建下载器实例。
+        /// 创建下载器实例。
     ///
-    /// 自动注入系统代理（与现有 HF API Client 行为一致）。
+    /// 使用 reqwest async Client，自动继承系统代理及连接复用；
+    /// 重试交由上层 `download` 方法以指数退避循环驱动，保持简洁。
     pub fn new() -> AnyResult<Self> {
-        let mut builder = Client::builder()
+        let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
             .connect_timeout(Duration::from_secs(10))
             .user_agent("LlamaUI/0.7.0");
@@ -45,7 +43,7 @@ impl HfDownloader {
         })
     }
 
-    /// 执行文件下载。
+    /// 执行文件下载（指数退避自动重试，最多 3 次）。
     pub async fn download(
         &self,
         app: AppHandle,
@@ -55,14 +53,13 @@ impl HfDownloader {
         dest_path: PathBuf,
         filename: &str,
         expected_size: u64,
-    ) -> AnyResult<u64>
-    {
+    ) -> AnyResult<u64> {
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_error: Option<anyhow::Error> = None;
         let mut last_downloaded: u64 = 0;
         let mut last_speed_ts = Instant::now();
-        let max_retries = 3;
-        let mut last_error = None;
 
-        for attempt in 1..=max_retries {
+        for attempt in 1..=MAX_ATTEMPTS {
             if attempt > 1 {
                 let backoff = Duration::from_secs(2u64.pow((attempt - 1) as u32));
                 warn!(target: "HfDownloader", attempt, ?backoff, "下载失败，准备重试");
@@ -106,8 +103,7 @@ impl HfDownloader {
         expected_size: u64,
         last_downloaded: &mut u64,
         last_speed_ts: &mut Instant,
-    ) -> AnyResult<u64>
-    {
+    ) -> AnyResult<u64> {
         let start = Instant::now();
         let mut downloaded: u64 = 0;
 
@@ -116,50 +112,50 @@ impl HfDownloader {
         }
         let _ = std::fs::remove_file(dest_path);
 
-        let mut req = self.client.get(url);
-        if expected_size > 0 && dest_path.exists() {
-            let existing = std::fs::metadata(dest_path)?.len();
-            if existing > 0 && existing < expected_size {
-                req = req.header(reqwest::header::RANGE, format!("bytes={}-", existing));
-                downloaded = existing;
-                *last_downloaded = existing;
+        // HEAD 预检（获取真实大小 / 验证可用性），非 2xx 立即放弃
+        if expected_size == 0 {
+            let head = self.client.head(url).send().await?;
+            if head.status().is_success() {
+                if let Some(v) = head
+                    .headers()
+                    .get(reqwest::header::CONTENT_LENGTH)
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    if v > 0 {
+                        let _ = app.emit(
+                            "hf-download-progress",
+                            HfDownloadProgress {
+                                stage: "headers".to_string(),
+                                progress: 0.0,
+                                downloaded: 0,
+                                total: v,
+                                speed: None,
+                                eta: None,
+                                model_id: model_id.to_string(),
+                                filename: filename.to_string(),
+                                message: format!("获取文件信息：{:.1} MB", v as f64 / 1_048_576.0),
+                                download_id: download_id.to_string(),
+                            },
+                        );
+                    }
+                }
             }
         }
 
+        // GET 流式下载（支持 Range 断点续传）
+        let existing = std::fs::metadata(dest_path).map(|m| m.len()).unwrap_or(0);
+        let mut req = self.client.get(url);
+        if expected_size > 0 && existing > 0 && existing < expected_size {
+            req = req.header(reqwest::header::RANGE, format!("bytes={}-", existing));
+            downloaded = existing;
+            *last_downloaded = existing;
+        }
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() && status.as_u16() != 206 {
             return Err(anyhow::anyhow!("HTTP {} 下载失败", status.as_u16()));
         }
-
-        let content_length = resp
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok());
-        // Emit headers stage after getting Content-Length
-        let _ = app.emit(
-            "hf-download-progress",
-            HfDownloadProgress {
-                stage: "headers".to_string(),
-                progress: 0.0,
-                downloaded: 0,
-                total: content_length.unwrap_or(0),
-                speed: None,
-                eta: None,
-                model_id: model_id.to_string(),
-                filename: filename.to_string(),
-                message: format!("获取文件信息：{}", content_length.map_or_else(|| "未知大小".to_string(), |v| format!("{} MB", v as f64 / 1024.0 / 1024.0))),
-                download_id: download_id.to_string(),
-            },
-        );
-        tracing::info!(
-            target: "HfDownloader",
-            url = %url,
-            status = %status,
-            content_length = ?content_length,
-            "请求已发送，开始读取数据流"
-        );
 
         let total = if expected_size > 0 {
             expected_size
@@ -171,17 +167,12 @@ impl HfDownloader {
                 .unwrap_or(0)
         };
 
-        let file = if status.as_u16() == 200 && downloaded > 0 {
-            downloaded = 0;
-            *last_downloaded = 0;
+        let mut file = if status.as_u16() == 200 && downloaded == 0 {
             std::fs::File::create(dest_path)?
         } else {
-            OpenOptions::new().create(true).append(true).open(dest_path)?
+            std::fs::OpenOptions::new().append(true).open(dest_path)?
         };
-
-        let mut file = file;
         let mut stream = resp.bytes_stream();
-
         use futures::stream::StreamExt;
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result?;
@@ -200,8 +191,16 @@ impl HfDownloader {
                 let progress = if total > 0 { downloaded as f64 / total as f64 } else { 0.0 };
                 let now = Instant::now();
                 let elapsed_secs = now.duration_since(*last_speed_ts).as_secs_f64();
-                let speed = if elapsed_secs > 0.0 { ((downloaded - *last_downloaded) as f64 / elapsed_secs) as u64 } else { 0 };
-                let eta = if speed > 0 && total > 0 { ((total - downloaded) / speed) as u64 } else { 0 };
+                let speed = if elapsed_secs > 0.0 {
+                    ((downloaded - *last_downloaded) as f64 / elapsed_secs) as u64
+                } else {
+                    0
+                };
+                let eta = if speed > 0 && total > 0 {
+                    ((total - downloaded) / speed) as u64
+                } else {
+                    0
+                };
 
                 let _ = app.emit(
                     "hf-download-progress",
@@ -243,4 +242,3 @@ impl HfDownloader {
 }
 
 use std::io::Write;
-use std::fs::OpenOptions;

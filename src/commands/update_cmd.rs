@@ -1,6 +1,6 @@
 //! 自动更新检查命令。
 
-use crate::update_check::{check_for_updates, cleanup_old_installation, UpdateCheckResult};
+use crate::update::{check_for_updates, cleanup_old_installation, UpdateCheckResult};
 
 /// 检查更新
 #[tauri::command]

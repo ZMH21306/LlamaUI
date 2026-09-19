@@ -29,7 +29,7 @@ pub async fn open_external_url(app: AppHandle, url: String) -> Result<(), String
 /// 获取日志文件目录路径
 #[tauri::command]
 pub fn get_log_dir() -> String {
-    crate::tracing_setup::get_log_file_path()
+    crate::log::tracing_setup::get_log_file_path()
 }
 
 #[cfg(test)]

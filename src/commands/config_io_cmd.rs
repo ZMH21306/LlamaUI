@@ -7,7 +7,6 @@
 
 use std::path::PathBuf;
 use tauri::State;
-use crate::config_io;
 use super::AppState;
 
 /// 导出配置为 JSON 字符串
@@ -16,7 +15,7 @@ pub fn export_config_json(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let cfg = state.config.get();
-    config_io::export_config(&cfg)
+    crate::config::export_config(&cfg)
         .map_err(|e| format!("导出配置失败：{}", e))
 }
 
@@ -27,7 +26,7 @@ pub fn export_config_to_file(
     path: String,
 ) -> Result<(), String> {
     let cfg = state.config.get();
-    let json = config_io::export_config(&cfg)
+    let json = crate::config::export_config(&cfg)
         .map_err(|e| format!("导出配置失败：{}", e))?;
     std::fs::write(&path, json)
         .map_err(|e| format!("写入文件失败：{}", e))
@@ -46,7 +45,7 @@ pub fn import_config_from_file(
     }
     let json = std::fs::read_to_string(&path)
         .map_err(|e| format!("读取文件失败：{}", e))?;
-    let cfg = config_io::import_config(&json)
+    let cfg = crate::config::import_config(&json)
         .map_err(|e| format!("导入失败：{}", e))?;
     state.config.set(cfg)
         .map_err(|e| format!("保存配置失败：{}", e))
@@ -59,10 +58,10 @@ mod tests {
     #[test]
     fn export_import_roundtrip() {
         let json = r#"{"_v":1,"models_dir":"m","ctx_size":4096,"n_gpu_layers":0,"flash_attn":false,"mtp":false,"mtp_draft_n_max":3,"port":8080,"auto_port":true,"extra_args":"","mode":"normal","custom_command":""}"#;
-        let cfg = config_io::import_config(json).unwrap();
+        let cfg = crate::config::import_config(json).unwrap();
         assert_eq!(cfg._v, 1);
-        let exported = config_io::export_config(&cfg).unwrap();
-        let restored = config_io::import_config(&exported).unwrap();
+        let exported = crate::config::export_config(&cfg).unwrap();
+        let restored = crate::config::import_config(&exported).unwrap();
         assert_eq!(cfg._v, restored._v);
     }
 }

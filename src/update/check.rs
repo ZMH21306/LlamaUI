@@ -185,7 +185,8 @@ fn fetch_latest_release() -> anyhow::Result<GitHubReleaseResponse> {
 /// 版本比较：返回 latest 是否比 current 新
 ///
 /// 支持格式: "v1.2.3" 或 "1.2.3"
-fn is_newer_version(latest: &str, current: &str) -> bool {
+/// 版本号比较：判断 latest 是否比 current 更新
+pub fn is_newer_version(latest: &str, current: &str) -> bool {
     let latest_clean = latest.trim_start_matches('v');
     let current_clean = current.trim_start_matches('v');
 

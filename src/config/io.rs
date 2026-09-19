@@ -1,9 +1,9 @@
 //! 配置导入/导出模块。
 //!
-//! 将 AppConfig 序列化为 JSON 字符串（导出）或从 JSON 字符串反序列化（导入），
+//! 将 [`AppConfig`] 序列化为 JSON 字符串（导出）或从 JSON 字符串反序列化（导入），
 //! 供前端通过系统文件对话框实现导入导出功能。
 
-use crate::config::AppConfig;
+use super::store::AppConfig;
 use serde_json::Value;
 
 /// 将配置导出为格式化的 JSON 字符串
@@ -34,7 +34,6 @@ pub fn import_config(json_str: &str) -> anyhow::Result<AppConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AppConfig;
 
     #[test]
     fn export_produces_valid_json() {
