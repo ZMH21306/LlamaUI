@@ -1791,13 +1791,7 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   flex-direction: column;
   gap: 4px;
 }
-.download-steps {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-.download-step-chip {
+
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1809,23 +1803,6 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   border: 1px solid var(--border);
   transition: all 0.18s ease;
   white-space: nowrap;
-}
-.download-step-chip.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent);
-  font-weight: 600;
-  box-shadow: 0 0 6px var(--accent-soft);
-}
-.download-step-chip.done {
-  background: var(--success-soft);
-  color: var(--success);
-  border-color: var(--success);
-}
-.download-step-chip.failed {
-  background: var(--danger-soft);
-  color: var(--danger);
-  border-color: var(--danger);
 }
 .download-bar-row {
   display: flex;
@@ -1874,14 +1851,6 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.download-detail {
-  font-size: 11px;
-  color: var(--text-2);
-  word-break: break-all;
-  line-height: 1.4;
-  min-height: 14px;
-}
-
 /* =========================================================
    HuggingFace 模型商城 —— 抽取自 hf-store.html 的 inline style
    （P2-5 修复：移除 CSP unsafe-inline 依赖）
@@ -1938,11 +1907,7 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 #downloadProgress.show { display: block; }
 #downloadProgress .download-bar-track { background: var(--bg-2); border-radius: 6px; overflow: hidden; height: 10px; }
 #downloadProgress .download-bar-fill { background: var(--gradient-primary); height: 100%; width: 0%; transition: width 0.18s linear; }
-#downloadStatus { margin-top: 4px; font-size: 11px; color: var(--text-2); }
-#downloadSteps { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
 #downloadPercent { font-size: 12px; font-weight: 700; color: var(--accent); margin-top: 6px; }
-#downloadDetail { margin-top: 2px; font-size: 11px; color: var(--text-2); }
-#downloadMeta { margin-top: 2px; font-size: 11px; color: var(--text-3); }
 .btn-refresh { font-size: 11px; padding: 2px 8px; }
 .gpu-info-hint { color: var(--text-3); font-size: 12px; }
 .backup-actions { display: flex; gap: 8px; }
@@ -2033,14 +1998,6 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .hf-dl-panel-close { background: none; border: none; cursor: pointer; color: var(--text-3); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
 .hf-dl-panel-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; min-height: 60px; }
 .hf-dl-panel-empty { text-align: center; color: var(--text-3); font-size: 12px; padding: 24px 0; margin: 0; }
-.download-meta {
-  font-size: 11px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-  min-height: 14px;
-}
-.download-meta strong { color: var(--text-2); font-weight: 600; }
-
 /* HuggingFace 妯″瀷鍟嗗煄鏍峰紡 */
 .hf-store-dialog { max-width: 1000px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; }
 .hf-store-header { padding: 16px 20px; border-bottom: 1px solid var(--border); }
@@ -2096,8 +2053,7 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .hf-dl-status.downloading { color: var(--accent); }
 .hf-empty-dl { text-align: center; color: var(--text-3); font-size: var(--fs-sm); padding: 12px; }
 @keyframes hf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.download-meta strong { color: var(--text-2); font-weight: 600; }
-/* HF 商店通用确认弹窗 */
+
 .modal[hidden] { display: none !important; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9998; }
 .modal-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 24px 28px; min-width: 320px; max-width: 90vw; z-index: 9999; box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
@@ -2107,3 +2063,5 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .modal-actions .btn-primary, .modal-actions .btn-secondary { padding: 6px 16px; font-size: 13px; }
 
 
+#downloadStatus { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+.download-status { font-size: 12px; color: var(--text-2); margin-top: 4px; }

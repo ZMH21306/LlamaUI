@@ -108,20 +108,16 @@
             <!-- 自动下载 llama-server -->
             <div class="field field-spacing-sm" id="downloadSection">
               <button class="btn-primary btn-block" id="downloadLlamaBtn">🚀 自动下载 llama-server</button>
-              <div id="downloadProgress" class="mt-sm">
+                          <div id="downloadProgress" class="mt-sm" style="display:none">
                 <div class="download-bar-track">
                   <div class="download-bar-fill" id="downloadBar"></div>
                 </div>
-                <p id="downloadStatus" class="mt-xs">准备中...</p>
-                <!-- 步骤详情 -->
-                <div class="download-steps" id="downloadSteps"></div>
                 <!-- 百分比 -->
                 <div class="download-percent" id="downloadPercent">0%</div>
-                <!-- 详细步骤信息 -->
-                <div class="download-detail" id="downloadDetail">准备中...</div>
-                <!-- 速度/ETA -->
-                <div class="download-meta" id="downloadMeta"></div>
-              </div>
+                <!-- 速度 + ETA -->
+                <div class="download-status" id="downloadStatus"></div>
+            </div>
+            <button class="btn-danger btn-block mt-sm" id="cancelDownloadBtn" style="display:none">🚫 取消下载</button>
             </div>
           </div>
         </section>
