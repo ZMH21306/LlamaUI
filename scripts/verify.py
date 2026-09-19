@@ -55,13 +55,19 @@ for pat, desc in [
     print(('PASS' if pat not in rust else 'FAIL'), desc)
 
 # Check llama_downloader
-with open('src/llama_downloader.rs','r',encoding='utf-8',errors='replace') as f:
+with open('src/download/llama_downloader.rs','r',encoding='utf-8',errors='replace') as f:
     ld = f.read()
 checks2 = [
     ('std::thread::scope', 'parallel HEAD requests'),
-    ('let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect()', 'clone urls before threads'),
+    ('let urls: Vec<String> = candidates', 'clone urls before threads'),
     ('s.spawn(move || (i, curl_head(&url_owned)))', 'spawn curl_head in thread'),
     ('for (i, (_, result)) in results.iter().enumerate()', 'iterate results correctly'),
+    ('pub const FINDING_ASSET_START: f64 = 0.08;', 'new stage_progress ratios'),
+    ('pub const DOWNLOAD_START: f64 = 0.22;', 'download starts at 22%'),
+    ('pub const DOWNLOAD_END: f64 = 0.80;', 'download ends at 80%'),
+    ('cancel_token: Option<&std::sync::atomic::AtomicBool>,', 'cancel_token parameter'),
+    ('pub speed_mbps: f64,', 'speed_mbps in DownloadProgress'),
+    ('pub eta_secs: Option<u64>,', 'eta_secs in DownloadProgress'),
 ]
 for pat, desc in checks2:
     print(('PASS' if pat in ld else 'FAIL'), desc)
@@ -108,14 +114,28 @@ for pat, desc in [
 ]:
     print(('PASS' if pat not in html else 'FAIL'), desc)
 
+with open('dist/main.js','r',encoding='utf-8',errors='replace') as f:
+    js2 = f.read()
+checks_js = [
+    ("invoke('cancel_download_llama_server')", 'cancel command invoked'),
+    ("formatSpeed(mbps)", 'formatSpeed helper'),
+    ("formatETA(secs)", 'formatETA helper'),
+    ("$('downloadStatus')", 'downloadStatus element'),
+    ("cancelBtn", 'cancel button ref'),
+]
+for pat, desc in checks_js:
+    print(('PASS' if pat in js2 else 'FAIL'), desc)
+
 with open('dist/styles.css','r',encoding='utf-8',errors='replace') as f:
     css = f.read()
-checks4 = [
+checks_css = [
     ('width: 30% !important', 'old indeterminate width removed'),
     ('.download-bar-fill.indeterminate::after', 'pseudo-element for indeterminate'),
+    ('#downloadStatus', 'downloadStatus CSS rule'),
+    ('.download-status', 'download-status CSS class'),
 ]
-for pat, desc in checks4:
-    print(('PASS' if pat not in css else 'FAIL'), desc)
+for pat, desc in checks_css:
+    print(('PASS' if pat in css else 'FAIL'), desc)
 # Negative checks: load-more button CSS must be gone
 for pat, desc in [
     ('.hf-load-more-btn', 'hf-load-more-btn CSS rule 已删除'),
