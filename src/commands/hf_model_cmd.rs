@@ -1,16 +1,18 @@
 ﻿//! HF Model Store Commands
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
+use tauri::{AppHandle, Emitter, Manager, State};
 use futures::stream::{self, StreamExt};
 use crate::download::hf_downloader::HfDownloader;
-use crate::util::proxy::read_system_proxy as get_system_proxy;
+use crate::util::http::{HttpClient};
 
 /// 下载进度事件（与前端 `hf-download-progress` 事件对齐）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,27 +60,11 @@ pub struct HfDownloadResult {
 pub struct HfState {
     pub hf_token: Mutex<Option<String>>,
     pub download_dir: Mutex<PathBuf>,
-    /// 共享 ureq Agent（P2-3 修复）。
+    /// 下载取消信号：`download_id → watch::Sender<bool>`。
     ///
-    /// 原先每次 `download_hf_model` / `hf_get_sync` 都新建 `ureq::Agent` /
-    /// `ureq::get`，没有连接池，大模型下载时 TCP 三次握手开销不可忽略。
-    /// 改为单例后，所有 HF 请求复用同一个 Agent，支持 keep-alive 与
-    /// DNS 缓存，下载速度可提升 10~30%。
-    #[allow(dead_code)]
-    pub agent: Mutex<ureq::Agent>,
-    /// 共享 reqwest blocking Client（P2-6 修复）。
-    ///
-    /// `hf_get_sync` / `hf_head_size` 原先每次调用都新建 `reqwest::blocking::Client`，
-    /// 既不复用连接池，又与 P2-3 注释的"单例 Agent"设计矛盾。
-    /// 改为单例后，API GET 与 HEAD 请求复用同一个 Client，支持 keep-alive。
-    pub api_client: Mutex<reqwest::blocking::Client>,
-    /// 下载取消通道（P2-4 修复）。
-    ///
-    /// key = 下载 ID（`model_id::filename`），value = `oneshot::Sender<()>`。
-    /// 前端调用 `cancel_hf_download` 时发送信号，后端 `download_hf_model`
-    /// 的 `spawn_blocking` 闭包在每次循环迭代时检查该信号，收到后
-    /// 立即退出并删除已写入的不完整文件。
-    pub download_cancels: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    /// 调用 `cancel_hf_download` 时通过 `sender.send(true)` 触发取消。
+    /// 使用 `watch` 而非 `oneshot`，因为 `oneshot::Receiver` 无法在 `spawn_blocking` 闭包中跨线程传递。
+    pub download_cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     /// 模型商店窗口创建防重入锁（修复"打开模型商城"弹两个窗口）。
     ///
     /// 前端 `main.js` 与 `hf-store.js` 曾同时给 `openHfStoreBtn` 绑定
@@ -104,14 +90,7 @@ impl HfState {
         Self {
             hf_token: Mutex::new(token),
             download_dir: Mutex::new(default_dir),
-            // P2-3：单例 Agent（连接池）。连接复用用于文件列表 API；
-            // 用 connect/read 超时替代全局总超时，避免长下载被 30s 总超时砍断。
-            agent: Mutex::new(build_hf_agent(30, 120)),
-            // P2-6：共享 reqwest Client（连接池），注入系统代理。
-            api_client: Mutex::new(build_hf_api_client()),
-            // P2-4：空取消通道
             download_cancels: Mutex::new(HashMap::new()),
-            // 防重入锁初始为 false（允许首次创建）
             store_open_lock: AtomicBool::new(false),
         }
     }
@@ -122,160 +101,68 @@ const HF_API_BASE: &str = "https://huggingface.co/api";
 /// 官方 resolve 下载地址（不再使用镜像源）
 const HF_RESOLVE_BASE: &str = "https://huggingface.co";
 
-/// 读取 Windows 系统代理配置（兼容 Clash/V2Ray 等透明代理）。
-/// 优先读 `HKCU\...\ProxyServer`，再兜底环境变量（大小写不敏感）。
-/// 返回 `Some("http://host:port")` 或 `None`（无代理/读取失败）。
-#[allow(dead_code)]
-fn read_system_proxy() -> Option<String> {
-    // 1) 环境变量（所有平台通用，Clash 等也支持）
-    for key in &["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
-        if let Ok(v) = std::env::var(key) {
-            if !v.is_empty() {
-                return Some(v);
+/// 同步 HTTP GET（在 spawn_blocking 中调用）。
+fn hf_get_sync(path: &str, token: Option<&str>) -> (String, u16) {
+    let url = format!("{}{}", HF_API_BASE, path);
+    match HttpClient::new() {
+        Ok(client) => {
+            let mut headers: Vec<(&str, String)> = vec![
+                ("User-Agent", "LlamaUI/0.7.0".to_string()),
+                ("Accept", "application/json".to_string()),
+            ];
+            if let Some(t) = token {
+                headers.push(("Authorization", format!("Bearer {}", t)));
             }
-        }
-    }
-    // 2) Windows 注册表：系统代理设置
-    #[cfg(windows)]
-    {
-        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-        if let Ok(settings) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") {
-            // P0-7 修复：必须同时检查 ProxyEnable。Clash 关闭后 ProxyServer 残留
-            // 127.0.0.1:7897 但 ProxyEnable=0，若只读 ProxyServer 会把已失效的代理
-            // 注入给 reqwest，导致 HTTPS 请求走明文 CONNECT 失败（SSL UNEXPECTED_EOF），
-            // 而直连又没被使用，表现为"浏览器能开 HF、程序报网络错误"。
-            let proxy_enabled = settings.get_value::<u32, _>("ProxyEnable").unwrap_or(0);
-            if proxy_enabled == 0 {
-                return None;
-            }
-            if let Ok(proxy_server) = settings.get_value::<String, _>("ProxyServer") {
-                if !proxy_server.is_empty() {
-                    // ProxyServer 格式：`host:port` 或 `http=host:port;https=host:port`
-                    // Clash 输出通常是 `http=127.0.0.1:7897;https=127.0.0.1:7897`
-                    // 取第一个匹配的协议，或整体作为 HTTP 代理。
-                    let mut result = String::new();
-                    for line in proxy_server.split(';') {
-                        let line = line.trim();
-                        if line.is_empty() { continue; }
-                        if let Some((k, v)) = line.split_once('=') {
-                            if k.eq_ignore_ascii_case("http") || k.eq_ignore_ascii_case("https") {
-                                // Clash 通常输出 http= 形式；若为 https= 则走 HTTPS 代理
-                                result = format!("{}://{}", k.to_lowercase(), v.trim());
-                                break;
-                            }
-                        } else {
-                            // 纯 host:port 形式（IE 风格），默认 HTTP 代理
-                            result = format!("http://{}", line);
-                            break;
-                        }
-                    }
-                    if !result.is_empty() {
-                        return Some(result);
-                    }
+            let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            match client.get(&url, &header_refs) {
+                Ok(body) => (body, 200),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let status = if msg.contains("401") { 401 }
+                        else if msg.contains("403") { 403 }
+                        else if msg.contains("429") { 429 }
+                        else if msg.contains("404") { 404 }
+                        else { 0 };
+                    (msg, status)
                 }
             }
         }
-    }
-    None
-}
-
-/// 构建 HF 请求 Agent，自动注入系统代理（解决 ureq 不读系统代理的问题）。
-/// `connect_secs` / `read_secs` 分别为连接与读取（空闲）超时秒数。
-fn build_hf_agent(connect_secs: u64, read_secs: u64) -> ureq::Agent {
-    let mut builder = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(connect_secs))
-        .timeout_read(std::time::Duration::from_secs(read_secs));
-    if let Some(proxy_url) = get_system_proxy() {
-        if let Ok(proxy) = ureq::Proxy::new(&proxy_url) {
-            builder = builder.proxy(proxy);
-        }
-    }
-    builder.build()
-}
-
-/// 构建 HF API 请求用的 reqwest blocking Client（P2-6 修复）。
-///
-/// - 复用连接池，避免每次新建 TCP 连接
-/// - 自动注入系统代理（Clash/V2Ray/环境变量），否则国内直连 HF 会极慢或挂起
-/// - connect 10s / read 20s（列表 API 响应体很小，不需要 120s）
-fn build_hf_api_client() -> reqwest::blocking::Client {
-    let mut builder = reqwest::blocking::ClientBuilder::new()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(20))
-        .danger_accept_invalid_certs(true);
-    if let Some(proxy_url) = get_system_proxy() {
-        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
-            builder = builder.proxy(proxy);
-        }
-    }
-    builder.build().unwrap_or_else(|_| reqwest::blocking::Client::new())
-}
-
-/// 同步 HTTP GET（在 spawn_blocking 中调用，避免阻塞 Tauri 事件循环）。
-///
-/// 返回值为 (body, http_status)。调用方应检查 status 并处理错误。
-///
-/// P2-6：使用共享 `api_client`（连接池 + 系统代理注入），避免每次新建 Client 的
-/// TCP 开销，且国内能走代理直连 HF。
-fn hf_get_sync(client: &reqwest::blocking::Client, path: &str, token: Option<&str>) -> (String, u16) {
-    let url = format!("{}{}", HF_API_BASE, path);
-    let mut req = client.get(&url).header("User-Agent", "LlamaUI/0.7.0").header("Accept", "application/json");
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    match req.send() {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            match resp.text() {
-                Ok(body) => (body, status),
-                Err(e) => (format!("读取响应失败：{}", e), 0),
-            }
-        }
-        Err(e) => (format!("网络错误：{}", e), 0),
+        Err(e) => (format!("初始化 HTTP 客户端失败：{}", e), 0),
     }
 }
 
-/// 在 spawn_blocking 中执行同步 HTTP GET，避免阻塞 Tauri 事件循环。
-/// 返回 (body, http_status)；status=0 表示网络错误。
-///
-/// P2-3：从 `state.agent` 取共享 Agent（连接池），避免每次新建 TCP 连接。
-async fn hf_get(state: &HfState, path: &str, token: Option<&str>) -> (String, u16) {
+/// 在 spawn_blocking 中执行同步 HTTP GET。
+async fn hf_get(path: &str, token: Option<&str>) -> (String, u16) {
     let path_owned = path.to_string();
     let token_owned = token.map(|s| s.to_string());
-    let client = state.api_client.lock().clone();
-    tokio::task::spawn_blocking(move || {
-        hf_get_sync(&client, &path_owned, token_owned.as_deref())
-    })
-    .await
-    .unwrap_or_else(|_| ("Task panicked".to_string(), 0))
+    tokio::task::spawn_blocking(move || hf_get_sync(&path_owned, token_owned.as_deref()))
+        .await
+        .unwrap_or_else(|_| ("spawn_blocking panicked".to_string(), 0))
 }
 
-/// 对单个文件发送 HEAD 请求获取 `Content-Length`。
-/// 用于补充 `get_hf_model_files` 里 HF API 不返回 size 的 GGUF 文件大小。
-fn hf_head_size(client: &reqwest::blocking::Client, url: &str, token: Option<&str>) -> Option<u64> {
-    let mut req = client.head(url);
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    match req.send() {
-        Ok(resp) if resp.status() == 200 => {
-            resp.headers().get("Content-Length")?.to_str().ok()?.parse::<u64>().ok()
+/// 对单个文件发送 HEAD 请求获取 Content-Length。
+fn hf_head_size_sync(url: &str, token: Option<&str>) -> Option<u64> {
+    match HttpClient::new() {
+        Ok(client) => {
+            let mut headers: Vec<(&str, String)> = vec![("User-Agent", "LlamaUI/0.7.0".to_string())];
+            if let Some(t) = token {
+                headers.push(("Authorization", format!("Bearer {}", t)));
+            }
+            let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            match client.head_with_headers(url, &header_refs) {
+                Ok(Some(len)) => Some(len),
+                _ => None,
+            }
         }
-        _ => None,
+        Err(_) => None,
     }
 }
 
-/// 异步版：在 spawn_blocking 里同步发 HEAD，避免阻塞 Tauri 事件循环。
-/// 异步版：在 spawn_blocking 里同步发 HEAD，避免阻塞 Tauri 事件循环。
-/// 单请求最多等待 8s（超时或阻塞失败都返回 None）。
-async fn hf_head_size_async(
-    client: reqwest::blocking::Client,
-    url: String,
-    token: Option<String>,
-) -> Option<u64> {
+/// 异步版 HEAD（spawn_blocking + 8s 超时）。
+async fn hf_head_size_async(url: String, token: Option<String>) -> Option<u64> {
     match tokio::time::timeout(
         Duration::from_secs(8),
-        tokio::task::spawn_blocking(move || hf_head_size(&client, &url, token.as_deref())),
+        tokio::task::spawn_blocking(move || hf_head_size_sync(&url, token.as_deref())),
     )
     .await
     {
@@ -335,11 +222,8 @@ pub async fn download_hf_model(
     let start_time = std::time::Instant::now();
     // P2-4：注册取消通道。前端可调用 `cancel_hf_download(download_id)` 触发取消
     let download_id = format!("{}::{}", model_id, safe_filename);
-    let (cancel_tx, _cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    state
-        .download_cancels
-        .lock()
-        .insert(download_id.clone(), cancel_tx);
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    state.download_cancels.lock().insert(download_id.clone(), cancel_tx);
 
     let download_id_for_emit = download_id.clone();
 
@@ -416,6 +300,7 @@ pub async fn download_hf_model(
             out_path.clone(),
             &filename,
             expected_size.unwrap_or(0),
+            cancel_rx,
         )
         .await
         .map(|size| size)
@@ -459,7 +344,7 @@ pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: O
     let limit = limit.unwrap_or(20);
     let encoded_query = urlencoding::encode(&query);
     let url = format!("/models?search={}&limit={}&sort=downloads&direction=-1&filter=gguf&full=true", encoded_query, limit);
-    let (body, status) = hf_get(&state, &url, token.as_deref()).await;
+    let (body, status) = hf_get(&url, token.as_deref()).await;
     if status == 0 {
         return Err(format!("网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。", &body));
     }
@@ -497,7 +382,7 @@ pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: O
 pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String, expected_size: Option<u64>) -> Result<Vec<HfModelFile>, String> {
     let token = state.hf_token.lock().clone();
     let encoded_id = modelId.split('/').map(|s| urlencoding::encode(s)).collect::<Vec<_>>().join("/");
-    let (body, status) = hf_get(&state, &format!("/models/{}", &encoded_id), token.as_deref()).await;
+    let (body, status) = hf_get(&format!("/models/{}", &encoded_id), token.as_deref()).await;
     if status == 0 {
         return Err(format!("网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。", &body));
     }
@@ -529,13 +414,11 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String, expe
         .map(|(i, f)| (i, format!("https://huggingface.co/{}/resolve/main/{}", modelId, f.path)))
         .collect();
     if !need_size.is_empty() {
-        let client = state.api_client.lock().clone();
         let token_str = token.clone();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let head_futs = stream::iter(need_size.into_iter().map(|(i, url)| {
-            let client = client.clone();
             let tok = token_str.clone();
-            async move { (i, hf_head_size_async(client, url, tok).await) }
+            async move { (i, hf_head_size_async(url, tok).await) }
         })).buffer_unordered(8);
         tokio::pin!(head_futs);
         while let Some((i, res)) = head_futs.next().await {
@@ -577,7 +460,7 @@ pub async fn cancel_hf_download(
     };
     match tx {
         Some(sender) => {
-            let _ = sender.send(());
+            let _ = sender.send(true);
             Ok(())
         }
         None => Err(format!(
