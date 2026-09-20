@@ -2074,12 +2074,27 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .btn-wave-fill .wave-fill {
   position: absolute;
   top: 0; left: -100%;
-  width: 100%;
+  width: 200%;
   height: 100%;
-  background: var(--gradient-primary);
-  transition: left 0.18s ease-out, opacity 0.3s ease;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(255,255,255,0.1) 25%, 
+    var(--gradient-primary) 50%,
+    rgba(255,255,255,0.1) 75%,
+    transparent 100%);
+  transition: left 0.2s ease-out;
   opacity: 0;
   border-radius: inherit;
+}
+.btn-wave-fill .wave-fill.active {
+  left: -50%;
+  opacity: 1;
+  animation: wave-move 2s ease-in-out infinite;
+}
+.btn-wave-fill .wave-fill.fill-complete {
+  left: -50%;
+  opacity: 0;
+  animation: none;
 }
 .btn-wave-fill .wave-fill-mask {
   position: absolute;
@@ -2089,15 +2104,6 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   background: transparent;
   pointer-events: none;
   border-radius: inherit;
-}
-.btn-wave-fill .wave-fill.active {
-  left: 0;
-  opacity: 1;
-}
-.btn-wave-fill .wave-fill.fill-complete {
-  left: 0;
-  opacity: 1;
-  width: 100%;
 }
 .btn-wave-fill .btn-text {
   position: relative;
@@ -2119,5 +2125,9 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 }
 .btn-wave-fill.completed .btn-result {
   display: block;
+}
+@keyframes wave-move {
+  0% { left: -50%; }
+  100% { left: 50%; }
 }
 
