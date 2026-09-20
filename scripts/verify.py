@@ -117,11 +117,12 @@ for pat, desc in [
 with open('dist/main.js','r',encoding='utf-8',errors='replace') as f:
     js2 = f.read()
 checks_js = [
-    ("invoke('cancel_download_llama_server')", 'cancel command invoked'),
     ("formatSpeed(mbps)", 'formatSpeed helper'),
     ("formatETA(secs)", 'formatETA helper'),
-    ("$('downloadStatus')", 'downloadStatus element'),
-    ("cancelBtn", 'cancel button ref'),
+    ("setWaveProgress", 'wave progress helper'),
+    ("setWaveComplete", 'wave complete helper'),
+    ("downloadWaveFill", 'water wave fill element'),
+    ("downloadBtnResult", 'checkmark result element'),
 ]
 for pat, desc in checks_js:
     print(('PASS' if pat in js2 else 'FAIL'), desc)
@@ -129,10 +130,9 @@ for pat, desc in checks_js:
 with open('dist/styles.css','r',encoding='utf-8',errors='replace') as f:
     css = f.read()
 checks_css = [
-    ('width: 30% !important', 'old indeterminate width removed'),
-    ('.download-bar-fill.indeterminate::after', 'pseudo-element for indeterminate'),
-    ('#downloadStatus', 'downloadStatus CSS rule'),
-    ('.download-status', 'download-status CSS class'),
+    ('.btn-wave-fill', 'water wave button CSS'),
+    ('.wave-fill-container', 'wave fill container CSS'),
+    ('.wave-fill', 'wave fill element CSS'),
 ]
 for pat, desc in checks_css:
     print(('PASS' if pat in css else 'FAIL'), desc)
