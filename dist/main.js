@@ -1663,9 +1663,19 @@ function attachUIListeners() {
           : (speedStr + (etaStr ? ' · ' + etaStr : ''));
         if (txt) txt.textContent = pct + '%' + (extra ? (' · ' + extra) : '');
       } else {
-        // 其他阶段：显示全局百分比（带阶段提示）
-        const stageName = { init: '初始化', fetching_version: '获取版本', finding_asset: '匹配资产', extracting: '解压中', verifying: '校验中', complete: '完成' }[p.stage] || p.stage;
-        if (txt) txt.textContent = pct + '%';
+    const stageMap = {
+          init: '初始化',
+          fetching_version: '获取版本',
+          finding_asset: '匹配资产',
+          downloading: '下载中',
+          extracting: '解压中',
+          verifying: '校验中',
+          complete: '完成',
+          retrying: '重试中',
+          finalizing: '收尾中'
+        };
+        const stageName = stageMap[p.stage] || p.stage;
+        if (txt) txt.textContent = stageName + ' ' + pct + '%';
       }
     });
 
