@@ -1618,86 +1618,25 @@ function attachUIListeners() {
     }
   });
 
-    // ============ 水波按钮下载 llama-server ============
-  // 格式化下载速度
-  function formatSpeed(mbps) {
-    if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';
-    return (mbps * 1024).toFixed(0) + ' KB/s';
-  }
-  function formatETA(secs) {
-    if (!secs || secs <= 0) return '';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    if (m > 0) return '剩余 ' + m + '分' + s + '秒';
-    return '剩余 ' + s + '秒';
-  }
-  function setWaveProgress(pct) {
-    const f = $('downloadWaveFill');
-    if (f) { f.style.left = '0%'; f.style.width = pct + '%'; f.style.opacity = pct > 0 ? '1' : '0'; }
-    const txt = $('downloadBtnText');
-    if (txt) txt.style.opacity = pct > 0 ? '0.3' : '1';
-  }
-  function setWaveComplete() {
-    const btn = els.downloadLlamaBtn;
-    const f = $('downloadWaveFill');
-    const txt = $('downloadBtnText');
-    const res = $('downloadBtnResult');
-    if (btn) { btn.classList.add('completed'); btn.disabled = false; }
-    if (f) { f.style.opacity = '0'; }
-    if (txt) { txt.style.display = 'none'; }
-    if (res) { res.style.display = 'block'; }
-  }
-  function setWaveReset() {
-    const btn = els.downloadLlamaBtn;
-    const f = $('downloadWaveFill');
-    const txt = $('downloadBtnText');
-    const res = $('downloadBtnResult');
-    if (btn) { btn.classList.remove('completed', 'downloading'); btn.disabled = false; }
-    if (f) { f.style.left = '-100%'; f.style.width = '0%'; f.style.opacity = '0'; }
-    if (txt) { txt.style.display = 'inline-block'; txt.style.opacity = '1'; }
-    if (res) { res.style.display = 'none'; }
-  }
-  // 下载状态监听器
-  let _downloadStateUnlisten = null;
-  async function setupDownloadStateListener() {
-    if (_downloadStateUnlisten) { _downloadStateUnlisten(); _downloadStateUnlisten = null; }
-    _downloadStateUnlisten = await listen('download-state', (e) => {
-      console.log('[download-state]', e.payload);
-    });
-  }
-  setupDownloadStateListener();
+    // ============ 水波按钮下载 llama-server ============  // 格式化下载速度
+  function formatSpeed(mbps) {    if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';    return (mbps * 1024).toFixed(0) + ' KB/s';  }  function formatETA(secs) {    if (!secs || secs <= 0) return '';    const m = Math.floor(secs / 60);    const s = Math.floor(secs % 60);    if (m > 0) return '剩余 ' + m + '分' + s + '秒';    return '剩余 ' + s + '秒';  }  function setWaveProgress(pct) {    const f = $('downloadWaveFill');    if (f) { f.style.left = '0%'; f.style.width = pct + '%'; f.style.opacity = pct > 0 ? '1' : '0'; }    const txt = $('downloadBtnText');    if (txt) txt.style.opacity = pct > 0 ? '0.3' : '1';  }  function setWaveComplete() {    const btn = els.downloadLlamaBtn;    const f = $('downloadWaveFill');    const txt = $('downloadBtnText');    const res = $('downloadBtnResult');    if (btn) { btn.classList.add('completed'); btn.disabled = false; }    if (f) { f.style.opacity = '0'; }    if (txt) { txt.style.display = 'none'; }    if (res) { res.style.display = 'block'; }  }  function setWaveReset() {    const btn = els.downloadLlamaBtn;    const f = $('downloadWaveFill');    const txt = $('downloadBtnText');    const res = $('downloadBtnResult');    if (btn) { btn.classList.remove('completed', 'downloading'); btn.disabled = false; }    if (f) { f.style.left = '-100%'; f.style.width = '0%'; f.style.opacity = '0'; }    if (txt) { txt.style.display = 'inline-block'; txt.style.opacity = '1'; }    if (res) { res.style.display = 'none'; }  }  // 下载状态监听器
+  let _downloadStateUnlisten = null;  async function setupDownloadStateListener() {    if (_downloadStateUnlisten) { _downloadStateUnlisten(); _downloadStateUnlisten = null; }    _downloadStateUnlisten = await listen('download-state', (e) => {      const state = e.payload;      console.log('[download-state]', state);    });  }  setupDownloadStateListener();
 
-  els.downloadLlamaBtn?.addEventListener('click', async () => {
-    if (els.downloadLlamaBtn.disabled) return;
-    setWaveReset();
-    const txt = $('downloadBtnText');
-    const btn = els.downloadLlamaBtn;
-    btn.disabled = true;
-    btn.classList.add('downloading');
-    if (txt) txt.textContent = '初始化...';
-    setWaveProgress(0);
+  els.downloadLlamaBtn?.addEventListener('click', async () => {    if (els.downloadLlamaBtn.disabled) return;    setWaveReset();    const txt = $('downloadBtnText');    const btn = els.downloadLlamaBtn;    btn.disabled = true;    btn.classList.add('downloading');    if (txt) txt.textContent = '初始化...';    setWaveProgress(0);
 
-    try {
-      const backend = await invoke('detect_gpu');
-      if (txt) txt.textContent = '检测后端: ' + backend;
-      setWaveProgress(15);
+    // 订阅实时下载进度，映射到 6 个阶段
+    let lastPercent = 0;    const stagePercent = {      init: 0, fetching_version: 10, finding_asset: 20,      downloading: 30, extracting: 60, verifying: 80,      file_release: 85, complete: 100, retrying: 30    };    const unlisten = await listen('download-progress', (e) => {      const p = e.payload;      if (p.message) {        if (txt) txt.textContent = p.message;      }      // 下载中：实时更新水波进度
+      if (p.stage === 'downloading' && typeof p.total === 'number' && p.total > 0 && typeof p.downloaded === 'number') {        const pct = (p.downloaded / p.total * 100);        setWaveProgress(pct);        let status = '';        if (typeof p.speed_mbps === 'number' && p.speed_mbps > 0) status += formatSpeed(p.speed_mbps);        if (typeof p.eta_secs === 'number' && p.eta_secs > 0) status += (status ? ' · ' : '') + formatETA(p.eta_secs);        if (txt) txt.textContent = status || '下载中...';      } else {        // 其他阶段：更新水波到对应百分比
+        const basePct = stagePercent[p.stage] || 0;        lastPercent = basePct;        setWaveProgress(basePct);      }    });
 
-      const downloadStartMs = Date.now();
-      const result = await invoke('download_llama_server', { backend: backend });
+    try {      const backend = await invoke('detect_gpu');      if (txt) txt.textContent = '检测后端: ' + backend;      setWaveProgress(15);
 
-      setWaveProgress(100);
-      setWaveComplete();
-      if (txt) txt.textContent = '';
+      const downloadStartMs = Date.now();      const result = await invoke('download_llama_server', { backend: backend });
 
-      showNotification('llama-server 安装成功！耗时 ' + ((Date.now() - downloadStartMs) / 1000).toFixed(1) + 's', 'success', 5000);
-      els.llamaServerPath.value = result.path;
-      try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}
-    } catch (e) {
-      setWaveReset();
-      if (txt) txt.textContent = '下载失败: ' + String(e).substring(0, 60);
-      showNotification('下载失败: ' + e, 'error', 8000);
-    }
-  });
+      setWaveProgress(100);      setWaveComplete();      if (txt) txt.textContent = '';
+
+      showNotification('llama-server 安装成功！耗时 ' + ((Date.now() - downloadStartMs) / 1000).toFixed(1) + 's', 'success', 5000);      els.llamaServerPath.value = result.path;      try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}    } catch (e) {      unlisten();      setWaveReset();      if (txt) txt.textContent = '🚀 自动下载 llama-server';      showNotification('下载失败: ' + e, 'error', 8000);    } finally {      unlisten();    }  });
+
 
 // ============ GPU 信息刷新 ============
   async function refreshGpuInfo() {
