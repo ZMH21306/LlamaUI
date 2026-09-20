@@ -152,8 +152,6 @@ fn curl_download(
     cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<u64> {
     const MAX_ATTEMPTS: u32 = 3;
-    const PROGRESS_BYTES: u64 = 16 * 1024; // 每 16KB 累积计算进度（高频上报）
-    const PROGRESS_MIN_MS: u64 = 50;        // 时间节流：至少 50ms 才上报（更流畅）
 
     let start = std::time::Instant::now();
     tracing::info!(target: "LlamaDownloader", url = %url, total_size, "启动流式下载（reqwest）");
@@ -351,12 +349,12 @@ fn curl_download(
             downloaded += n as u64;
 
                     // 时间节流：每 1 秒至少上报一次，或每 1KB 累积跨越边界时上报，或下载完成时上报
-        let now = std::time::Instant::now();
-        let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= 50;
-        let boundary_cross = downloaded % 1024 < n as u64;
-        let should_emit = (boundary_cross && time_ok)
-            || downloaded == size
-            || now.duration_since(last_progress_at).as_millis() as u64 >= 1000;
+            let now = std::time::Instant::now();
+            let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= 50;
+            let boundary_cross = downloaded % 1024 < n as u64;
+            let should_emit = (boundary_cross && time_ok)
+                || downloaded == size
+                || now.duration_since(last_progress_at).as_millis() as u64 >= 1000;
             if should_emit {
                 last_progress_at = now;
                 let raw_progress = if size > 0 {
@@ -408,6 +406,7 @@ fn curl_download(
                         }),
                     });
                 }
+                tracing::info!(target: "LlamaDownloader", "下载进度: {:.1}%", global_progress * 100.0);
             }
         }
 
@@ -495,10 +494,9 @@ fn curl_download_parallel(
         });
     }
 
-    // 并发下载各分块
+    // 并发下载各分块 + 实时进度上报
     let downloaded = std::sync::Arc::new(std::sync::Mutex::new(0u64));
     let mut handles = Vec::new();
-    let cb = progress_callback;
 
     for chunk_idx in 0..num_chunks {
         let range_start = chunk_idx as u64 * chunk_size;
@@ -541,6 +539,58 @@ fn curl_download_parallel(
         handles.push(handle);
     }
 
+    // 等待所有分块下载完成，同时持续上报实时进度
+    let start = std::time::Instant::now();
+    let mut last_emitted_progress: f64 = progress_start;
+    while !handles.iter().all(|h| h.is_finished()) {
+        let current = *downloaded.lock().unwrap();
+        let raw_progress = if total_size > 0 {
+            current as f64 / total_size as f64
+        } else {
+            0.0
+        };
+        let global_progress = progress_start + raw_progress * (progress_end - progress_start);
+        if (global_progress - last_emitted_progress).abs() >= 0.001 {
+            last_emitted_progress = global_progress;
+            let elapsed = start.elapsed().as_secs_f64();
+            let speed_mbps = if elapsed > 0.0 {
+                (current as f64 / elapsed) / 1_048_576.0
+            } else {
+                0.0
+            };
+            if let Some(cb) = progress_callback {
+                cb(DownloadProgress {
+                    stage: "downloading".into(),
+                    progress: global_progress,
+                    downloaded: current,
+                    total: total_size,
+                    message: format!("下载中 {:.1}%", global_progress * 100.0),
+                    speed_mbps,
+                    eta_secs: None,
+                    detail: None,
+                });
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    // 最后一次完整上报
+    let current = *downloaded.lock().unwrap();
+    let raw_progress = if total_size > 0 { current as f64 / total_size as f64 } else { 0.0 };
+    let global_progress = progress_start + raw_progress * (progress_end - progress_start);
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "downloading".into(),
+            progress: global_progress,
+            downloaded: current,
+            total: total_size,
+            message: format!("下载中 {:.1}%", global_progress * 100.0),
+            speed_mbps: 0.0,
+            eta_secs: None,
+            detail: None,
+        });
+    }
+
     // 收集所有分块结果
     let mut chunks: Vec<(u64, Vec<u8>)> = Vec::new();
     for handle in handles {
@@ -562,7 +612,7 @@ fn curl_download_parallel(
         total_written += data.len() as u64;
 
         // 发送进度
-        if let Some(cb) = cb {
+        if let Some(cb) = progress_callback {
             let raw_progress = if total_size > 0 {
                 total_written as f64 / total_size as f64
             } else {
