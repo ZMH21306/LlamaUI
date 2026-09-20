@@ -3,11 +3,14 @@
 //! 通过 reqwest（带 TLS 证书验证）调用 GitHub Releases API 检查最新版本，
 //! 识别新版本目录，检测旧版本残留并提示用户清理。
 //! 使用 reqwest 而非 curl 子进程，确保 TLS 证书链被正确验证。
+//! 通过 util::http::HttpClient 复用连接池并自动注入系统代理。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use crate::util::http::HttpClient;
 
 /// 获取 GitHub Token（优先级：GITHUB_TOKEN/gh token → GH_TOKEN → 无）
 ///
@@ -44,34 +47,48 @@ fn get_github_token() -> Option<String> {
     None
 }
 
-/// 用 reqwest（带 TLS 证书验证）获取 GitHub API JSON。
-/// 使用系统代理配置，连接超时 10s，读取超时 15s。
+/// 用 HttpClient（带连接池、系统代理、重试）获取 GitHub API JSON。
+///
+/// 最多重试 3 次，每次间隔 1s。超时 30s。
+/// 成功返回响应体字符串。失败返回 anyhow::Error。
 fn http_get_json(url: &str) -> anyhow::Result<String> {
     tracing::debug!(target: "UpdateCheck", url = %url, "HTTP GET 请求");
 
     let token = get_github_token();
-    let mut request = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .connect_timeout(Duration::from_secs(10))
-        .build()?
-        .get(url)
-        .header("Accept", "application/vnd.github.v3+json")
-        .header("User-Agent", "LlamaUI-UpdateCheck");
+    let client = HttpClient::new().map_err(|e| anyhow::anyhow!("初始化 HTTP 客户端失败：{}", e))?;
 
+    let mut headers: Vec<(&str, String)> = vec![
+        ("User-Agent", "LlamaUI-UpdateCheck".to_string()),
+        ("Accept", "application/vnd.github.v3+json".to_string()),
+    ];
     if let Some(ref t) = token {
-        request = request.header("Authorization", format!("token {}", t));
+        headers.push(("Authorization", format!("token {}", t)));
+    }
+    let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+    // 最多重试 3 次，每次间隔 1s
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=3 {
+        match client.get(url, &header_refs) {
+            Ok(body) => {
+                // 检查是否被限流
+                if body.contains("API rate limit exceeded") {
+                    tracing::warn!(target: "UpdateCheck", "GitHub API 速率限制");
+                    return Err(anyhow::anyhow!("GitHub API 速率限制，请稍后再试"));
+                }
+                return Ok(body);
+            }
+            Err(e) => {
+                tracing::warn!(target: "UpdateCheck", attempt = %attempt, error = %e, "HTTP 请求失败，等待重试");
+                last_err = Some(e);
+                if attempt < 3 {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
     }
 
-    let response = request.send()?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        tracing::warn!(target: "UpdateCheck", status = %status, body = %body, "HTTP 请求失败");
-        return Err(anyhow::anyhow!("HTTP {}: {}", status, body));
-    }
-
-    let body = response.text()?;
-    Ok(body)
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("HTTP 请求失败")))
 }
 
 /// 更新检查结果

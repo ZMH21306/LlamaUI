@@ -2,15 +2,20 @@
 
 use crate::update::{check_for_updates, cleanup_old_installation, UpdateCheckResult};
 
-/// 检查更新
+/// 检查更新（异步，不阻塞事件循环）
 #[tauri::command]
-pub fn check_updates() -> Result<UpdateCheckResult, String> {
+pub async fn check_updates() -> Result<UpdateCheckResult, String> {
     tracing::info!(target: "UpdateCmd", "收到检查更新请求");
-    check_for_updates()
-        .map_err(|e| {
-            tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
-            format!("检查更新失败：{}", e)
-        })
+    // 在 spawn_blocking 中执行同步的检查逻辑，避免阻塞 Tauri 事件循环
+    tokio::task::spawn_blocking(move || {
+        check_for_updates()
+            .map_err(|e| {
+                tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
+                format!("检查更新失败：{}", e)
+            })
+    })
+    .await
+    .map_err(|e| format!("检查更新任务失败：{}", e))?
 }
 
 /// 清理旧版本
