@@ -119,21 +119,16 @@ with open('dist/main.js','r',encoding='utf-8',errors='replace') as f:
 checks_js = [
     ("formatSpeed(mbps)", 'formatSpeed helper'),
     ("formatETA(secs)", 'formatETA helper'),
-    ("setWaveProgress", 'wave progress helper'),
-    ("setWaveComplete", 'wave complete helper'),
-    ("downloadWaveFill", 'water wave fill element'),
-    ("downloadBtnResult", 'checkmark result element'),
+    ("setBtnProgress", 'text progress helper'),
+    ("setBtnComplete", 'text complete helper'),
+    ("setBtnReset", 'text reset helper'),
 ]
 for pat, desc in checks_js:
     print(('PASS' if pat in js2 else 'FAIL'), desc)
 
 with open('dist/styles.css','r',encoding='utf-8',errors='replace') as f:
     css = f.read()
-checks_css = [
-    ('.btn-wave-fill', 'water wave button CSS'),
-    ('.wave-fill-container', 'wave fill container CSS'),
-    ('.wave-fill', 'wave fill element CSS'),
-]
+checks_css = []
 for pat, desc in checks_css:
     print(('PASS' if pat in css else 'FAIL'), desc)
 # Negative checks: load-more button CSS must be gone

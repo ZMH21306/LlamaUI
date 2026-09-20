@@ -152,8 +152,8 @@ fn curl_download(
     cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<u64> {
     const MAX_ATTEMPTS: u32 = 3;
-    const PROGRESS_BYTES: u64 = 32 * 1024; // 每 32KB 累积计算进度（更频繁上报，防卡顿）
-    const PROGRESS_MIN_MS: u64 = 100;        // 时间节流：至少 100ms 才上报（更流畅）
+    const PROGRESS_BYTES: u64 = 16 * 1024; // 每 16KB 累积计算进度（高频上报）
+    const PROGRESS_MIN_MS: u64 = 50;        // 时间节流：至少 50ms 才上报（更流畅）
 
     let start = std::time::Instant::now();
     tracing::info!(target: "LlamaDownloader", url = %url, total_size, "启动流式下载（reqwest）");
@@ -266,8 +266,8 @@ fn curl_download(
         let mut downloaded: u64 = 0;
         let mut buffer = [0u8; 65536]; // 64KB 缓冲区，提升读取吞吐
 
-        // 3 秒无进展保底上报：避免网络抖动导致前端卡在 0%
-        const WATCHDOG_MS: u64 = 3000;
+        // 1 秒无进展保底上报：避免网络抖动导致前端卡在 22%
+        const WATCHDOG_MS: u64 = 1000;
 
         loop {
             // 取消检查
@@ -350,11 +350,13 @@ fn curl_download(
             }
             downloaded += n as u64;
 
-            // 时间节流：每 512KB 累积且距上次上报 >= 200ms 才触发回调（平滑防闪烁）
-            let now = std::time::Instant::now();
-            let should_emit = (downloaded % PROGRESS_BYTES < n as u64
-                && now.duration_since(last_progress_at).as_millis() as u64 >= PROGRESS_MIN_MS)
-                || downloaded == size;
+                    // 时间节流：每 1 秒至少上报一次，或每 1KB 累积跨越边界时上报，或下载完成时上报
+        let now = std::time::Instant::now();
+        let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= 50;
+        let boundary_cross = downloaded % 1024 < n as u64;
+        let should_emit = (boundary_cross && time_ok)
+            || downloaded == size
+            || now.duration_since(last_progress_at).as_millis() as u64 >= 1000;
             if should_emit {
                 last_progress_at = now;
                 let raw_progress = if size > 0 {

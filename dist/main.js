@@ -1618,45 +1618,58 @@ function attachUIListeners() {
     }
   });
 
-    // ============ 水波按钮下载 llama-server ============  // 格式化下载速度
-  function formatSpeed(mbps) {    if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';    return (mbps * 1024).toFixed(0) + ' KB/s';  }  function formatETA(secs) {    if (!secs || secs <= 0) return '';    const m = Math.floor(secs / 60);    const s = Math.floor(secs % 60);    if (m > 0) return '剩余 ' + m + '分' + s + '秒';    return '剩余 ' + s + '秒';  }  function formatSize(bytes) {    if (!bytes) return '0 B';    if (bytes < 1024) return bytes + ' B';    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';    return (bytes / 1073741824).toFixed(2) + ' GB';  }  function setWaveProgress(pct) {    const f = $('downloadWaveFill');    if (f) { f.style.left = '0%'; f.style.width = '100%'; f.style.opacity = pct > 0 ? '1' : '0'; if (pct < 100) f.classList.remove('fill-complete'); }    const txt = $('downloadBtnText');    if (txt) txt.style.opacity = pct > 0 ? '0.4' : '1';  }  function setWaveComplete() {    const btn = els.downloadLlamaBtn;    const f = $('downloadWaveFill');    const txt = $('downloadBtnText');    const res = $('downloadBtnResult');    if (btn) { btn.classList.add('completed'); btn.disabled = false; }    if (f) { f.style.opacity = '0'; }    if (txt) { txt.style.display = 'none'; }    if (res) { res.style.display = 'block'; }  }  function setWaveReset() {    const btn = els.downloadLlamaBtn;    const f = $('downloadWaveFill');    const txt = $('downloadBtnText');    const res = $('downloadBtnResult');    if (btn) { btn.classList.remove('completed', 'downloading'); btn.disabled = false; }    if (f) { f.style.left = '-100%'; f.style.width = '0%'; f.style.opacity = '0'; }    if (txt) { txt.style.display = 'inline-block'; txt.style.opacity = '1'; }    if (res) { res.style.display = 'none'; }  }  // 下载状态监听器
+    // ============ 文字进度下载 llama-server ============
+  function formatSpeed(mbps) {    if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';    return (mbps * 1024).toFixed(0) + ' KB/s';  }
+  function formatETA(secs) {    if (!secs || secs <= 0) return '';    const m = Math.floor(secs / 60);    const s = Math.floor(secs % 60);    if (m > 0) return m + '分' + s + '秒';    return s + '秒';  }
+  function formatSize(bytes) {    if (!bytes) return '0 B';    if (bytes < 1024) return bytes + ' B';    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';    return (bytes / 1073741824).toFixed(2) + ' GB';  }
+  function setBtnProgress(pct) {    const txt = $('downloadBtnText');    if (txt) txt.textContent = pct + '%';  }
+  function setBtnComplete() {    const btn = els.downloadLlamaBtn;    const txt = $('downloadBtnText');    if (btn) btn.disabled = false;    if (txt) txt.textContent = '✓';  }
+  function setBtnReset() {    const btn = els.downloadLlamaBtn;    const txt = $('downloadBtnText');    if (btn) { btn.disabled = false; btn.classList.remove('downloading'); }    if (txt) txt.textContent = '🚀 自动下载 llama-server';  }  // 下载状态监听器
   let _downloadStateUnlisten = null;  async function setupDownloadStateListener() {    if (_downloadStateUnlisten) { _downloadStateUnlisten(); _downloadStateUnlisten = null; }    _downloadStateUnlisten = await listen('download-state', (e) => {      const state = e.payload;      console.log('[download-state]', state);    });  }  setupDownloadStateListener();
 
-  els.downloadLlamaBtn?.addEventListener('click', async () => {    if (els.downloadLlamaBtn.disabled) return;    setWaveReset();    const txt = $('downloadBtnText');    const btn = els.downloadLlamaBtn;    btn.disabled = true;    btn.classList.add('downloading');    if (txt) txt.textContent = '初始化...';    setWaveProgress(0);
+  els.downloadLlamaBtn?.addEventListener('click', async () => {
+    if (els.downloadLlamaBtn.disabled) return;
+    setBtnReset();
+    const txt = $('downloadBtnText');
+    const btn = els.downloadLlamaBtn;
+    btn.disabled = true;
+    btn.classList.add('downloading');
+    if (txt) txt.textContent = '0%';
 
-    // 订阅实时下载进度，映射到 6 个阶段
+      // 后端 progress(0~1) × 100 = 全局百分比
+    // init(0%) → fetching_version(2-6%) → finding_asset(8-22%) → downloading(22-80%) → extracting(80-88%) → verifying(88-96%) → complete(98-100%)
     let lastPercent = 0;
     let lastProgressMs = Date.now();
-    const STUCK_TIMEOUT_MS = 60_000; // 60秒无进度更新视为假卡死
-    const stagePercent = {
-      init: 0, fetching_version: 8, finding_asset: 15,
-      downloading: 22, extracting: 75, verifying: 90,
-      complete: 100, retrying: 22
-    };
+    const STUCK_TIMEOUT_MS = 90_000;
+
     const unlisten = await listen('download-progress', (e) => {
       const p = e.payload;
-      if (p.message) {
-        if (txt) txt.textContent = p.message;
-      }
-      // 下载中：显示具体大小+速度+ETA
-      if (p.stage === 'downloading' && typeof p.total === 'number' && p.total > 0 && typeof p.downloaded === 'number') {
-        lastProgressMs = Date.now();
-        const pct = (p.downloaded / p.total * 100);
-        setWaveProgress(pct);
-        const sizeStr = formatSize(p.downloaded) + ' / ' + formatSize(p.total) + ' (' + pct.toFixed(1) + '%)';
-        let extra = '';
-        if (typeof p.speed_mbps === 'number' && p.speed_mbps > 0) extra += ' · ' + formatSpeed(p.speed_mbps);
-        if (typeof p.eta_secs === 'number' && p.eta_secs > 0) extra += ' · ' + formatETA(p.eta_secs);
-        if (txt) txt.textContent = sizeStr + extra;
+      // 使用后端已计算的 progress(0~1) 直接换算成百分比，保证精确
+      let pct = Math.round(p.progress * 100);
+      lastPercent = Math.max(lastPercent, pct);
+      lastProgressMs = Date.now();
+
+      // 下载中阶段：显示详细速度+剩余时间
+      if (p.stage === 'downloading' && typeof p.speed_mbps === 'number' && p.speed_mbps > 0) {
+        const speedStr = formatSpeed(p.speed_mbps);
+        const etaStr = typeof p.eta_secs === 'number' && p.eta_secs > 0 ? formatETA(p.eta_secs) : '';
+        const sizeStr = typeof p.downloaded === 'number' && typeof p.total === 'number' && p.total > 0
+          ? formatSize(p.downloaded) + ' / ' + formatSize(p.total)
+          : '';
+        const extra = sizeStr
+          ? speedStr || etaStr
+            ? ' · ' + sizeStr + (speedStr + (etaStr ? ' · ' + etaStr : ''))
+            : ''
+          : (speedStr + (etaStr ? ' · ' + etaStr : ''));
+        if (txt) txt.textContent = pct + '%' + (extra ? (' · ' + extra) : '');
       } else {
-        const basePct = stagePercent[p.stage] || 0;
-        lastPercent = Math.max(lastPercent, basePct);
-        lastProgressMs = Date.now();
-        setWaveProgress(lastPercent);
+        // 其他阶段：显示全局百分比（带阶段提示）
+        const stageName = { init: '初始化', fetching_version: '获取版本', finding_asset: '匹配资产', extracting: '解压中', verifying: '校验中', complete: '完成' }[p.stage] || p.stage;
+        if (txt) txt.textContent = pct + '%';
       }
     });
 
-    // 假卡死检测：60秒无进度更新则重置
+    // 假卡死检测：90秒无进度更新则重置
     let stuckTimer = null;
     function resetStuckTimer() {
       if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }
@@ -1664,21 +1677,32 @@ function attachUIListeners() {
         if (btn.disabled && Date.now() - lastProgressMs > STUCK_TIMEOUT_MS) {
           console.warn('[download] 假卡死检测：重置按钮');
           unlisten();
-          setWaveReset();
-          if (txt) txt.textContent = '下载超时，请重试';
-          showNotification('下载无响应（超过60秒无进度），请检查网络后重试', 'warning', 8000);
+          setBtnReset();
+          if (txt) txt.textContent = '超时，请重试';
+          showNotification('下载无响应（超过90秒无进度），请检查网络后重试', 'warning', 8000);
         }
       }, 5000);
     }
     resetStuckTimer();
-
-    try {      const backend = await invoke('detect_gpu');      if (txt) txt.textContent = '检测后端: ' + backend;      setWaveProgress(15);
-
-      const downloadStartMs = Date.now();      const result = await invoke('download_llama_server', { backend: backend });
-
-      setWaveProgress(100);      setWaveComplete();      if (txt) txt.textContent = '';
-
-      showNotification('llama-server 安装成功！耗时 ' + ((Date.now() - downloadStartMs) / 1000).toFixed(1) + 's', 'success', 5000);      els.llamaServerPath.value = result.path;      try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}    } catch (e) {      unlisten();      setWaveReset();      if (txt) txt.textContent = '🚀 自动下载 llama-server';      showNotification('下载失败: ' + e, 'error', 8000);    } finally {      unlisten();      if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }    }  });
+    try {
+      const backend = await invoke('detect_gpu');
+      if (txt) { txt.textContent = backend + ' 准备下载...'; }
+      const downloadStartMs = Date.now();
+      const result = await invoke('download_llama_server', { backend: backend });
+      setBtnComplete();
+      if (txt) txt.textContent = '✓ 完成';
+      showNotification('llama-server 安装成功！耗时 ' + ((Date.now() - downloadStartMs) / 1000).toFixed(1) + 's', 'success', 5000);
+      els.llamaServerPath.value = result.path;
+      try { await invoke('save_config', { config: readConfigFromUI() }); } catch (_) {}
+    } catch (e) {
+      unlisten();
+      setBtnReset();
+      showNotification('下载失败: ' + e, 'error', 8000);
+    } finally {
+      unlisten();
+      if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }
+    }
+  });
 
 
 // ============ GPU 信息刷新 ============
