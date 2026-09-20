@@ -14,3 +14,4 @@ pub mod process;
 pub mod proxy;
 pub mod time;
 pub mod url;
+pub mod http;
