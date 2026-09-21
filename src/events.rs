@@ -54,6 +54,9 @@ pub enum ServerStatus {
 pub const EVT_DOWNLOAD_STATE: &str = "download-state";
 
 /// 下载状态变更事件（llama-server 下载流程）
+pub const EVT_DOWNLOAD_STATE: &str = "download-state";
+
+/// 下载状态变更事件（llama-server 下载流程）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DownloadState {
     /// 开始下载
@@ -68,6 +71,69 @@ pub enum DownloadState {
     Completed { path: String, file_size: u64, sha256: String, elapsed_ms: u64 },
     /// 下载失败
     Failed { error: String },
+}
+
+// ============================================================
+// 更新相关事件
+// ============================================================
+
+/// 更新状态变更事件（检查 → 下载 → 安装 → 完成/失败）。
+pub const EVT_UPDATE_STATE: &str = "update-state";
+
+/// 更新下载进度事件（实时推送）。
+pub const EVT_UPDATE_DOWNLOAD_PROGRESS: &str = "update-download-progress";
+
+/// 更新流程状态机。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UpdateState {
+    /// 空闲（未进行任何更新操作）。
+    Idle,
+    /// 正在检查更新。
+    Checking,
+    /// 检查完成，有新版本。
+    Available {
+        latest_version: String,
+        current_version: String,
+        release_notes: String,
+        download_url: String,
+        file_size: u64,
+    },
+    /// 检查完成，已是最新。
+    UpToDate { current_version: String },
+    /// 检查失败。
+    CheckFailed { error: String },
+    /// 开始下载更新。
+    DownloadStarted { total_bytes: u64 },
+    /// 下载进行中。
+    DownloadProgress {
+        progress: f64,
+        downloaded: u64,
+        total: u64,
+        speed_mbps: f64,
+        eta_secs: Option<u64>,
+    },
+    /// 下载完成，准备安装。
+    DownloadCompleted { download_path: String, file_size: u64 },
+    /// 安装中。
+    Installing { progress: f64, message: String },
+    /// 安装完成（需要重启）。
+    Completed { new_version: String },
+    /// 下载/安装失败。
+    Failed { error: String },
+    /// 已取消。
+    Cancelled,
+}
+
+/// 更新下载进度（实时推送给前端）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDownloadProgress {
+    pub stage: String,
+    pub progress: f64,
+    pub downloaded: u64,
+    pub total: u64,
+    pub speed_mbps: f64,
+    pub eta_secs: Option<u64>,
+    pub message: String,
 }
 
 /// 单行日志。
@@ -128,7 +194,7 @@ pub struct StepStatus {
 mod tests {
     use super::*;
 
-    #[test]
+        #[test]
     fn event_names_are_stable() {
         // 前端 dist/main.js 通过这些字符串 listen。
         // 改动需同步前端，否则前端收不到事件。
@@ -137,6 +203,9 @@ mod tests {
         assert_eq!(EVT_SERVER_METRICS, "server-metrics");
         assert_eq!(EVT_SERVER_STEP, "server-step");
         assert_eq!(EVT_DETECT_PROGRESS, "detect-progress");
+        assert_eq!(EVT_DOWNLOAD_STATE, "download-state");
+        assert_eq!(EVT_UPDATE_STATE, "update-state");
+        assert_eq!(EVT_UPDATE_DOWNLOAD_PROGRESS, "update-download-progress");
     }
 
     #[test]

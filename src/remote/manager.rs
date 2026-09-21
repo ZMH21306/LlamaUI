@@ -188,25 +188,33 @@ impl Default for RemoteServerManager {
 /// 通过 REST API 探测远程服务器可用性（HTTP GET /v1/models）。
 ///
 /// 返回 `Ok(true)` 表示服务器可访问，`Ok(false)` 表示不可用，`Err` 表示网络错误。
+///
+/// 使用统一 `HttpClient`（自动代理 + 连接池），取代旧的 `ureq` 实现。
 pub fn probe_remote_server(url: &str, api_key: Option<&str>) -> Result<bool, String> {
-    let client = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(10))
-        .build();
+    let client = crate::util::http::HttpClient::new()
+        .map_err(|e| format!("初始化 HTTP 客户端失败：{}", e))?;
 
-    let mut request = client.get(&format!("{}/v1/models", url));
+    let target_url = format!("{}/v1/models", url);
+    let mut headers: Vec<(&str, String)> = vec![
+        ("User-Agent", "LlamaUI-RemoteProbe".to_string()),
+    ];
     if let Some(key) = api_key {
-        request = request.set("Authorization", &format!("Bearer {}", key));
+        headers.push(("Authorization", format!("Bearer {}", key)));
     }
+    let header_refs: Vec<(&str, &str)> =
+        headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
-    let response = match request.call() {
-        Ok(r) => r,
-        Err(e) => return Err(format!("连接失败：{}", e)),
-    };
-
-    if response.status() == 200 {
-        Ok(true)
-    } else {
-        Ok(false)
+    match client.get(&target_url, &header_refs) {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            let err_str = e.to_string();
+            // HTTP 错误（401/403/404/5xx）表示服务器可达，只是返回错误
+            if err_str.contains("HTTP 4") || err_str.contains("HTTP 5") {
+                Ok(false)
+            } else {
+                Err(format!("连接失败：{}", e))
+            }
+        }
     }
 }
 
