@@ -146,6 +146,8 @@ pub fn run() {
             commands::recovery_cmd::auto_fix_issues,
             commands::update_cmd::check_updates,
             commands::update_cmd::cleanup_old_version,
+            commands::update_cmd::download_update_cmd,
+            commands::update_cmd::cancel_update_download,
             // llama 自动下载
             commands::download_cmd::download_llama_server,
             commands::download_cmd::cancel_download_llama_server,

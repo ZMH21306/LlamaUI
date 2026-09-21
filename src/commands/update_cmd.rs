@@ -1,12 +1,127 @@
 //! 自动更新检查命令。
 
-use crate::update::{check_for_updates, cleanup_old_installation, UpdateCheckResult};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter};
+
+use crate::events::{UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE};
+use crate::update::{check_for_updates, cleanup_old_installation, download_update, UpdateCheckResult};
+
+/// 当前正在进行的更新下载取消标志
+static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// 下载并安装更新（调用后阻塞，直到完成或取消）
+#[tauri::command]
+pub async fn download_update_cmd(
+    app: AppHandle,
+) -> Result<(), String> {
+    let result = check_for_updates().map_err(|e| format!("检查更新失败：{}", e))?;
+    if !result.update_available {
+        return Ok(());
+    }
+
+    // 重置取消标志
+    UPDATE_DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
+
+    // 确定下载目录（缓存目录）
+    let download_dir = dirs::cache_dir().unwrap_or_else(|| std::env::temp_dir());
+    let dest_path = download_dir.join(format!("LlamaUI-{}-update.zip", result.latest_version));
+
+    // 发送下载开始状态
+    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::DownloadStarted {
+        total_bytes: result.file_size,
+    });
+
+    // 在后台线程中下载
+    let app_clone = app.clone();
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_clone = cancel_flag.clone();
+    let dest_path_clone = dest_path.clone();
+
+    let download_task = tokio::task::spawn_blocking(move || {
+        download_update(
+            &app_clone,
+            &result.download_url,
+            &dest_path_clone,
+            result.file_size,
+            cancel_clone,
+        )
+    });
+
+    // 等待下载完成
+    match download_task.await {
+        Ok(Ok(_result)) => {
+            // 发送完成状态
+            let _ = app.emit(EVT_UPDATE_STATE, UpdateState::DownloadCompleted {
+                download_path: dest_path.to_string_lossy().to_string(),
+                file_size: result.file_size,
+            });
+            // 发送进度完成事件
+            let _ = app.emit(
+                EVT_UPDATE_DOWNLOAD_PROGRESS,
+                UpdateDownloadProgress {
+                    stage: "completed".to_string(),
+                    progress: 1.0,
+                    downloaded: result.file_size,
+                    total: result.file_size,
+                    speed_mbps: 0.0,
+                    eta_secs: None,
+                    message: "下载完成，准备安装".to_string(),
+                },
+            );
+        }
+        Ok(Err(e)) => {
+            // 发送失败状态
+            let _ = app.emit(
+                EVT_UPDATE_STATE,
+                UpdateState::Failed {
+                    error: e.to_string(),
+                },
+            );
+            return Err(e.to_string());
+        }
+        Err(e) => {
+            // spawn_blocking 失败
+            let _ = app.emit(
+                EVT_UPDATE_STATE,
+                UpdateState::Failed {
+                    error: format!("下载任务执行失败: {}", e),
+                },
+            );
+            return Err(format!("下载任务执行失败: {}", e));
+        }
+    }
+
+    Ok(())
+}
+
+/// 取消当前正在进行的更新下载
+#[tauri::command]
+pub async fn cancel_update_download(
+    app: AppHandle,
+) -> Result<(), String> {
+    UPDATE_DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
+    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Cancelled);
+    let _ = app.emit(
+        EVT_UPDATE_DOWNLOAD_PROGRESS,
+        UpdateDownloadProgress {
+            stage: "cancelled".to_string(),
+            progress: 0.0,
+            downloaded: 0,
+            total: 0,
+            speed_mbps: 0.0,
+            eta_secs: None,
+            message: "下载已取消".to_string(),
+        },
+    );
+    Ok(())
+}
 
 /// 检查更新（异步，不阻塞事件循环）
 #[tauri::command]
 pub async fn check_updates() -> Result<UpdateCheckResult, String> {
     tracing::info!(target: "UpdateCmd", "收到检查更新请求");
-    // 在 spawn_blocking 中执行同步的检查逻辑，避免阻塞 Tauri 事件循环
     tokio::task::spawn_blocking(move || {
         check_for_updates()
             .map_err(|e| {
@@ -39,6 +154,7 @@ mod tests {
             release_notes: "New features".to_string(),
             old_installations: vec![],
             platform: "windows-x64".to_string(),
+            file_size: 1024 * 1024 * 50,
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: UpdateCheckResult = serde_json::from_str(&json).unwrap();

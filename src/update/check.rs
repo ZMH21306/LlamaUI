@@ -100,7 +100,7 @@ pub struct UpdateCheckResult {
     pub latest_version: String,
     /// 当前版本号
     pub current_version: String,
-    /// 下载链接
+    /// 下载链接（直接指向压缩包）
     pub download_url: String,
     /// 发布说明
     pub release_notes: String,
@@ -108,6 +108,8 @@ pub struct UpdateCheckResult {
     pub old_installations: Vec<OldInstallation>,
     /// 运行平台信息（如 "windows-x64", "linux-aarch64"）
     pub platform: String,
+    /// 更新包文件大小（字节）
+    pub file_size: u64,
 }
 
 /// 旧版本安装信息
@@ -168,14 +170,25 @@ pub fn check_for_updates() -> anyhow::Result<UpdateCheckResult> {
     // 3. 获取平台标识
     let platform = get_platform();
 
+    // 4. 查找匹配的下载资产（优先匹配平台名称）
+    let download_url = release.assets.iter()
+        .find(|a| a.name.contains(&platform) || a.name.contains("windows") || a.name.contains("LlamaUI"))
+        .map(|a| a.browser_download_url.clone())
+        .unwrap_or_else(|| release.html_url.clone());
+    let file_size = release.assets.iter()
+        .find(|a| a.name.contains(&platform) || a.name.contains("windows") || a.name.contains("LlamaUI"))
+        .map(|a| a.size)
+        .unwrap_or(0);
+
     Ok(UpdateCheckResult {
         update_available: is_newer,
         latest_version: latest_tag,
         current_version: current_version_tag,
-        download_url: release.html_url,
+        download_url,
         release_notes: release.body.unwrap_or_default(),
         old_installations,
         platform,
+        file_size,
     })
 }
 

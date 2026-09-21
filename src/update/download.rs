@@ -11,8 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
-use futures::stream::TryStreamExt;
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tracing::info;
@@ -75,7 +74,7 @@ pub fn download_update(
     if let Some(proxy_url) = crate::util::proxy::read_system_proxy() {
         info!(target: "UpdateDownload", proxy = %proxy_url, "使用系统代理下载更新");
     }
-    if cancel_flag.load(Ordering::Relaxed) {
+    if crate::update::UPDATE_DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
         return Err(anyhow::anyhow!("下载已取消"));
     }
     let response = client.get(download_url).send()?;
@@ -99,32 +98,16 @@ pub fn download_update(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(expected_size);
-    let mut file = fs::File::create(dest_path)?;
-    let mut downloaded: u64 = 0;
-    while let Some(chunk_result) = response.chunk() {
-        if cancel_flag.load(Ordering::Relaxed) {
-            let _ = fs::remove_file(dest_path);
-            return Err(anyhow::anyhow!("下载已取消"));
-        }
-        let chunk = chunk_result?;
-        file.write_all(&chunk)?;
-        downloaded += chunk.len() as u64;
-        if downloaded % (1024 * 1024) < chunk.len() as u64 || chunk.is_empty() {
-            let progress = if total > 0 { downloaded as f64 / total as f64 } else { 0.0 };
-            emit_progress(app, UpdateDownloadProgress {
-                stage: STAGE_DOWNLOADING.to_string(),
-                progress,
-                downloaded,
-                total,
-                speed_mbps: 0.0,
-                eta_secs: None,
-                message: format!("{:.1} MB", downloaded as f64 / 1_048_576.0),
-            });
-        }
+    let bytes = response.bytes()?;
+    let downloaded = bytes.len() as u64;
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err(anyhow::anyhow!("下载已取消"));
     }
+    let mut file = fs::File::create(dest_path)?;
+    file.write_all(&bytes)?;
     file.flush()?;
     drop(file);
-    let sha256 = compute_sha256(dest_path).ok();
+    let sha256 = compute_sha256(dest_path);
     let elapsed_ms = start_time.elapsed().as_millis() as u64;
     info!(target: "UpdateDownload", url = %download_url, size = downloaded, "更新包下载完成");
     emit_progress(app, UpdateDownloadProgress {
