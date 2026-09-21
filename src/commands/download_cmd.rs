@@ -55,7 +55,7 @@ pub async fn download_llama_server(
             progress: 0.0,
             downloaded: 0,
             total: 0,
-            message: format!("开始下载 (后端: {})", gpu_backend.as_str()),
+            message: format!("正在下载 (后端: {})", gpu_backend.as_str()),
             speed_mbps: 0.0,
             eta_secs: None,
             detail: None,

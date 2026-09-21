@@ -173,7 +173,7 @@ fn curl_download(
                 progress: progress_start,
                 downloaded: 0,
                 total: total_size,
-                                message: format!("开始下载 ({:.1} MB)...", total_size as f64 / 1048576.0),
+                                message: format!("开始下载 ({:.1} MB)", total_size as f64 / 1048576.0),
                 speed_mbps: 0.0,
                 eta_secs: None,
                 detail: None,
@@ -256,7 +256,7 @@ fn curl_download(
                 progress: progress_start + 0.001 * (progress_end - progress_start),
                 downloaded: 0,
                 total: size,
-                                message: format!("准备下载 {:.1} MB...", size as f64 / 1048576.0),
+                                message: format!("准备下载 {:.1} MB", size as f64 / 1048576.0),
                 speed_mbps: 0.0,
                 eta_secs: None,
                 detail: Some(DownloadProgressDetail {
@@ -394,10 +394,11 @@ fn curl_download(
                         downloaded,
                         total: size,
                         message: format!(
-                            "{:.1} / {:.1} MB ({:.1}%)",
+                            "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
                             downloaded as f64 / 1048576.0,
                             size as f64 / 1048576.0,
-                            global_progress * 100.0
+                            global_progress * 100.0,
+                            speed_mbps
                         ),
                         speed_mbps,
                         eta_secs: if eta_secs > 0 { Some(eta_secs) } else { None },
@@ -640,13 +641,13 @@ fn curl_download_parallel(
                 progress: global_progress,
                 downloaded: total_written,
                 total: total_size,
-                message: format!(
-                    "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
-                    total_written as f64 / 1_048_576.0,
-                    total_size as f64 / 1_048_576.0,
-                    global_progress * 100.0,
-                    speed_mbps
-                ),
+                    message: format!(
+                        "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
+                        total_written as f64 / 1_048_576.0,
+                        total_size as f64 / 1_048_576.0,
+                        global_progress * 100.0,
+                        speed_mbps
+                    ),
                 speed_mbps,
                 eta_secs: if speed_mbps > 0.0 {
                     Some(((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64)

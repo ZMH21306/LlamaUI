@@ -222,9 +222,10 @@ impl HfDownloader {
                         model_id: model_id.to_string(),
                         filename: filename.to_string(),
                         message: format!(
-                            "{:.1} / {:.1} MB",
+                            "{:.1} / {:.1} MB · {:.1} MB/s",
                             downloaded as f64 / 1_048_576.0,
-                            total as f64 / 1_048_576.0
+                            total as f64 / 1_048_576.0,
+                            (speed as f64 / 1_048_576.0).max(0.0)
                         ),
                         download_id: download_id.to_string(),
                     },

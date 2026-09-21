@@ -1657,10 +1657,10 @@ function attachUIListeners() {
           ? formatSize(p.downloaded) + ' / ' + formatSize(p.total)
           : '';
         const extra = sizeStr
-          ? speedStr || etaStr
-            ? ' · ' + sizeStr + (speedStr + (etaStr ? ' · ' + etaStr : ''))
-            : ''
-          : (speedStr + (etaStr ? ' · ' + etaStr : ''));
+          ? (speedStr || etaStr
+            ? ' · ' + sizeStr + ' · ' + speedStr + (etaStr ? ' · ' + etaStr : '')
+            : ' · ' + sizeStr)
+          : (speedStr || etaStr ? ' · ' + speedStr + (etaStr ? ' · ' + etaStr : '') : '');
         if (txt) txt.textContent = pct + '%' + (extra ? (' · ' + extra) : '');
       } else {
     const stageMap = {
