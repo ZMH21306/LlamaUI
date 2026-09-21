@@ -53,6 +53,7 @@ impl HfDownloader {
         dest_path: PathBuf,
         filename: &str,
         expected_size: u64,
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
     ) -> AnyResult<u64> {
         const MAX_ATTEMPTS: u32 = 3;
         let mut last_error: Option<anyhow::Error> = None;
@@ -78,6 +79,7 @@ impl HfDownloader {
                     expected_size,
                     &mut last_downloaded,
                     &mut last_speed_ts,
+                    &cancel_rx,
                 )
                 .await
             {
@@ -103,6 +105,7 @@ impl HfDownloader {
         expected_size: u64,
         last_downloaded: &mut u64,
         last_speed_ts: &mut Instant,
+        cancel_rx: &tokio::sync::watch::Receiver<bool>,
     ) -> AnyResult<u64> {
         let start = Instant::now();
         let mut downloaded: u64 = 0;
@@ -175,6 +178,11 @@ impl HfDownloader {
         let mut stream = resp.bytes_stream();
         use futures::stream::StreamExt;
         while let Some(chunk_result) = stream.next().await {
+            // 检查取消信号
+            if cancel_rx.has_changed().unwrap_or(false) && *cancel_rx.borrow() {
+                file.flush()?;
+                return Err(anyhow::anyhow!("下载已取消"));
+            }
             let chunk = chunk_result?;
             file.write_all(&chunk)?;
             downloaded += chunk.len() as u64;

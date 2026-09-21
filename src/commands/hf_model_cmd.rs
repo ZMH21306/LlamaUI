@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
 use tauri::{AppHandle, Emitter, Manager, State};
 use futures::stream::{self, StreamExt};
 use crate::download::hf_downloader::HfDownloader;

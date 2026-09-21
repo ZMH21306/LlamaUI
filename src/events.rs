@@ -54,9 +54,6 @@ pub enum ServerStatus {
 pub const EVT_DOWNLOAD_STATE: &str = "download-state";
 
 /// 下载状态变更事件（llama-server 下载流程）
-pub const EVT_DOWNLOAD_STATE: &str = "download-state";
-
-/// 下载状态变更事件（llama-server 下载流程）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DownloadState {
     /// 开始下载
