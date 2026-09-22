@@ -6,8 +6,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
@@ -50,7 +49,6 @@ pub fn download_update(
     download_url: &str,
     dest_path: &Path,
     expected_size: u64,
-    cancel_flag: Arc<AtomicBool>,
 ) -> AnyResult<UpdateDownloadResult> {
     let start_time = Instant::now();
     if let Some(parent) = dest_path.parent() {
@@ -66,7 +64,7 @@ pub fn download_update(
         message: "准备下载更新包...".to_string(),
     });
     let client = Client::builder()
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(600))
         .connect_timeout(Duration::from_secs(30))
         .user_agent("LlamaUI/0.7.0")
         .build()
@@ -79,7 +77,7 @@ pub fn download_update(
     }
     let response = client.get(download_url).send()?;
     let status = response.status();
-    if !status.is_success() {
+    if !status.is_success() && status.as_u16() != 206 {
         let msg = format!("下载失败：HTTP {}", status.as_u16());
         emit_progress(app, UpdateDownloadProgress {
             stage: STAGE_FAILED.to_string(),
@@ -98,13 +96,53 @@ pub fn download_update(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(expected_size);
-    let bytes = response.bytes()?;
-    let downloaded = bytes.len() as u64;
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Err(anyhow::anyhow!("下载已取消"));
-    }
+    // 流式下载：分块读取、实时进度、支持的取消
+    let mut downloaded: u64 = 0;
     let mut file = fs::File::create(dest_path)?;
-    file.write_all(&bytes)?;
+    let start = Instant::now();
+    let mut last_report = Instant::now();
+    let bytes = response.bytes()?;
+    for chunk in bytes.chunks(65536) {
+        if crate::update::UPDATE_DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(dest_path);
+            return Err(anyhow::anyhow!("下载已取消"));
+        }
+        file.write_all(chunk)?;
+        downloaded += chunk.len() as u64;
+        if last_report.elapsed() >= Duration::from_millis(500) {
+            let elapsed = start.elapsed().as_secs_f64();
+            let speed_mbps = if elapsed > 0.0 {
+                (downloaded as f64 / elapsed) / 1_048_576.0
+            } else {
+                0.0
+            };
+            let progress = if total > 0 {
+                downloaded as f64 / total as f64
+            } else {
+                0.0
+            };
+            emit_progress(app, UpdateDownloadProgress {
+                stage: STAGE_DOWNLOADING.to_string(),
+                progress,
+                downloaded,
+                total,
+                speed_mbps,
+                eta_secs: if speed_mbps > 0.0 {
+                    Some(((total - downloaded) as f64 / 1_048_576.0 / speed_mbps) as u64)
+                } else {
+                    None
+                },
+                message: format!(
+                    "下载中 {:.1}%（{:.1} MB / {:.1} MB，{:.1} MB/s）",
+                    progress * 100.0,
+                    downloaded as f64 / 1_048_576.0,
+                    total as f64 / 1_048_576.0,
+                    speed_mbps
+                ),
+            });
+            last_report = Instant::now();
+        }
+    }
     file.flush()?;
     drop(file);
     let sha256 = compute_sha256(dest_path);
