@@ -5,10 +5,12 @@
 //! - 改用单线程流式下载，内存友好，且更贴近浏览器行为
 //! - 保留进度、取消、代理、重试等核心能力
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
+use futures::StreamExt;
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 
@@ -176,63 +178,76 @@ impl HfDownloader {
             std::fs::OpenOptions::new().append(true).open(dest_path)?
         };
         let mut stream = resp.bytes_stream();
-        use futures::stream::StreamExt;
-        while let Some(chunk_result) = stream.next().await {
-            // 检查取消信号
-            if cancel_rx.has_changed().unwrap_or(false) && *cancel_rx.borrow() {
-                file.flush()?;
-                return Err(anyhow::anyhow!("下载已取消"));
-            }
-            let chunk = chunk_result?;
-            file.write_all(&chunk)?;
-            downloaded += chunk.len() as u64;
-            if downloaded % (256 * 1024) < chunk.len() as u64 || chunk.is_empty() {
-                tracing::info!(
-                    target: "HfDownloader",
-                    downloaded = downloaded,
-                    chunk = chunk.len(),
-                    "收到数据块"
-                );
-            }
-
-            if downloaded - *last_downloaded >= 64 * 1024 || downloaded == total {
-                let progress = if total > 0 { downloaded as f64 / total as f64 } else { 0.0 };
-                let now = Instant::now();
-                let elapsed_secs = now.duration_since(*last_speed_ts).as_secs_f64();
-                let speed = if elapsed_secs > 0.0 {
-                    ((downloaded - *last_downloaded) as f64 / elapsed_secs) as u64
-                } else {
-                    0
-                };
-                let eta = if speed > 0 && total > 0 {
-                    ((total - downloaded) / speed) as u64
-                } else {
-                    0
-                };
-
-                let _ = app.emit(
-                    "hf-download-progress",
-                    HfDownloadProgress {
-                        stage: "downloading".to_string(),
-                        progress,
-                        downloaded,
-                        total,
-                        speed: Some(speed),
-                        eta: Some(eta),
-                        model_id: model_id.to_string(),
-                        filename: filename.to_string(),
-                        message: format!(
-                            "{:.1} / {:.1} MB · {:.1} MB/s",
-                            downloaded as f64 / 1_048_576.0,
-                            total as f64 / 1_048_576.0,
-                            (speed as f64 / 1_048_576.0).max(0.0)
-                        ),
-                        download_id: download_id.to_string(),
-                    },
-                );
-
-                *last_downloaded = downloaded;
-                *last_speed_ts = now;
+        loop {
+            match tokio::time::timeout(
+                Duration::from_secs(60),
+                stream.next()
+            ).await {
+                Ok(Some(Ok(chunk))) => {
+                    // 检查取消信号
+                    if cancel_rx.has_changed().unwrap_or(false) && *cancel_rx.borrow() {
+                        file.flush()?;
+                        return Err(anyhow::anyhow!("下载已取消"));
+                    }
+                    file.write_all(&chunk)?;
+                    downloaded += chunk.len() as u64;
+                    if downloaded % (256 * 1024) < chunk.len() as u64 || chunk.is_empty() {
+                        tracing::info!(
+                            target: "HfDownloader",
+                            downloaded = downloaded,
+                            chunk = chunk.len(),
+                            "收到数据块"
+                        );
+                    }
+                    if downloaded - *last_downloaded >= 64 * 1024 || downloaded == total {
+                        let progress = if total > 0 { downloaded as f64 / total as f64 } else { 0.0 };
+                        let now = Instant::now();
+                        let elapsed_secs = now.duration_since(*last_speed_ts).as_secs_f64();
+                        let speed = if elapsed_secs > 0.0 {
+                            ((downloaded - *last_downloaded) as f64 / elapsed_secs) as u64
+                        } else {
+                            0
+                        };
+                        let eta = if speed > 0 && total > 0 {
+                            ((total - downloaded) / speed) as u64
+                        } else {
+                            0
+                        };
+                        let _ = app.emit(
+                            "hf-download-progress",
+                            HfDownloadProgress {
+                                stage: "downloading".to_string(),
+                                progress,
+                                downloaded,
+                                total,
+                                speed: Some(speed),
+                                eta: Some(eta),
+                                model_id: model_id.to_string(),
+                                filename: filename.to_string(),
+                                message: format!(
+                                    "{:.1} / {:.1} MB · {:.1} MB/s",
+                                    downloaded as f64 / 1_048_576.0,
+                                    total as f64 / 1_048_576.0,
+                                    (speed as f64 / 1_048_576.0).max(0.0)
+                                ),
+                                download_id: download_id.to_string(),
+                            },
+                        );
+                        *last_downloaded = downloaded;
+                        *last_speed_ts = now;
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    return Err(e.into());
+                }
+                Ok(None) => {
+                    // Stream ended
+                    break;
+                }
+                Err(_) => {
+                    // Timeout elapsed
+                    return Err(anyhow::anyhow!("下载超时：连接停滞超过 60 秒，已自动放弃重试"));
+                }
             }
         }
 
@@ -250,4 +265,4 @@ impl HfDownloader {
     }
 }
 
-use std::io::Write;
+
