@@ -65,6 +65,17 @@ impl ProgressReporter {
         Some(self.compute(downloaded))
     }
 
+    /// 强制发射进度（即使没有新 chunk 到达）。
+    /// 用于定时器回调，确保 UI 定期刷新而不是卡在上一次 emit。
+    pub fn force_emit(&mut self, downloaded: u64) -> Option<(f64, u64, f64, Option<u64>)> {
+        let now = Instant::now();
+        if now.duration_since(self.last_emit) < self.min_interval {
+            return None;
+        }
+        self.last_emit = now;
+        Some(self.compute(downloaded))
+    }
+
     fn compute(&self, downloaded: u64) -> (f64, u64, f64, Option<u64>) {
         let progress = if self.total > 0 {
             downloaded as f64 / self.total as f64

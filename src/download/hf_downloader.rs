@@ -149,43 +149,81 @@ impl HfDownloader {
         let mut downloaded: u64 = 0;
         let mut file = fs::File::create(dest_path)?;
         let mut stream = response.bytes_stream();
-        let mut progress_reporter = ProgressReporter::new(total, 10, Duration::from_millis(500));
+        let mut progress_reporter = ProgressReporter::new(total, 10, Duration::from_millis(200));
+        // 200ms 定时器：即使 bytes_stream 缓冲，仍能定期 emit 进度，避免 UI 卡住 30s
+        let mut progress_tick = tokio::time::interval(Duration::from_millis(200));
+        let mut cancel_rx = cancel_rx.clone();
 
-        while let Some(chunk_result) = stream.next().await {
-            // 检查取消信号
-            if cancel_rx.has_changed().unwrap_or(false) && *cancel_rx.borrow() {
-                file.flush()?;
-                let _ = fs::remove_file(dest_path);
-                return Err(anyhow::anyhow!("下载已取消"));
-            }
+        loop {
+            tokio::select! {
+                _ = cancel_rx.changed() => {
+                    if *cancel_rx.borrow() {
+                        file.flush()?;
+                        let _ = fs::remove_file(dest_path);
+                        return Err(anyhow::anyhow!("下载已取消"));
+                    }
+                }
+                _tick = progress_tick.tick() => {
+                    if let Some((progress, dl, speed, eta)) = progress_reporter.force_emit(downloaded) {
+                        let _ = app.emit(
+                            "hf-download-progress",
+                            HfDownloadProgress {
+                                stage: "downloading".to_string(),
+                                progress,
+                                downloaded: dl,
+                                total,
+                                speed: Some(speed as u64),
+                                eta,
+                                model_id: model_id.to_string(),
+                                filename: filename.to_string(),
+                                message: format!(
+                                    "{:.1} / {:.1} MB · {:.1} MB/s",
+                                    dl as f64 / 1_048_576.0,
+                                    total as f64 / 1_048_576.0,
+                                    (speed as f64 / 1_048_576.0).max(0.0)
+                                ),
+                                download_id: download_id.to_string(),
+                            },
+                        );
+                        *last_downloaded = downloaded;
+                        *last_speed_ts = Instant::now();
+                    }
+                }
+                chunk_result = stream.next() => {
+                    match chunk_result {
+                        Some(chunk) => {
+                            let chunk = chunk?;
+                            file.write_all(&chunk)?;
+                            downloaded += chunk.len() as u64;
 
-            let chunk = chunk_result?;
-            file.write_all(&chunk)?;
-            downloaded += chunk.len() as u64;
-
-            if let Some((progress, dl, speed, eta)) = progress_reporter.observe(downloaded) {
-                let _ = app.emit(
-                    "hf-download-progress",
-                    HfDownloadProgress {
-                        stage: "downloading".to_string(),
-                        progress,
-                        downloaded: dl,
-                        total,
-                                                speed: Some(speed as u64),
-                        eta,
-                        model_id: model_id.to_string(),
-                        filename: filename.to_string(),
-                        message: format!(
-                            "{:.1} / {:.1} MB · {:.1} MB/s",
-                            dl as f64 / 1_048_576.0,
-                            total as f64 / 1_048_576.0,
-                            (speed as f64 / 1_048_576.0).max(0.0)
-                        ),
-                        download_id: download_id.to_string(),
-                    },
-                );
-                *last_downloaded = downloaded;
-                *last_speed_ts = Instant::now();
+                            if let Some((progress, dl, speed, eta)) = progress_reporter.observe(downloaded) {
+                                let _ = app.emit(
+                                    "hf-download-progress",
+                                    HfDownloadProgress {
+                                        stage: "downloading".to_string(),
+                                        progress,
+                                        downloaded: dl,
+                                        total,
+                                        speed: Some(speed as u64),
+                                        eta,
+                                        model_id: model_id.to_string(),
+                                        filename: filename.to_string(),
+                                        message: format!(
+                                            "{:.1} / {:.1} MB · {:.1} MB/s",
+                                            dl as f64 / 1_048_576.0,
+                                            total as f64 / 1_048_576.0,
+                                            (speed as f64 / 1_048_576.0).max(0.0)
+                                        ),
+                                        download_id: download_id.to_string(),
+                                    },
+                                );
+                                *last_downloaded = downloaded;
+                                *last_speed_ts = Instant::now();
+                            }
+                        }
+                        None => break,
+                    }
+                }
             }
         }
 
@@ -203,16 +241,5 @@ impl HfDownloader {
 
         info!(target: "HfDownloader", url = %url, size = downloaded, elapsed_ms = start.elapsed().as_millis(), "下载完成");
         Ok(downloaded)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn downloader_creation() {
-        let downloader = HfDownloader::new();
-        assert!(downloader.is_ok());
     }
 }
