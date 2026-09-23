@@ -3,7 +3,7 @@
 //! # 设计目标
 //!
 //! - **可分层的错误**：`AppError` 是顶层枚举，子错误（`ConfigError` / `ProcessError` /
-//!   `DetectError`）按职责域组织。调用方可以 `match` 处理特定子类型，也可以
+//!   `DetectError` / `NetError`）按职责域组织。调用方可以 `match` 处理特定子类型，也可以
 //!   `?` 直接上抛。
 //! - **用户可读**：`Display` 实现给前端直接显示（前端拿到的是 `to_string()`）。
 //! - **保留来源**：`#[from]` 覆盖常见 std / 外部错误，让 `?` 自动转换。
@@ -16,29 +16,35 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
+use crate::net::NetError as InnerNetError;
+
 /// 顶层应用错误。各子模块错误通过 `#[from]` 自动转换。
 #[derive(Debug, Error)]
 pub enum AppError {
     /// 配置相关错误（验证、加载、迁移、路径不存在等）。
     #[error("{0}")]
     Config(#[from] ConfigError),
-
     /// 进程管理错误（启动失败、停止失败、命令解析失败等）。
     #[error("{0}")]
     Process(#[from] ProcessError),
-
     /// 自动检测错误（仅在检测流程自身异常时使用；"未找到"不是错误）。
     #[error("{0}")]
     Detect(#[from] DetectError),
-
-    /// 标准 I/O 错误（文件读写、进程派生等）。
+    /// 网络错误（HTTP 请求超时、连接失败、重试耗尽等）。
+    #[error("{0}")]
+    Net(#[from] InnerNetError),
+    /// I/O 错误（文件读写、进程派生等）。
     #[error("I/O 错误：{0}")]
     Io(#[from] std::io::Error),
-
     /// JSON 序列化 / 反序列化错误。
     #[error("序列化错误：{0}")]
     Serde(#[from] serde_json::Error),
-
+    /// 操作被用户取消。
+    #[error("操作已取消")]
+    Cancelled,
+    /// 限流（HTTP 429）。附带重试建议秒数。
+    #[error("请求被限流，请在 {0} 秒后重试")]
+    RateLimited(u64),
     /// 其它未分类错误（保留兜底通道，方便迁移期使用）。
     #[error("{0}")]
     Other(String),
@@ -194,5 +200,28 @@ mod tests {
     fn process_error_already_running_message() {
         let e = ProcessError::AlreadyRunning;
         assert_eq!(e.to_string(), "服务已经在启动或运行中");
+    }
+
+    #[test]
+    fn app_error_cancelled_display() {
+        let e = AppError::Cancelled;
+        assert_eq!(e.to_string(), "操作已取消");
+    }
+
+    #[test]
+    fn app_error_rate_limited_display() {
+        let e = AppError::RateLimited(30);
+        assert_eq!(e.to_string(), "请求被限流，请在 30 秒后重试");
+    }
+
+    #[test]
+    fn app_error_from_net_error() {
+        // 构造一个 NetError（reqwest::Error 需要实际网络，这里用构造方式）
+        let net_err = NetError::HttpStatus(
+            reqwest::StatusCode::from_u16(503).unwrap(),
+            "Service Unavailable".to_string(),
+        );
+        let app: AppError = net_err.into();
+        assert!(matches!(app, AppError::Net(_)));
     }
 }
