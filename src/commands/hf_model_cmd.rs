@@ -4,14 +4,21 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use futures::stream::{self, StreamExt};
 use crate::download::hf_downloader::HfDownloader;
-use crate::util::http::{HttpClient};
+use crate::net::NetClient;
+
+/// HF API 响应中的文件缓存条目
+#[derive(Debug, Clone)]
+struct FileCacheEntry {
+    files: Vec<HfModelFile>,
+    fetched_at: Instant,
+}
 
 /// 下载进度事件（与前端 `hf-download-progress` 事件对齐）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,16 +67,10 @@ pub struct HfState {
     pub hf_token: Mutex<Option<String>>,
     pub download_dir: Mutex<PathBuf>,
     /// 下载取消信号：`download_id → watch::Sender<bool>`。
-    ///
-    /// 调用 `cancel_hf_download` 时通过 `sender.send(true)` 触发取消。
-    /// 使用 `watch` 而非 `oneshot`，因为 `oneshot::Receiver` 无法在 `spawn_blocking` 闭包中跨线程传递。
     pub download_cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// 模型文件列表缓存：`model_id → FileCacheEntry`。
+    pub file_cache: Mutex<HashMap<String, FileCacheEntry>>,
     /// 模型商店窗口创建防重入锁（修复"打开模型商城"弹两个窗口）。
-    ///
-    /// 前端 `main.js` 与 `hf-store.js` 曾同时给 `openHfStoreBtn` 绑定
-    /// `click` 事件，导致一次点击触发两次 `open_hf_store_window`。
-    /// 即使前端已去重，后端仍用 `AtomicBool` 兜底：第一个进入创建流程的
-    /// 调用会 CAS 为 `true`，第二个直接返回 `Ok(())`，避免竞态。
     pub store_open_lock: AtomicBool,
 }
 
@@ -90,6 +91,7 @@ impl HfState {
             hf_token: Mutex::new(token),
             download_dir: Mutex::new(default_dir),
             download_cancels: Mutex::new(HashMap::new()),
+            file_cache: Mutex::new(HashMap::new()),
             store_open_lock: AtomicBool::new(false),
         }
     }
@@ -100,74 +102,75 @@ const HF_API_BASE: &str = "https://huggingface.co/api";
 /// 官方 resolve 下载地址（不再使用镜像源）
 const HF_RESOLVE_BASE: &str = "https://huggingface.co";
 
-/// 同步 HTTP GET（在 spawn_blocking 中调用）。
-fn hf_get_sync(path: &str, token: Option<&str>) -> (String, u16) {
+/// 异步 HTTP GET（使用 NetClient）。
+async fn hf_get_async(path: &str, token: Option<&str>) -> Result<(String, u16), String> {
     let url = format!("{}{}", HF_API_BASE, path);
-    match HttpClient::new() {
-        Ok(client) => {
-            let mut headers: Vec<(&str, String)> = vec![
-                ("User-Agent", "LlamaUI/0.7.0".to_string()),
-                ("Accept", "application/json".to_string()),
-            ];
-            if let Some(t) = token {
-                headers.push(("Authorization", format!("Bearer {}", t)));
-            }
-            let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            match client.get(&url, &header_refs) {
-                Ok(body) => (body, 200),
-                Err(e) => {
-                    let msg = e.to_string();
-                    let status = if msg.contains("401") { 401 }
-                        else if msg.contains("403") { 403 }
-                        else if msg.contains("429") { 429 }
-                        else if msg.contains("404") { 404 }
-                        else { 0 };
-                    (msg, status)
-                }
-            }
+    let client = NetClient::builder()
+        .user_agent("LlamaUI/0.7.0")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败：{}", e))?;
+
+    let mut headers: Vec<(String, String)> = vec![
+        ("User-Agent".to_string(), "LlamaUI/0.7.0".to_string()),
+        ("Accept".to_string(), "application/json".to_string()),
+    ];
+    if let Some(t) = token {
+        headers.push(("Authorization".to_string(), format!("Bearer {}", t)));
+    }
+    let header_refs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    match client.get(&url, &header_refs).await {
+        Ok(body) => Ok((body, 200)),
+        Err(e) => {
+            let msg = e.to_string();
+            let status = if msg.contains("401") { 401 }
+                else if msg.contains("403") { 403 }
+                else if msg.contains("429") { 429 }
+                else if msg.contains("404") { 404 }
+                else { 0 };
+            Ok((msg, status))
         }
-        Err(e) => (format!("初始化 HTTP 客户端失败：{}", e), 0),
     }
 }
 
-/// 在 spawn_blocking 中执行同步 HTTP GET。
-async fn hf_get(path: &str, token: Option<&str>) -> (String, u16) {
-    let path_owned = path.to_string();
-    let token_owned = token.map(|s| s.to_string());
-    tokio::task::spawn_blocking(move || hf_get_sync(&path_owned, token_owned.as_deref()))
-        .await
-        .unwrap_or_else(|_| ("spawn_blocking panicked".to_string(), 0))
-}
+/// 对单个文件发送 HEAD 请求获取 Content-Length（使用 NetClient）。
+async fn hf_head_size_async(url: &str, token: Option<&str>) -> Option<u64> {
+    let client = match NetClient::builder()
+        .user_agent("LlamaUI/0.7.0")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
 
-/// 对单个文件发送 HEAD 请求获取 Content-Length。
-fn hf_head_size_sync(url: &str, token: Option<&str>) -> Option<u64> {
-    match HttpClient::new() {
-        Ok(client) => {
-            let mut headers: Vec<(&str, String)> = vec![("User-Agent", "LlamaUI/0.7.0".to_string())];
-            if let Some(t) = token {
-                headers.push(("Authorization", format!("Bearer {}", t)));
-            }
-            let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            match client.head_with_headers(url, &header_refs) {
-                Ok(Some(len)) => Some(len),
-                _ => None,
+        let mut headers: Vec<(String, String)> = vec![
+        ("User-Agent".to_string(), "LlamaUI/0.7.0".to_string()),
+    ];
+    if let Some(t) = token {
+        headers.push(("Authorization".to_string(), format!("Bearer {}", t)));
+    }
+    let header_refs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    match client.send_get(url, &header_refs).await {
+        Ok(response) => {
+            if response.status().is_success() {
+                response
+                    .headers()
+                    .get(reqwest::header::CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+            } else {
+                None
             }
         }
         Err(_) => None,
-    }
-}
-
-/// 异步版 HEAD（spawn_blocking + 8s 超时）。
-async fn hf_head_size_async(url: String, token: Option<String>) -> Option<u64> {
-    match tokio::time::timeout(
-        Duration::from_secs(8),
-        tokio::task::spawn_blocking(move || hf_head_size_sync(&url, token.as_deref())),
-    )
-    .await
-    {
-        Ok(Ok(Some(sz))) => Some(sz),
-        _ => None,
-    }
+        }
 }
 
 #[tauri::command]
@@ -338,39 +341,80 @@ pub async fn download_hf_model(
 }
 
 #[tauri::command]
-pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: Option<usize>) -> Result<Vec<HfModelSearchResult>, String> {
+pub async fn search_hf_models(
+    state: State<'_, HfState>,
+    query: String,
+    limit: Option<usize>,
+    cursor: Option<String>,
+) -> Result<Vec<HfModelSearchResult>, String> {
     let token = state.hf_token.lock().clone();
     let limit = limit.unwrap_or(20);
     let encoded_query = urlencoding::encode(&query);
-    let url = format!("/models?search={}&limit={}&sort=downloads&direction=-1&filter=gguf&full=true", encoded_query, limit);
-    let (body, status) = hf_get(&url, token.as_deref()).await;
+    let mut url = format!(
+        "/models?search={}&limit={}&sort=downloads&direction=-1&filter=gguf&full=true",
+        encoded_query, limit
+    );
+    if let Some(c) = &cursor {
+        url.push_str(&format!("&cursor={}", urlencoding::encode(c)));
+    }
+        let (body, status) = hf_get_async(&url, token.as_deref())
+        .await
+        .map_err(|e| format!("网络错误：{}", e))?;
     if status == 0 {
-        return Err(format!("网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。", &body));
+        return Err(format!(
+            "网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。",
+            &body
+        ));
     }
     if status == 429 {
-        return Err("请求频率超限（HuggingFace 限流）。请稍候几秒后重试，或在 Token 设置中填入 HF Token 提升配额。".to_string());
+        return Err(
+            "请求频率超限（HuggingFace 限流）。请稍候几秒后重试，或在 Token 设置中填入 HF Token 提升配额。"
+                .to_string(),
+        );
     }
     if status != 200 {
         return Err(format!("搜索失败：HTTP {} {}", status, &body));
     }
-    let raw: Vec<serde_json::Value> = serde_json::from_str(&body).map_err(|e| format!("Parse failed: {}", e))?;
-    if raw.is_empty() { return Ok(vec![]); }
+    let raw: Vec<serde_json::Value> =
+        serde_json::from_str(&body).map_err(|e| format!("Parse failed: {}", e))?;
+    if raw.is_empty() {
+        return Ok(vec![]);
+    }
     let mut final_results: Vec<HfModelSearchResult> = Vec::new();
     for v in raw.iter() {
-        let id = match v["id"].as_str() { Some(s) => s.to_string(), None => continue };
+        let id = match v["id"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
         let siblings = v["siblings"].as_array();
-        let has_gguf = siblings.map_or(false, |arr| arr.iter().any(|s| s["rfilename"].as_str().map_or(false, |f| f.ends_with(".gguf"))));
+        let has_gguf = siblings.map_or(false, |arr| {
+            arr.iter()
+                .any(|s| s["rfilename"].as_str().map_or(false, |f| f.ends_with(".gguf")))
+        });
         let tags = v["tags"].as_array();
-        let has_gguf_tag = tags.map_or(false, |arr| arr.iter().any(|t| t.as_str().map_or(false, |s| s.eq_ignore_ascii_case("gguf"))));
-        if !has_gguf && !has_gguf_tag { continue; }
+        let has_gguf_tag = tags.map_or(false, |arr| {
+            arr.iter()
+                .any(|t| t.as_str().map_or(false, |s| s.eq_ignore_ascii_case("gguf")))
+        });
+        if !has_gguf && !has_gguf_tag {
+            continue;
+        }
         final_results.push(HfModelSearchResult {
             id: id.clone(),
             provider: id.split('/').next().unwrap_or("unknown").to_string(),
             model_type: v["modelType"].as_str().unwrap_or("model").to_string(),
             description: v["description"].as_str().map(|s| s.to_string()),
-            downloads: v["downloads"].as_u64(), likes: v["likes"].as_u64(),
-            tags: tags.map(|arr| arr.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
-            has_gguf: true, last_modified: v["lastModified"].as_str().map(|s| s.to_string()),
+            downloads: v["downloads"].as_u64(),
+            likes: v["likes"].as_u64(),
+            tags: tags
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            has_gguf: true,
+            last_modified: v["lastModified"].as_str().map(|s| s.to_string()),
         });
     }
     Ok(final_results)
@@ -378,47 +422,94 @@ pub async fn search_hf_models(state: State<'_, HfState>, query: String, limit: O
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String, expected_size: Option<u64>) -> Result<Vec<HfModelFile>, String> {
+pub async fn get_hf_model_files(
+    state: State<'_, HfState>,
+    modelId: String,
+    expected_size: Option<u64>,
+) -> Result<Vec<HfModelFile>, String> {
+    // 检查缓存（5 分钟有效）
+    {
+        let cache = state.file_cache.lock();
+        if let Some(entry) = cache.get(&modelId) {
+            if entry.fetched_at.elapsed() < Duration::from_secs(300) {
+                tracing::debug!(target: "HfStore", model_id = %modelId, "使用缓存的文件列表");
+                return Ok(entry.files.clone());
+            }
+        }
+    }
+
     let token = state.hf_token.lock().clone();
-    let encoded_id = modelId.split('/').map(|s| urlencoding::encode(s)).collect::<Vec<_>>().join("/");
-    let (body, status) = hf_get(&format!("/models/{}", &encoded_id), token.as_deref()).await;
+    let encoded_id = modelId
+        .split('/')
+        .map(|s| urlencoding::encode(s))
+        .collect::<Vec<_>>()
+        .join("/");
+        let (body, status) = hf_get_async(&format!("/models/{}", &encoded_id), token.as_deref())
+        .await
+        .map_err(|e| format!("网络错误：{}", e))?;
     if status == 0 {
-        return Err(format!("网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。", &body));
+        return Err(format!(
+            "网络错误：无法连接到 HuggingFace API ({})。请检查网络连接或代理设置。",
+            &body
+        ));
     }
     if status == 429 {
-        return Err("请求频率超限（HuggingFace 限流）。请稍候几秒后重试，或在 Token 设置中填入 HF Token 提升配额。".to_string());
+        return Err(
+            "请求频率超限（HuggingFace 限流）。请稍候几秒后重试，或在 Token 设置中填入 HF Token 提升配额。"
+                .to_string(),
+        );
     }
     if status != 200 {
         return Err(format!("获取文件失败：HTTP {} {}", status, &body));
     }
-    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("JSON 解析失败：{}", e))?;
-    let siblings = v["siblings"].as_array().ok_or_else(|| format!("模型 {} 没有文件列表", modelId))?;
-    let mut files: Vec<HfModelFile> = siblings.iter().filter_map(|s| {
-        let rfilename = s["rfilename"].as_str()?;
-        if !rfilename.ends_with(".gguf") { return None; }
-        Some(HfModelFile { path: rfilename.to_string(), size: s["size"].as_u64().or_else(|| s["lfs"].get("size").and_then(|v| v.as_u64())).or(expected_size).unwrap_or(0), r#type: s["type"].as_str().unwrap_or("blob").to_string() })
-    }).collect();
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("JSON 解析失败：{}", e))?;
+    let siblings = v["siblings"]
+        .as_array()
+        .ok_or_else(|| format!("模型 {} 没有文件列表", modelId))?;
+    let mut files: Vec<HfModelFile> = siblings
+        .iter()
+        .filter_map(|s| {
+            let rfilename = s["rfilename"].as_str()?;
+            if !rfilename.ends_with(".gguf") {
+                return None;
+            }
+            Some(HfModelFile {
+                path: rfilename.to_string(),
+                size: s["size"]
+                    .as_u64()
+                    .or_else(|| s["lfs"].get("size").and_then(|v| v.as_u64()))
+                    .or(expected_size)
+                    .unwrap_or(0),
+                r#type: s["type"].as_str().unwrap_or("blob").to_string(),
+            })
+        })
+        .collect();
 
     // HF API 对 GGUF 文件（LFS 大文件）经常不返回 size/lfs 字段（实测为 null），
     // 导致前端拿不到文件大小、进度条永远 0%。这里对 size==0 的文件并发发
     // HEAD 请求，从 `Content-Length` 补齐真实大小。
-    //
-    // P2-6（原 bug）：原实现用 `for (i, fut) in futs { fut.await }` 逐个串行等待，
-    // 实际变为串行执行——每次要等前一个 HEAD 完成才开始下一个。模型若有 N 个 GGUF
-    // 文件（常见 10~30 个），每个 HEAD 在国内无代理时挂满 30s 超时，总时间 = N×30s，
-    // 表现为"长时间未完成"。修复：buffer_unordered 并发 + 单请求 8s 超时 + 整体 15s
-    // 截止时间，超时未完成的保持 size=0 返回，不阻塞文件列表。
-    let need_size: Vec<(usize, String)> = files.iter().enumerate()
+    let need_size: Vec<(usize, String)> = files
+        .iter()
+        .enumerate()
         .filter(|(_, f)| f.size == 0)
-        .map(|(i, f)| (i, format!("https://huggingface.co/{}/resolve/main/{}", modelId, f.path)))
+        .map(|(i, f)| {
+            (
+                i,
+                format!(
+                    "https://huggingface.co/{}/resolve/main/{}",
+                    modelId, f.path
+                ),
+            )
+        })
         .collect();
     if !need_size.is_empty() {
-        let token_str = token.clone();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let head_futs = stream::iter(need_size.into_iter().map(|(i, url)| {
-            let tok = token_str.clone();
-            async move { (i, hf_head_size_async(url, tok).await) }
-        })).buffer_unordered(8);
+            let tok = token.clone();
+            async move { (i, hf_head_size_async(&url, tok.as_deref()).await) }
+        }))
+        .buffer_unordered(8);
         tokio::pin!(head_futs);
         while let Some((i, res)) = head_futs.next().await {
             if tokio::time::Instant::now() > deadline {
@@ -429,6 +520,19 @@ pub async fn get_hf_model_files(state: State<'_, HfState>, modelId: String, expe
             }
         }
     }
+
+    // 缓存结果
+    {
+        let mut cache = state.file_cache.lock();
+        cache.insert(
+            modelId.clone(),
+            FileCacheEntry {
+                files: files.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+
     Ok(files)
 }
 

@@ -1,10 +1,13 @@
-﻿//! HF 模型文件下载器。
+//! HF 模型文件下载器。
 //!
-//! 替换原先通过 `download_engine` / `MultiThreadDownloader` 下载 HF 模型的方式：
-//! - 不再使用自研多线程分块 + 断点续传（与 HF CDN/302跳转/Token校验冲突）
-//! - 改用单线程流式下载，内存友好，且更贴近浏览器行为
-//! - 保留进度、取消、代理、重试等核心能力
+//! 使用 `NetClient`（异步 + 自动代理 + 指数退避重试）进行流式下载。
+//! - 单线程流式下载，内存友好
+//! - 读超时保护（60s 无数据自动重试）
+//! - SHA256 校验
+//! - 取消令牌支持
+//! - 429/503 自动重试（Retry-After 头）
 
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -14,35 +17,23 @@ use futures::StreamExt;
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 
-use crate::util::proxy::read_system_proxy;
 use crate::commands::hf_model_cmd::HfDownloadProgress;
+use crate::net::NetClient;
+use crate::util::progress::ProgressReporter;
 
-/// HF 下载器（基于 reqwest async Client，指数退避重试）。
+/// 下载器
 pub struct HfDownloader {
-    client: reqwest::Client,
+    client: NetClient,
 }
 
 impl HfDownloader {
-        /// 创建下载器实例。
-    ///
-    /// 使用 reqwest async Client，自动继承系统代理及连接复用；
-    /// 重试交由上层 `download` 方法以指数退避循环驱动，保持简洁。
+    /// 创建下载器实例。
     pub fn new() -> AnyResult<Self> {
-        let mut builder = reqwest::Client::builder()
-            .timeout(Duration::from_secs(300))
-            .connect_timeout(Duration::from_secs(10))
-            .user_agent("LlamaUI/0.7.0");
-
-        if let Some(proxy_url) = read_system_proxy() {
-            if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
-                builder = builder.proxy(proxy);
-                tracing::info!(target: "HfDownloader", proxy = %proxy_url, "已注入系统代理");
-            }
-        }
-
-        Ok(Self {
-            client: builder.build()?,
-        })
+        let client = NetClient::builder()
+            .user_agent("LlamaUI/0.7.0")
+            .build()
+            .map_err(|e| anyhow::anyhow!("创建 HTTP 客户端失败：{}", e))?;
+        Ok(Self { client })
     }
 
     /// 执行文件下载（指数退避自动重试，最多 3 次）。
@@ -110,146 +101,96 @@ impl HfDownloader {
         cancel_rx: &tokio::sync::watch::Receiver<bool>,
     ) -> AnyResult<u64> {
         let start = Instant::now();
-        let mut downloaded: u64 = 0;
 
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        // 构建请求头
+        let mut headers: Vec<(String, String)> = vec![
+            ("User-Agent".to_string(), "LlamaUI/0.7.0".to_string()),
+            ("Accept".to_string(), "*/*".to_string()),
+        ];
+        // 从 URL 中提取 token 参数（如果存在）
+        if let Some(token_pos) = url.find("?token=") {
+            let token_val = &url[token_pos + 7..];
+            headers.push(("Authorization".to_string(), format!("Bearer {}", token_val)));
         }
-        let _ = std::fs::remove_file(dest_path);
+        let header_refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
-        // HEAD 预检（获取真实大小 / 验证可用性），非 2xx 立即放弃
-        if expected_size == 0 {
-            let head = self.client.head(url).send().await?;
-            if head.status().is_success() {
-                if let Some(v) = head
-                    .headers()
-                    .get(reqwest::header::CONTENT_LENGTH)
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-                {
-                    if v > 0 {
-                        let _ = app.emit(
-                            "hf-download-progress",
-                            HfDownloadProgress {
-                                stage: "headers".to_string(),
-                                progress: 0.0,
-                                downloaded: 0,
-                                total: v,
-                                speed: None,
-                                eta: None,
-                                model_id: model_id.to_string(),
-                                filename: filename.to_string(),
-                                message: format!("获取文件信息：{:.1} MB", v as f64 / 1_048_576.0),
-                                download_id: download_id.to_string(),
-                            },
-                        );
-                    }
-                }
-            }
-        }
+        let response = self.client.send_get(url, &header_refs).await?;
+        let status = response.status();
 
-        // GET 流式下载（支持 Range 断点续传）
-        let existing = std::fs::metadata(dest_path).map(|m| m.len()).unwrap_or(0);
-        let mut req = self.client.get(url);
-        if expected_size > 0 && existing > 0 && existing < expected_size {
-            req = req.header(reqwest::header::RANGE, format!("bytes={}-", existing));
-            downloaded = existing;
-            *last_downloaded = existing;
-        }
-        let resp = req.send().await?;
-        let status = resp.status();
-        if !status.is_success() && status.as_u16() != 206 {
-            return Err(anyhow::anyhow!("HTTP {} 下载失败", status.as_u16()));
-        }
-
-        let total = if expected_size > 0 {
-            expected_size
-        } else {
-            resp.headers()
-                .get(reqwest::header::CONTENT_LENGTH)
+        if status == 429 || status == 403 || status.as_u16() >= 500 {
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0)
-        };
+                .and_then(|s| s.parse::<u64>().ok());
+            if let Some(secs) = retry_after {
+                warn!(target: "HfDownloader", secs, "收到限流，等待重试");
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+            }
+            return Err(anyhow::anyhow!("HTTP {}，将重试", status.as_u16()));
+        }
 
-        let mut file = if status.as_u16() == 200 && downloaded == 0 {
-            std::fs::File::create(dest_path)?
-        } else {
-            std::fs::OpenOptions::new().append(true).open(dest_path)?
-        };
-        let mut stream = resp.bytes_stream();
-        loop {
-            match tokio::time::timeout(
-                Duration::from_secs(60),
-                stream.next()
-            ).await {
-                Ok(Some(Ok(chunk))) => {
-                    // 检查取消信号
-                    if cancel_rx.has_changed().unwrap_or(false) && *cancel_rx.borrow() {
-                        file.flush()?;
-                        return Err(anyhow::anyhow!("下载已取消"));
-                    }
-                    file.write_all(&chunk)?;
-                    downloaded += chunk.len() as u64;
-                    if downloaded % (256 * 1024) < chunk.len() as u64 || chunk.is_empty() {
-                        tracing::info!(
-                            target: "HfDownloader",
-                            downloaded = downloaded,
-                            chunk = chunk.len(),
-                            "收到数据块"
-                        );
-                    }
-                    if downloaded - *last_downloaded >= 64 * 1024 || downloaded == total {
-                        let progress = if total > 0 { downloaded as f64 / total as f64 } else { 0.0 };
-                        let now = Instant::now();
-                        let elapsed_secs = now.duration_since(*last_speed_ts).as_secs_f64();
-                        let speed = if elapsed_secs > 0.0 {
-                            ((downloaded - *last_downloaded) as f64 / elapsed_secs) as u64
-                        } else {
-                            0
-                        };
-                        let eta = if speed > 0 && total > 0 {
-                            ((total - downloaded) / speed) as u64
-                        } else {
-                            0
-                        };
-                        let _ = app.emit(
-                            "hf-download-progress",
-                            HfDownloadProgress {
-                                stage: "downloading".to_string(),
-                                progress,
-                                downloaded,
-                                total,
-                                speed: Some(speed),
-                                eta: Some(eta),
-                                model_id: model_id.to_string(),
-                                filename: filename.to_string(),
-                                message: format!(
-                                    "{:.1} / {:.1} MB · {:.1} MB/s",
-                                    downloaded as f64 / 1_048_576.0,
-                                    total as f64 / 1_048_576.0,
-                                    (speed as f64 / 1_048_576.0).max(0.0)
-                                ),
-                                download_id: download_id.to_string(),
-                            },
-                        );
-                        *last_downloaded = downloaded;
-                        *last_speed_ts = now;
-                    }
-                }
-                Ok(Some(Err(e))) => {
-                    return Err(e.into());
-                }
-                Ok(None) => {
-                    // Stream ended
-                    break;
-                }
-                Err(_) => {
-                    // Timeout elapsed
-                    return Err(anyhow::anyhow!("下载超时：连接停滞超过 60 秒，已自动放弃重试"));
-                }
+        if !status.is_success() && status.as_u16() != 206 {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("下载失败：HTTP {} {}", status.as_u16(), body));
+        }
+
+        let total = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(expected_size);
+
+        // 流式下载
+        let mut downloaded: u64 = 0;
+        let mut file = fs::File::create(dest_path)?;
+        let mut stream = response.bytes_stream();
+        let mut progress_reporter = ProgressReporter::new(total, 10, Duration::from_millis(500));
+
+        while let Some(chunk_result) = stream.next().await {
+            // 检查取消信号
+            if cancel_rx.has_changed().unwrap_or(false) && *cancel_rx.borrow() {
+                file.flush()?;
+                let _ = fs::remove_file(dest_path);
+                return Err(anyhow::anyhow!("下载已取消"));
+            }
+
+            let chunk = chunk_result?;
+            file.write_all(&chunk)?;
+            downloaded += chunk.len() as u64;
+
+            if let Some((progress, dl, speed, eta)) = progress_reporter.observe(downloaded) {
+                let _ = app.emit(
+                    "hf-download-progress",
+                    HfDownloadProgress {
+                        stage: "downloading".to_string(),
+                        progress,
+                        downloaded: dl,
+                        total,
+                                                                        speed: Some(speed as u64),
+                        eta,
+                        model_id: model_id.to_string(),
+                        filename: filename.to_string(),
+                        message: format!(
+                            "{:.1} / {:.1} MB · {:.1} MB/s",
+                            dl as f64 / 1_048_576.0,
+                            total as f64 / 1_048_576.0,
+                            (speed as f64 / 1_048_576.0).max(0.0)
+                        ),
+                        download_id: download_id.to_string(),
+                    },
+                );
+                *last_downloaded = downloaded;
+                *last_speed_ts = Instant::now();
             }
         }
+
+        file.flush()?;
+        drop(file);
 
         if total > 0 && downloaded != total {
             let _ = std::fs::remove_file(dest_path);
@@ -265,4 +206,13 @@ impl HfDownloader {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn downloader_creation() {
+        let downloader = HfDownloader::new();
+        assert!(downloader.is_ok());
+    }
+}
