@@ -7,8 +7,19 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- 顶部浮动通知 -->
+    <!-- 顶部浮动通知 -->
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <!-- 更新进度提示 -->
+  <div class="update-toast" id="updateToast" hidden>
+    <div class="update-toast-header">
+      <span id="updateProgressLabel">检查更新中...</span>
+      <button class="update-toast-close" onclick="document.getElementById('updateToast').hidden = true">×</button>
+    </div>
+    <div class="update-progress-bar">
+      <div class="update-progress-fill" id="updateProgressBar" style="width: 0%"></div>
+    </div>
+  </div>
 
   <!-- 模式切换 / 危险操作确认弹窗 -->
   <div class="modal" id="modal" hidden>
