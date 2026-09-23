@@ -1,7 +1,6 @@
 //! 自动更新检查命令。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
 
@@ -16,7 +15,7 @@ static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 pub async fn download_update_cmd(
     app: AppHandle,
 ) -> Result<(), String> {
-    let result = check_for_updates().map_err(|e| format!("检查更新失败：{}", e))?;
+    let result = check_for_updates().await.map_err(|e| format!("检查更新失败：{}", e))?;
     if !result.update_available {
         return Ok(());
     }
@@ -33,20 +32,17 @@ pub async fn download_update_cmd(
         total_bytes: result.file_size,
     });
 
-    // 在后台线程中下载
+    // 在后台任务中下载
     let app_clone = app.clone();
-    let cancel_flag = Arc::new(AtomicBool::new(false));
-    let cancel_clone = cancel_flag.clone();
     let dest_path_clone = dest_path.clone();
 
-    let download_task = tokio::task::spawn_blocking(move || {
+    let download_task = tokio::spawn(async move {
         download_update(
             &app_clone,
             &result.download_url,
             &dest_path_clone,
             result.file_size,
-            cancel_clone,
-        )
+        ).await
     });
 
     // 等待下载完成
@@ -122,15 +118,12 @@ pub async fn cancel_update_download(
 #[tauri::command]
 pub async fn check_updates() -> Result<UpdateCheckResult, String> {
     tracing::info!(target: "UpdateCmd", "收到检查更新请求");
-    tokio::task::spawn_blocking(move || {
-        check_for_updates()
-            .map_err(|e| {
-                tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
-                format!("检查更新失败：{}", e)
-            })
-    })
-    .await
-    .map_err(|e| format!("检查更新任务失败：{}", e))?
+    check_for_updates()
+        .await
+        .map_err(|e| {
+            tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
+            format!("检查更新失败：{}", e)
+        })
 }
 
 /// 清理旧版本
@@ -155,6 +148,8 @@ mod tests {
             old_installations: vec![],
             platform: "windows-x64".to_string(),
             file_size: 1024 * 1024 * 50,
+            sha256: None,
+            signature_verified: false,
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: UpdateCheckResult = serde_json::from_str(&json).unwrap();

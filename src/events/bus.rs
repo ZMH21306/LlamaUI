@@ -76,7 +76,7 @@ impl EventBus {
 
     /// 获取当前订阅者数量。
     pub fn subscriber_count(&self) -> usize {
-        self.sender.len()
+        self.sender.receiver_count()
     }
 }
 
@@ -90,12 +90,12 @@ impl Default for EventBus {
 mod tests {
     use super::*;
 
-    #[test]
-    fn bus_emit_and_subscribe() {
+        #[tokio::test]
+    async fn bus_emit_and_subscribe() {
         let bus = EventBus::new(4);
         let mut rx = bus.subscribe();
         bus.emit("test-event", &"hello");
-        let received = rx.recv().unwrap();
+        let received = rx.recv().await.unwrap();
         assert_eq!(received.event, "test-event");
         assert_eq!(received.payload, "hello");
     }

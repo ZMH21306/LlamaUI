@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn app_error_from_net_error() {
         // 构造一个 NetError（reqwest::Error 需要实际网络，这里用构造方式）
-        let net_err = NetError::HttpStatus(
+        let net_err = InnerNetError::HttpStatus(
             reqwest::StatusCode::from_u16(503).unwrap(),
             "Service Unavailable".to_string(),
         );

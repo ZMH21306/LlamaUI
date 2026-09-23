@@ -219,3 +219,6 @@ mod tests {
         assert!(json.contains("\"group\":\"init\""));
     }
 }
+
+
+pub mod bus;

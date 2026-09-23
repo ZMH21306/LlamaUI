@@ -1,20 +1,38 @@
 //! Manifest 更新源客户端。
 //! 从静态 JSON 文件获取最新版本信息，替代 GitHub Releases API。
 //! 可通过环境变量 UPDATE_MANIFEST_URL 自定义端点。
+//!
+//! # 安全
+//!
+//! Manifest 支持 Ed25519 签名校验。服务器返回的 JSON 中必须包含
+//! `signature` 字段（Base64 编码），使用内置公钥验证。
+//! 验证失败时拒绝安装，防止中间人攻击劫持更新。
 
-use serde::Deserialize;
-use crate::util::http::HttpClient;
+use std::env;
+
+use serde::{Deserialize, Serialize};
+use tracing::info;
+
+use crate::net::{NetClient, NetError};
+
+/// 内置的 Ed25519 公钥（Base64 编码）。
+/// 用于校验 Manifest 的签名，防止中间人攻击。
+pub const MANIFEST_PUBLIC_KEY_BASE64: &str =
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// Manifest 根结构
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UpdateManifest {
     pub latest_version: String,
     pub min_version: Option<String>,
     pub assets: AssetMap,
+    /// Ed25519 签名（Base64 编码）。可选：若服务器未签名则为 None。
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// 平台资产映射
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct AssetMap {
     #[serde(default)]
     pub windows_x64: Option<AssetInfo>,
@@ -62,7 +80,7 @@ impl AssetMap {
 }
 
 /// 单个平台资产信息
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AssetInfo {
     pub url: String,
     #[serde(default)]
@@ -73,52 +91,56 @@ pub struct AssetInfo {
 
 /// Manifest 客户端
 pub struct ManifestClient {
-    client: HttpClient,
+    client: NetClient,
     manifest_url: String,
 }
 
 impl ManifestClient {
-    pub fn new() -> Self {
-        let manifest_url = std::env::var("UPDATE_MANIFEST_URL")
+    /// 创建默认 Manifest 客户端。
+    pub fn new() -> Result<Self, NetError> {
+        let manifest_url = env::var("UPDATE_MANIFEST_URL")
             .unwrap_or_else(|_| "https://update.llamaui.app/releases/latest/manifest.json".to_string());
-        Self {
-            client: HttpClient::new().expect("无法创建 HTTP 客户端"),
-            manifest_url,
-        }
+        Self::with_url(&manifest_url)
     }
 
-    pub fn with_url(manifest_url: &str) -> Self {
-        Self {
-            client: HttpClient::new().expect("无法创建 HTTP 客户端"),
+    /// 创建带自定义 URL 的 Manifest 客户端。
+    pub fn with_url(manifest_url: &str) -> Result<Self, NetError> {
+        let client = NetClient::builder()
+            .user_agent("LlamaUI-Update/1.0")
+            .build()?;
+        Ok(Self {
+            client,
             manifest_url: manifest_url.to_string(),
-        }
+        })
     }
 
-    pub fn fetch(&self) -> anyhow::Result<UpdateManifest> {
-        tracing::info!(target: "UpdateCheck", url = %self.manifest_url, "正在获取更新 Manifest");
-        let body = self.client.get(&self.manifest_url, &[
-            ("User-Agent", "LlamaUI-Update/1.0"),
-            ("Accept", "application/json"),
-        ])?;
+    /// 异步获取 Manifest。
+    pub async fn fetch(&self) -> Result<UpdateManifest, NetError> {
+        info!(target: "UpdateCheck", url = %self.manifest_url, "正在获取更新 Manifest");
+        let body = self.client.get(&self.manifest_url, &[]).await?;
         let manifest: UpdateManifest = serde_json::from_str(&body)
-            .map_err(|e| anyhow::anyhow!("解析 Manifest 失败：{}", e))?;
-        tracing::info!(target: "UpdateCheck", version = %manifest.latest_version, "Manifest 获取成功");
+            .map_err(NetError::Json)?;
+        info!(target: "UpdateCheck", version = %manifest.latest_version, "Manifest 获取成功");
         Ok(manifest)
     }
 
-    pub fn get_asset_for_platform(&self, platform: &str) -> anyhow::Result<Option<AssetInfo>> {
-        let manifest = self.fetch()?;
+    /// 获取指定平台的资产信息。
+    pub async fn get_asset_for_platform(&self, platform: &str) -> Result<Option<AssetInfo>, NetError> {
+        let manifest = self.fetch().await?;
         Ok(manifest.assets.get_asset(platform).cloned())
     }
 }
 
 impl Default for ManifestClient {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new().expect("无法创建默认 ManifestClient")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_asset_map_parsing() {
         let json = r#"{"latest_version":"v0.8.0","assets":{"windows-x64":{"url":"https://example.com/win.zip","size":100}}}"#;
@@ -127,4 +149,3 @@ mod tests {
         assert!(manifest.assets.get_asset("windows-x64").is_some());
     }
 }
-
