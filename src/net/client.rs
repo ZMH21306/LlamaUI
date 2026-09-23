@@ -167,3 +167,31 @@ impl NetClientBuilder {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn net_client_creation() {
+        let client = NetClient::builder().build();
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn net_client_with_user_agent() {
+        let client = NetClient::builder()
+            .user_agent("TestAgent/1.0")
+            .build();
+        assert!(client.is_ok());
+    }
+
+            #[test]
+    fn net_client_with_retry() {
+        let client = NetClient::builder()
+            .retry(RetryPolicy::new(5))
+            .build();
+        assert!(client.is_ok());
+        assert_eq!(client.unwrap().retry.max_attempts, 5);
+    }
+}

@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(extract_version_from_name("random"), None);
     }
 
-    #[test]
+        #[test]
     fn test_split_pre_release() {
         assert_eq!(split_pre_release("1.0.0"), ("1.0.0", None));
         assert_eq!(split_pre_release("1.0.0-rc1"), ("1.0.0", Some("rc1")));
@@ -417,5 +417,27 @@ mod tests {
             split_pre_release("1.0.0-alpha.1"),
             ("1.0.0", Some("alpha.1"))
         );
+    }
+
+    #[test]
+    fn test_update_check_result_serialization() {
+        let result = UpdateCheckResult {
+            update_available: true,
+            latest_version: "v0.4.0".to_string(),
+            current_version: "v0.3.0".to_string(),
+            download_url: "https://example.com/download".to_string(),
+            release_notes: "New features".to_string(),
+            old_installations: vec![],
+            platform: "windows-x64".to_string(),
+            file_size: 1024 * 1024 * 50,
+            sha256: Some("abc123".to_string()),
+            signature_verified: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: UpdateCheckResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.update_available, true);
+        assert_eq!(deserialized.latest_version, "v0.4.0");
+        assert_eq!(deserialized.sha256, Some("abc123".to_string()));
+        assert!(deserialized.signature_verified);
     }
 }

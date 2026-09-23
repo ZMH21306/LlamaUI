@@ -145,4 +145,29 @@ mod tests {
         assert_eq!(ProgressReporter::format_bytes(1024 * 1024), "1.0 MB");
         assert_eq!(ProgressReporter::format_bytes(1024 * 1024 * 5), "5.0 MB");
     }
+
+    #[test]
+    fn progress_reporter_unknown_total() {
+        let mut reporter = ProgressReporter::new(0, 3, Duration::from_millis(0));
+        reporter.observe(0);
+        thread::sleep(Duration::from_millis(10));
+        reporter.observe(1024);
+        let (progress, downloaded, _, eta) = reporter.observe(2048).unwrap();
+        assert_eq!(progress, 0.0);
+        assert_eq!(downloaded, 2048);
+        assert!(eta.is_none());
+    }
+
+        #[test]
+    fn progress_reporter_eta_calculation() {
+        let total = 10000;
+        let mut reporter = ProgressReporter::new(total, 3, Duration::from_millis(0));
+        reporter.observe(0);
+        thread::sleep(Duration::from_millis(50));
+        reporter.observe(0);
+        let (_, downloaded, _, eta) = reporter.observe(total / 2).unwrap();
+        assert_eq!(downloaded, total / 2);
+        // With total=10000 and enough samples, ETA should be calculated
+        // This test mainly verifies the function runs without panic
+    }
 }
