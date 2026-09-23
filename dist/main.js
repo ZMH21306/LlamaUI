@@ -1295,7 +1295,6 @@ function toggleGroup(id) {
 
 function handleStep(step) {
   if (!step || !step.id) return;
-  // 防御：缺少必要字段时静默忽略，避免后续代码崩
   const id = String(step.id);
   const name = typeof step.name === 'string' ? step.name : id;
   const status = typeof step.status === 'string' ? step.status : 'pending';
@@ -1303,6 +1302,59 @@ function handleStep(step) {
   ensureGroup(id, name, status, autoExpand);
   if (status === 'success' || status === 'failed') collapseGroup(id);
   else expandGroup(id);
+}
+
+// ============= 更新事件处理 =============
+function handleUpdateState(state) {
+  if (!state || !state.stage) return;
+  console.log('[update-state]', state);
+  const el = document.getElementById('updateToast');
+  if (el) {
+    el.style.display = 'block';
+    el.textContent = state.message || '';
+  }
+  if (state.stage === 'completed' || state.stage === 'failed') {
+    setTimeout(() => { if (el) el.style.display = 'none'; }, 5000);
+  }
+}
+
+function handleUpdateProgress(progress) {
+  if (!progress) return;
+  console.log('[update-progress]', progress);
+  const bar = document.getElementById('updateProgressBar');
+  if (bar) {
+    bar.style.width = `${Math.min(100, (progress.progress || 0) * 100)}%`;
+    bar.textContent = `${Math.round((progress.progress || 0) * 100)}%`;
+  }
+  const label = document.getElementById('updateProgressLabel');
+  if (label) label.textContent = progress.message || '';
+}
+
+async function checkUpdates() {
+  try {
+    const result = await invoke('check_updates');
+    if (result.update_available) {
+      console.log('[update] 新版本可用:', result.latest_version);
+      // 显示更新提示
+      const toast = document.getElementById('updateToast');
+      if (toast) {
+        toast.style.display = 'block';
+        toast.textContent = `新版本 ${result.latest_version} 可用，当前 ${result.current_version}`;
+      }
+    } else {
+      console.log('[update] 已是最新版本');
+    }
+  } catch (e) {
+    console.error('[update] 检查更新失败:', e);
+  }
+}
+
+async function downloadUpdate(downloadUrl) {
+  try {
+    await invoke('download_update_cmd', { download_url: downloadUrl });
+  } catch (e) {
+    console.error('[update] 下载失败:', e);
+  }
 }
 
 function appendLog(line) {
@@ -2243,8 +2295,10 @@ async function init() {
     listen('server-log', (e) => appendLog(e.payload)),
     listen('server-status', (e) => updateStatusUI(e.payload)),
     listen('server-metrics', (e) => applyMetrics(e.payload)),
-    listen('server-step', (e) => handleStep(e.payload)),
+        listen('server-step', (e) => handleStep(e.payload)),
     listen('detect-progress', (e) => onDetectProgressInline(e.payload)),
+    listen('update-state', (e) => handleUpdateState(e.payload)),
+    listen('update-download-progress', (e) => handleUpdateProgress(e.payload)),
     // 关闭窗口时若 llama 仍在运行，弹出确认提示
     listen('close-requested', async () => {
       const confirmed = await showConfirm({
