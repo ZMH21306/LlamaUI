@@ -171,7 +171,7 @@ impl HfDownloader {
                         progress,
                         downloaded: dl,
                         total,
-                                                                        speed: Some(speed as u64),
+                                                speed: Some(speed as u64),
                         eta,
                         model_id: model_id.to_string(),
                         filename: filename.to_string(),
