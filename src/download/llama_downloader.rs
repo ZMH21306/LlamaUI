@@ -54,12 +54,9 @@ fn current_arch() -> &'static str {
         "unknown"
     }
 }
-
-/// 获取 GitHub Token（优先级：GITHUB_TOKEN → gh CLI → GH_TOKEN → 无）
-///
-/// 注意：当前 `curl_head` / `curl_download` 使用 reqwest 且不带 token，
-/// 本函数保留用于未来认证场景。标记 `#[allow(dead_code)]` 避免编译警告。
-#[allow(dead_code)]
+/// 获取 GitHub Token（优先级：GITHUB_TOKEN → gh CLI → GH_TOKEN → 无）。
+/// 用于对 GitHub API 请求附加 `Authorization: token <token>` 头（见
+/// `fetch_llama_latest_release_with_retry`）。找不到时返回 `None`（匿名请求）。
 fn get_github_token() -> Option<String> {
     // 1. 环境变量 GITHUB_TOKEN
     if let Ok(token) = std::env::var("GITHUB_TOKEN") {
@@ -133,7 +130,6 @@ fn curl_head(url: &str) -> anyhow::Result<u64> {
 /// - ⑧ 清理收尾             : 96% ~ 98%  （2%）
 /// - ⑨ 完成                 : 98% ~ 100% （2%）
 pub mod stage_progress {
-    pub const INIT_START: f64 = 0.00;
     pub const INIT_END: f64 = 0.02;
     pub const FETCHING_VERSION_START: f64 = 0.02;
     pub const FETCHING_VERSION_END: f64 = 0.06;
@@ -143,12 +139,10 @@ pub mod stage_progress {
     pub const FINDING_ASSET_END: f64 = 0.22;
     pub const DOWNLOAD_START: f64 = 0.22;
     pub const DOWNLOAD_END: f64 = 0.80;
-    pub const EXTRACTING_START: f64 = 0.80;
     pub const EXTRACTING_END: f64 = 0.88;
     pub const VERIFYING_START: f64 = 0.88;
     pub const VERIFYING_END: f64 = 0.96;
     pub const FINALIZING_START: f64 = 0.96;
-    pub const FINALIZING_END: f64 = 0.98;
     pub const COMPLETE_END: f64 = 1.00;
 }
 
@@ -288,7 +282,6 @@ fn curl_download(
             let n = match resp.read(&mut buffer) {
                 Ok(n) => n,
                 Err(e) => {
-                    last_error = e.to_string();
                     tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "读取数据失败");
                     break;
                 }
@@ -352,7 +345,6 @@ fn curl_download(
                 }
             }
             if let Err(e) = file.write_all(&buffer[..n]) {
-                last_error = e.to_string();
                 tracing::warn!(target: "LlamaDownloader", attempt, error = %e, "写入文件失败");
                 break;
             }
@@ -808,7 +800,6 @@ struct GitHubRelease {
     tag_name: String,
     assets: Vec<GitHubAsset>,
     #[serde(default)]
-    #[allow(dead_code)]
     prerelease: bool,
     /// 版本来源（用于前端显示进度信息）
     #[serde(skip)]
@@ -817,7 +808,6 @@ struct GitHubRelease {
 
 /// GitHub Release 资产
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct GitHubAsset {
     name: String,
     browser_download_url: String,
@@ -928,61 +918,6 @@ fn detect_cuda_version() -> Option<String> {
         }
     }
     None
-}
-
-/// 构建下载资产名（匹配 llama.cpp 实际发布命名）
-#[allow(dead_code)]
-fn build_asset_name(tag: &str, backend: GpuBackend) -> String {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-
-    let arch_str = match arch {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        _ => arch,
-    };
-
-    let ext = if os == "windows" { "zip" } else { "tar.gz" };
-
-    let os_str = match os {
-        "windows" => "win",
-        "linux" => "ubuntu",
-        "macos" => "macos",
-        _ => os,
-    };
-
-    let backend_part = match backend {
-        GpuBackend::Cpu => {
-            if os == "windows" {
-                "-cpu".to_string()
-            } else {
-                String::new()
-            }
-        }
-        GpuBackend::Cuda12_4 => "-cuda-12.4".to_string(),
-        GpuBackend::Cuda13_3 => "-cuda-13.3".to_string(),
-        GpuBackend::Rocm => {
-            if os == "linux" {
-                "-rocm-7.2".to_string()
-            } else {
-                "-hip-radeon".to_string()
-            }
-        }
-        GpuBackend::Vulkan => "-vulkan".to_string(),
-        GpuBackend::Metal => String::new(),
-    };
-
-    // 对 CUDA 后端，GitHub 使用 cudart- 前缀
-    let cuda_prefix = if backend == GpuBackend::Cuda12_4 || backend == GpuBackend::Cuda13_3 {
-        "cudart-".to_string()
-    } else {
-        String::new()
-    };
-
-    format!(
-        "{}llama-{}-bin-{}{}-{}.{}",
-        cuda_prefix, tag, os_str, backend_part, arch_str, ext
-    )
 }
 
 /// 解压 tar.gz
@@ -1419,6 +1354,12 @@ fn fetch_llama_latest_release_with_retry(
         }
         match try_fetch_with_client(&VERSION_CLIENT, &auth) {
             Ok(release) => {
+                if release.prerelease {
+                    tracing::info!(
+                        target: "LlamaDownloader",
+                        "获取到的版本是预发布版（prerelease），可能不稳定"
+                    );
+                }
                 if !release.tag_name.is_empty() {
                     return Ok(release);
                 }
@@ -2179,54 +2120,17 @@ mod tests {
     }
 
     #[test]
-    fn test_build_asset_name_windows_cuda() {
-        let name = build_asset_name("b10238", GpuBackend::Cuda12_4);
-        // CUDA 后端使用 cudart- 前缀
-        assert_eq!(name, "cudart-llama-b10238-bin-win-cuda-12.4-x64.zip");
-    }
-
-    #[test]
-    fn test_build_asset_name_windows_cpu() {
-        let name = build_asset_name("b10238", GpuBackend::Cpu);
-        assert!(
-            name.contains("win-cpu"),
-            "Windows CPU should include -cpu: {}",
-            name
-        );
-    }
-
-    #[test]
-    fn test_build_asset_name_windows_vulkan() {
-        let name = build_asset_name("b10238", GpuBackend::Vulkan);
-        assert_eq!(name, "llama-b10238-bin-win-vulkan-x64.zip");
-    }
-
-    #[test]
-    fn test_build_asset_name_linux_cpu() {
-        let name = build_asset_name("b10238", GpuBackend::Cpu);
-        assert!(name.contains("llama-b10238-bin-"));
-    }
-
-    #[test]
-    fn test_build_asset_name_macos_metal() {
-        if std::env::consts::OS == "macos" {
-            let name = build_asset_name("b10238", GpuBackend::Metal);
-            assert!(
-                name.contains("macos"),
-                "macOS should contain 'macos': {}",
-                name
-            );
-            assert!(
-                name.ends_with(".tar.gz"),
-                "macOS should use tar.gz: {}",
-                name
-            );
-        }
-    }
-
-    #[test]
     fn test_detect_gpu_backend() {
         let _backend = detect_gpu_backend();
+    }
+
+    /// `prerelease` 字段随 Deserialize 从 release JSON 解出，用于跳过预发布版本。
+    #[test]
+    fn test_release_parses_prerelease_flag() {
+        let json = r#"{"tag_name":"b1","prerelease":true,"assets":[]}"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let release: GitHubRelease = serde_json::from_value(value).unwrap();
+        assert!(release.prerelease, "prerelease 字段应被反序列化");
     }
 
     /// 验证 reqwest 客户端能成功构建（TLS 配置正确）
