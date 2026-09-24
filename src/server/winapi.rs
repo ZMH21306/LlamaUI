@@ -7,7 +7,7 @@
 //
 // 设计：单字段、零额外 syscall，调用方一次拿一个 `u64`。
 //
-// 修复说明（P1-2）：is_pid_alive / get_process_exe_name 改用 OnceLock 共享
+// 修复说明（P1-2）：is_pid_alive 改用 OnceLock 共享
 // `sysinfo::System`，避免每秒 4 次 `System::new()` 造成的 4 MB/s 内存抖动。
 
 #[cfg(windows)]
@@ -86,27 +86,6 @@ pub fn is_pid_alive(pid: u32) -> bool {
     sys.process(sysinfo::Pid::from_u32(pid)).is_some()
 }
 
-/// 用 sysinfo 取一个 PID 对应的可执行文件名（不是全路径）。
-///
-/// 仅返回文件名（如 `llama-server.exe`），用于端口占用者识别。
-/// 进程不存在时返回 `None`。非 ASCII 进程名优先做 UTF-8 无损转换，
-/// 失败时回退到 lossy（保留可见字符，`?` 替代无效字节）。
-///
-/// 性能（P1-2 修复后）：复用全局 `sysinfo::System` 实例。
-pub fn get_process_exe_name(pid: u32) -> Option<String> {
-    let mut sys = shared_system();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(
-        pid,
-    )]));
-    sys.process(sysinfo::Pid::from_u32(pid))
-        .map(|p| {
-            // 优先无损 UTF-8 转换（兼容非 ASCII 进程名），失败时再 lossy
-            p.name().to_str()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| p.name().to_string_lossy().into_owned())
-        })
-}
-
 // ============================================================
 // 单元测试（P1-2：sysinfo 缓存）
 // ============================================================
@@ -132,16 +111,12 @@ mod tests {
         assert!(PROC_CACHE.get().is_some());
     }
 
-    /// 验证 is_pid_alive / get_process_exe_name 在 PID 0（不存在）时不 panic
+    /// 验证 is_pid_alive 在 PID 1（System）上不 panic。
     ///
     /// 注：sysinfo 0.30+ 在某些 Windows 环境下 refresh PID 0 会死锁，
     /// 跳过此特定 PID，仅做"调用本身不 panic"的烟雾测试。
     #[test]
-    fn pid_zero_handled_safely() {
-        // 改用 1 号进程（System）：比 0 更稳定，且一定存在。
+    fn pid_one_handled_safely() {
         let _ = is_pid_alive(1);
-        let name = get_process_exe_name(1);
-        // 不论是否有结果，都不应 panic
-        let _ = name;
     }
 }

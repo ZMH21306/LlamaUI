@@ -7,8 +7,7 @@ use tauri::AppHandle;
 
 use futures::stream::{self, StreamExt};
 
-use super::cmdline::is_llama_related_exe;
-use super::winapi::{get_process_exe_name, is_pid_alive};
+use super::winapi::is_pid_alive;
 use crate::detect::CancelFlag;
 use crate::log::emit_log;
 use crate::util::process::silent_tokio_command;
@@ -29,70 +28,6 @@ pub async fn is_port_available(port: u16) -> bool {
     tokio::task::spawn_blocking(move || TcpListener::bind(("127.0.0.1", port)).is_ok())
         .await
         .unwrap_or(false)
-}
-
-/// 用 `netstat -ano -p TCP` 查找正在监听指定端口的进程 PID。
-/// 仅 Windows 有效（其它平台返回 None）。
-#[allow(dead_code)] // 保留以备未来「端口被 llama 占用则杀进程」逻辑复用
-#[cfg(windows)]
-pub async fn find_pid_listening_on(port: u16) -> Option<u32> {
-    use std::process::Stdio;
-let output = silent_tokio_command("netstat")
-        .args(["-ano", "-p", "TCP"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_netstat_for_port(&stdout, port)
-}
-
-#[cfg(not(windows))]
-pub async fn find_pid_listening_on(_port: u16) -> Option<u32> {
-    None
-}
-
-/// 从 netstat 输出里找出监听指定端口的 PID。
-/// 行格式：  TCP    0.0.0.0:8000    0.0.0.0:0    LISTENING    1234
-///          索引: 0      1             2            3             4
-/// 行字段数 ≥ 4，state 在倒数第二，pid 在最后。
-#[allow(dead_code)]
-fn parse_netstat_for_port(output: &str, port: u16) -> Option<u32> {
-    let needle = format!(":{}", port);
-    for line in output.lines() {
-        let trimmed = line.trim_start();
-        if !(trimmed.starts_with("TCP") || trimmed.starts_with("UDP")) {
-            continue;
-        }
-        if !trimmed.contains(&needle) {
-            continue;
-        }
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() < 5 {
-            continue;
-        }
-        // state 在倒数第二，pid 在最后
-        let state = parts[parts.len() - 2].to_ascii_uppercase();
-        // 状态匹配：LISTENING / LISTEN（中英文 locale 都覆盖）
-        if state != "LISTENING" && state != "LISTEN" {
-            continue;
-        }
-        if let Ok(pid) = parts[parts.len() - 1].parse::<u32>() {
-            return Some(pid);
-        }
-    }
-    None
-}
-
-/// 检查端口是否被我们认为是"占用但可释放"的：要么是被 llama 进程占用，要么根本无法找到
-/// 占用者（罕见，意味着权限不足或被内核态组件持有）。若是"其它服务"占用则不算可释放。
-#[allow(dead_code)]
-fn port_holder_is_killable(pid: Option<u32>) -> bool {
-    match pid {
-        None => true, // 找不到占用者：仍尝试一次（极端情况兜底）
-        Some(p) => matches!(get_process_exe_name(p), Some(name) if is_llama_related_exe(&name)),
-    }
 }
 
 /// 用 taskkill 杀进程（仅 Windows）。
@@ -148,10 +83,6 @@ pub async fn force_kill_pid(pid: u32) {
 pub struct PortChoice {
     pub port: u16,
     pub shifted: bool,
-    pub killed_holders: Vec<u32>,
-    /// 哪些端口被非 llama 占用而顺延。
-    #[allow(dead_code)] // 保留字段供未来 P1 修复「端口被 llama 占用则杀」逻辑
-    pub other_blockers: Vec<u16>,
 }
 
 /// 智能端口选择（并行探测前 10 个端口 + 顺序探测剩余 + 取消支持）。
@@ -185,8 +116,6 @@ pub async fn select_smart_port(
     let mut choice = PortChoice {
         port: desired,
         shifted: false,
-        killed_holders: Vec::new(),
-        other_blockers: Vec::new(),
     };
 
     // 1) 先杀本程序之前拉起的 llama-server（restart 流程关键）
@@ -214,7 +143,6 @@ pub async fn select_smart_port(
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
             if !is_pid_alive(pid) {
-                choice.killed_holders.push(pid);
                 emit_log(app, "system", &format!("旧 llama-server（PID {}）已停止", pid));
             } else {
                 emit_log(

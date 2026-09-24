@@ -114,13 +114,6 @@ pub fn extract_port_from_argv(argv: &[String]) -> Option<u16> {
     None
 }
 
-/// 判断一个可执行文件名是否是 llama 相关（llama-server.exe / llama.cpp 等）。
-#[allow(dead_code)]
-pub fn is_llama_related_exe(name: &str) -> bool {
-    let n = name.to_lowercase();
-    n.contains("llama") || n.contains("llamacpp")
-}
-
 /// 校验专业模式首 token 是否允许执行。
 ///
 /// 允许通过的条件（满足任一即可）：
