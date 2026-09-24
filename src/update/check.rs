@@ -170,7 +170,7 @@ pub fn is_newer_version(latest: &str, current: &str) -> bool {
     // 主版本号相等，比较预发布标识
     match (l_pre.as_deref(), c_pre.as_deref()) {
         (None, None) => false,
-        (Some(l), None) => false,
+        (Some(_), None) => false,
         (None, Some(_)) => true,
         (Some(l), Some(c)) => {
             l.cmp(c) == Ordering::Greater

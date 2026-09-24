@@ -123,12 +123,6 @@ impl ManifestClient {
         info!(target: "UpdateCheck", version = %manifest.latest_version, "Manifest 获取成功");
         Ok(manifest)
     }
-
-    /// 获取指定平台的资产信息。
-    pub async fn get_asset_for_platform(&self, platform: &str) -> Result<Option<AssetInfo>, NetError> {
-        let manifest = self.fetch().await?;
-        Ok(manifest.assets.get_asset(platform).cloned())
-    }
 }
 
 impl Default for ManifestClient {
