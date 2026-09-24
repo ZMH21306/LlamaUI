@@ -14,21 +14,18 @@
 use serde::{Deserialize, Serialize};
 
 /// 服务状态变化事件。
-#[allow(dead_code)] // 历史导出：crate 外部消费者可能依赖
 pub const EVT_SERVER_STATUS: &str = "server-status";
 
 /// 服务日志行事件（stdout / stderr / system）。
 pub const EVT_SERVER_LOG: &str = "server-log";
 
 /// 周期性指标事件（每 ~500ms 一次）。
-#[allow(dead_code)] // 历史导出：crate 外部消费者可能依赖
 pub const EVT_SERVER_METRICS: &str = "server-metrics";
 
 /// 初始化步骤状态变化事件。
 pub const EVT_SERVER_STEP: &str = "server-step";
 
 /// 自动检测进度事件。
-#[allow(dead_code)] // 历史导出：crate 外部消费者可能依赖
 pub const EVT_DETECT_PROGRESS: &str = "detect-progress";
 
 // ============================================================
@@ -219,6 +216,3 @@ mod tests {
         assert!(json.contains("\"group\":\"init\""));
     }
 }
-
-
-pub mod bus;

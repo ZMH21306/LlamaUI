@@ -34,7 +34,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout};
 use tokio::task::JoinHandle;
 
-use crate::events::{LogLine, ServerStatus};
+use crate::events::{LogLine, ServerStatus, EVT_SERVER_METRICS};
 use crate::log::emit_log;
 use crate::util::time::now_ts;
 
@@ -306,7 +306,7 @@ pub(crate) fn spawn_metrics_sampler(
                     gpu_util_pct: acc_gpu_util / count,
                     app_memory_bytes: (acc_app_memory as f64 / f64::from(sample_count)) as u64,
                 };
-                let _ = app.emit("server-metrics", &m);
+                let _ = app.emit(EVT_SERVER_METRICS, &m);
 
                 // 重置累积器
                 acc_cpu = 0.0;
@@ -337,7 +337,6 @@ mod tests {
 
     /// 编译期断言：所有任务工厂都返回 `JoinHandle<()>`，
     /// 防止后续重构把签名改坏（`lifecycle::start` 收集到同一个 Vec）。
-    #[allow(dead_code)]
     fn _signature_invariants() {
         fn _check_stdout(
             s: ChildStdout,
