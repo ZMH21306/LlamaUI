@@ -24,7 +24,6 @@ pub struct ProgressReporter {
     min_interval: Duration,
     last_emit: Instant,
     total: u64,
-    started_at: Instant,
 }
 
 impl ProgressReporter {
@@ -40,7 +39,6 @@ impl ProgressReporter {
             min_interval,
             last_emit: Instant::now(),
             total,
-            started_at: Instant::now(),
         }
     }
 
@@ -176,7 +174,7 @@ mod tests {
         reporter.observe(0);
         thread::sleep(Duration::from_millis(50));
         reporter.observe(0);
-        let (_, downloaded, _, eta) = reporter.observe(total / 2).unwrap();
+        let (_, downloaded, _, _eta) = reporter.observe(total / 2).unwrap();
         assert_eq!(downloaded, total / 2);
         // With total=10000 and enough samples, ETA should be calculated
         // This test mainly verifies the function runs without panic

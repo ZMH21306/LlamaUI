@@ -98,12 +98,6 @@ pub fn sanitize_log(input: &str) -> String {
     result
 }
 
-/// 对单行日志进行脱敏处理，同时记录脱敏前后的差异（debug 模式）。
-#[cfg(test)]
-pub fn sanitize_log_and_verify(input: &str) -> String {
-    sanitize_log(input)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
