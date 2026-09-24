@@ -26,10 +26,6 @@ pub struct RemoteServerInfo {
     pub url: String,
     /// 服务器名称（用于显示）。
     pub name: String,
-    /// API 密钥（存储加密或环境变量中，不直接可见）。
-    #[serde(skip_serializing, skip_deserializing)]
-    #[allow(dead_code)]
-    pub api_key: Option<String>,
     /// 服务器是否已连接。
     pub connected: bool,
     /// 上次连接时间（UNIX 纪元秒）。
@@ -43,35 +39,15 @@ pub struct RemoteServerInfo {
 
 impl RemoteServerInfo {
     /// 创建一个新的远程服务器配置（未连接状态）。
-    #[allow(dead_code)]
     pub fn new(url: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             url: url.into(),
             name: name.into(),
-            api_key: None,
             connected: false,
             last_connected_at: None,
             available_models: Vec::new(),
             extra_config: HashMap::new(),
         }
-    }
-
-    /// 标记为已连接，记录连接时间。
-    #[allow(dead_code)]
-    pub fn mark_connected(&mut self) {
-        self.connected = true;
-        self.last_connected_at = Some(
-            std::time::UNIX_EPOCH
-                .elapsed()
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        );
-    }
-
-    /// 标记为断开连接。
-    #[allow(dead_code)]
-    pub fn mark_disconnected(&mut self) {
-        self.connected = false;
     }
 
     /// 验证 URL 格式是否合法（必须是 http:// 或 https:// 开头）。
@@ -156,26 +132,6 @@ impl RemoteServerManager {
     /// 根据名称获取服务器。
     pub fn get_server(&self, name: &str) -> Option<RemoteServerInfo> {
         self.servers.lock().iter().find(|s| s.name == name).cloned()
-    }
-
-    /// 检查是否有已连接的服务器。
-    #[allow(dead_code)]
-    pub fn has_connected_server(&self) -> bool {
-        self.servers
-            .lock()
-            .iter()
-            .any(|s| s.connected)
-    }
-
-    /// 获取所有已连接服务器的模型列表（扁平化）。
-    #[allow(dead_code)]
-    pub fn all_available_models(&self) -> Vec<String> {
-        self.servers
-            .lock()
-            .iter()
-            .filter(|s| s.connected)
-            .flat_map(|s| s.available_models.clone())
-            .collect()
     }
 }
 

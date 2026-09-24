@@ -84,9 +84,6 @@ pub struct ModelCatalog {
     pub dir: PathBuf,
     /// 已扫描的模型列表。
     pub models: Vec<ModelInfo>,
-    /// 上次扫描时间（UNIX 纪元秒），用于增量扫描判断。
-    #[allow(dead_code)]
-    pub scanned_at: u64,
 }
 
 impl ModelCatalog {
@@ -97,7 +94,6 @@ impl ModelCatalog {
             return Self {
                 dir: dir.to_path_buf(),
                 models,
-                scanned_at: 0,
             };
         }
         for entry in fs::read_dir(dir).into_iter().flatten() {
@@ -112,14 +108,9 @@ impl ModelCatalog {
                 }
             }
         }
-        let now = std::time::UNIX_EPOCH
-            .elapsed()
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         Self {
             dir: dir.to_path_buf(),
             models,
-            scanned_at: now,
         }
     }
 
@@ -155,7 +146,6 @@ impl ModelManager {
     /// 添加一个模型目录并开始后台扫描。
     ///
     /// 扫描在调用线程同步执行（适合小目录）。
-    #[allow(dead_code)]
     pub fn add_directory(&self, dir: &Path) {
         let catalog = ModelCatalog::scan(dir);
         let mut cats = self.catalogs.lock();
@@ -163,13 +153,6 @@ impl ModelManager {
         if !cats.iter().any(|c| c.dir == dir) {
             cats.push(catalog);
         }
-    }
-
-    /// 移除一个模型目录。
-    #[allow(dead_code)]
-    pub fn remove_directory(&self, dir: &Path) {
-        let mut cats = self.catalogs.lock();
-        cats.retain(|c| c.dir != dir);
     }
 
     /// 获取所有目录中的所有模型。
@@ -211,33 +194,6 @@ impl ModelManager {
 impl Default for ModelManager {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// 模型启动配置（用于快速切换到某个模型）。
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelLaunchConfig {
-    /// 模型路径。
-    pub model_path: String,
-    /// 使用的模型名（用于显示）。
-    pub display_name: String,
-    /// 上下文大小覆盖（None 表示使用配置文件中的值）。
-    pub ctx_size_override: Option<u32>,
-    /// GPU 层数覆盖（None 表示使用配置文件中的值）。
-    pub n_gpu_layers_override: Option<i32>,
-}
-
-#[allow(dead_code)]
-impl ModelLaunchConfig {
-    /// 从模型信息构建启动配置。
-    pub fn from_model(model: &ModelInfo) -> Self {
-        Self {
-            model_path: model.path.clone(),
-            display_name: model.name.clone(),
-            ctx_size_override: None,
-            n_gpu_layers_override: None,
-        }
     }
 }
 
