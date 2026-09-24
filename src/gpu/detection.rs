@@ -64,8 +64,6 @@ pub enum CircuitBreakerState {
     Closed,
     /// 打开状态（故障）
     Open,
-    /// 半开状态（尝试恢复）
-    HalfOpen,
 }
 
 /// 断路器配置
@@ -115,7 +113,8 @@ impl CircuitBreaker {
         }
     }
 
-    /// 创建带自定义配置的断路器
+    /// 创建带自定义配置的断路器（仅测试使用）。
+    #[cfg(test)]
     pub fn with_config(tool_name: &'static str, config: CircuitBreakerConfig) -> Self {
         Self {
             state: Mutex::new(CircuitBreakerState::Closed),
@@ -301,17 +300,6 @@ pub struct GpuIssue {
     pub suggestion: String,
     /// 是否可自动修复
     pub auto_fixable: bool,
-}
-
-/// GPU 状态变更事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GpuStateEvent {
-    /// 事件类型
-    pub event_type: String,
-    /// GPU 信息
-    pub gpu_info: GpuInfo,
-    /// 时间戳
-    pub timestamp: u64,
 }
 
 /// 检测所有 GPU（异步版本）
@@ -849,7 +837,6 @@ async fn diagnose_memory_usage_async() -> Vec<GpuIssue> {
 }
 
 /// 自动修复 GPU 问题（保持向后兼容性）
-#[allow(dead_code)]
 pub fn auto_fix_gpu_issue(issue: &GpuIssue) -> Result<String, String> {
     if !issue.auto_fixable {
         return Err("此问题无法自动修复".to_string());
