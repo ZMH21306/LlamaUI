@@ -1,14 +1,14 @@
 //! 自动更新检查命令。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Emitter};
 
 use crate::events::{UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE};
-use crate::update::{check_for_updates, cleanup_old_installation, download_update, UpdateCheckResult};
-
-/// 当前正在进行的更新下载取消标志
-static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+use crate::update::{
+    check_for_updates, cleanup_old_installation, download_update, UpdateCheckResult,
+    UPDATE_DOWNLOAD_CANCEL,
+};
 
 /// 下载并安装更新（调用后阻塞，直到完成或取消）
 #[tauri::command]

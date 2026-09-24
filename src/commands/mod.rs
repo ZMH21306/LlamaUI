@@ -78,12 +78,24 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let config = std::sync::Arc::new(crate::config::ConfigStore::new());
+        let model_manager = std::sync::Arc::new(crate::models::ModelManager::new());
+
+        // 用配置中的模型目录初始化多模型索引，避免 `list_models` 永远返回空列表。
+        let models_dir = config.get().models_dir;
+        if !models_dir.trim().is_empty() {
+            let dir = std::path::Path::new(&models_dir);
+            if dir.is_dir() {
+                model_manager.add_directory(dir);
+            }
+        }
+
         Self {
             server: std::sync::Arc::new(crate::server::ServerProcess::new()),
-            config: std::sync::Arc::new(crate::config::ConfigStore::new()),
+            config,
             detect_cancels: Mutex::new(Vec::new()),
             download_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            model_manager: std::sync::Arc::new(crate::models::ModelManager::new()),
+            model_manager,
             remote_server_manager: std::sync::Arc::new(
                 crate::remote::RemoteServerManager::new(),
             ),

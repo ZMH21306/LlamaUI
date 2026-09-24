@@ -15,7 +15,7 @@ use crate::net::NetClient;
 
 /// HF API 响应中的文件缓存条目
 #[derive(Debug, Clone)]
-struct FileCacheEntry {
+pub struct FileCacheEntry {
     files: Vec<HfModelFile>,
     fetched_at: Instant,
 }
