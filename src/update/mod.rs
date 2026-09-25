@@ -9,14 +9,7 @@
 
 use std::sync::atomic::AtomicBool;
 
-/// 替换单例 AtomicBool，实现多下载任务独立取消。
-/// P0-9: 通过每个下载任务独立的 `watch::Receiver<bool>` 实现取消支持。
-pub type CancelReceiver = tokio::sync::watch::Receiver<bool>;
-
-pub fn create_cancel_receiver() -> (tokio::sync::watch::Sender<bool>, CancelReceiver) {
-    let (tx, rx) = tokio::sync::watch::channel(false);
-    (tx, rx)
-}
+pub static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub mod check;
 pub mod download;
