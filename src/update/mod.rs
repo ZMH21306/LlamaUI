@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 
 use tokio::sync::watch;
@@ -20,7 +21,7 @@ pub static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// 多下载任务取消信号映射表：`download_id -> watch::Sender<bool>`
 /// 新代码应使用此结构，逐步替代 UPDATE_DOWNLOAD_CANCEL。
-pub static UPDATE_DOWNLOAD_CANCELS: Mutex<HashMap<String, watch::Sender<bool>>> = Mutex::new(HashMap::new());
+pub static UPDATE_DOWNLOAD_CANCELS: LazyLock<Mutex<HashMap<String, watch::Sender<bool>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 创建一个新的取消接收器，返回 (download_id, cancel_rx)
 /// download_id 为 UUID，用于后续取消特定下载任务。

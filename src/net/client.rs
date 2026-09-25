@@ -73,56 +73,48 @@ impl NetClient {
         self.execute(builder).await
     }
 
-    async fn execute(&self, request: reqwest::RequestBuilder) -> Result<Response, NetError> {
+        async fn execute(&self, request: reqwest::RequestBuilder) -> Result<Response, NetError> {
         let mut last_err = String::new();
         for attempt in 0..self.retry.max_attempts.max(1) {
-            // 请求体不可克隆时停止重试，避免死循环
-            let req = match request.try_clone() {
-                Some(builder) => match builder.build() {
-                    Ok(r) => r,
+            let result = request.try_clone().map(|b| b.build());
+            if let Some(req) = result {
+                let response = match req {
+                    Ok(r) => self.client.execute(r).await,
                     Err(e) => {
                         last_err = e.to_string();
                         continue;
                     }
-                },
-                None => {
-                    last_err = "请求体不可克隆，停止重试".to_string();
-                    break;
-                }
-            };
-
-            let response = match self.client.execute(req).await {
-                Ok(response) => response,
-                Err(e) => {
-                    last_err = e.to_string();
-                    if attempt + 1 < self.retry.max_attempts.max(1) {
-                        tokio::time::sleep(self.retry.delay_for_attempt(attempt + 1)).await;
-                        continue;
+                };
+                match response {
+                    Ok(response) => {
+                        let status = response.status();
+                        if status.is_success() || status == StatusCode::PARTIAL_CONTENT {
+                            return Ok(response);
+                        }
+                        if status == StatusCode::TOO_MANY_REQUESTS
+                            || status == StatusCode::SERVICE_UNAVAILABLE
+                            || status.as_u16() >= 500
+                        {
+                            last_err = format!("HTTP {}，已重试 {} 次", status, attempt + 1);
+                            if attempt + 1 < self.retry.max_attempts.max(1) {
+                                tokio::time::sleep(self.retry.delay_for_attempt(attempt + 1)).await;
+                                continue;
+                            }
+                        }
+                        return Err(NetError::HttpStatus(status, String::new()));
+                    }
+                    Err(e) => {
+                        last_err = e.to_string();
+                        if attempt + 1 < self.retry.max_attempts.max(1) {
+                            tokio::time::sleep(self.retry.delay_for_attempt(attempt + 1)).await;
+                            continue;
+                        }
                     }
                 }
-            };
-
-            let status = response.status();
-            if status.is_success() || status == StatusCode::PARTIAL_CONTENT {
-                return Ok(response);
             }
-
-            if status == StatusCode::TOO_MANY_REQUESTS
-                || status == StatusCode::SERVICE_UNAVAILABLE
-                || status.as_u16() >= 500
-            {
-                last_err = format!("HTTP {}，已重试 {} 次", status, attempt + 1);
-                if attempt + 1 < self.retry.max_attempts.max(1) {
-                    tokio::time::sleep(self.retry.delay_for_attempt(attempt + 1)).await;
-                    continue;
-                }
-            }
-
-            return Err(NetError::HttpStatus(status, String::new()));
         }
-
         Err(NetError::RetryExhausted(last_err))
-    }
+    }}
 
 /// 构建器。
 #[derive(Default)]
@@ -194,7 +186,7 @@ mod tests {
         assert!(client.is_ok());
     }
 
-#[test]
+            #[test]
     fn net_client_with_retry() {
         let client = NetClient::builder()
             .retry(RetryPolicy::new(5))

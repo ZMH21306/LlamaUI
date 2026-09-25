@@ -108,8 +108,10 @@ fn verify_manifest_signature(manifest: &super::manifest::UpdateManifest) -> Resu
         .as_ref()
         .ok_or_else(|| "无签名".to_string())?;
 
-    // 解析公钥（Base64）
-    let pubkey_b64 = super::manifest::MANIFEST_PUBLIC_KEY_BASE64;
+    // 解析公钥（Base64）—— 优先从环境变量读取，回退到内置常量
+    let env_pubkey = std::env::var("MANIFEST_PUBLIC_KEY_BASE64")
+        .unwrap_or_else(|_| super::manifest::MANIFEST_PUBLIC_KEY_BASE64.to_string());
+    let pubkey_b64 = env_pubkey.as_str();
     let pubkey_bytes = STANDARD
         .decode(pubkey_b64)
         .map_err(|e| format!("解析公钥失败：{}", e))?;
