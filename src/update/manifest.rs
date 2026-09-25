@@ -125,7 +125,8 @@ impl ManifestClient {
     }
 }
 
-/// 移除 Default 实现（避免 expect），使用显式工厂函数。\n/// P0-4: 安全创建 ManifestClient 时检查网络错误，确保 early fail。
+/// 移除 Default 实现（避免 expect），使用显式工厂函数。
+/// P0-4: 安全创建 ManifestClient 时检查网络错误，确保 early fail。
 
 #[cfg(test)]
 mod tests {

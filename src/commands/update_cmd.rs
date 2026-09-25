@@ -7,7 +7,8 @@ use tauri::{AppHandle, Emitter};
 use crate::events::{UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE};
 use crate::update::{
     check_for_updates, cleanup_old_installation, download_update, install_update, UpdateCheckResult,
-    UPDATE_DOWNLOAD_CANCEL,
+    create_update_download_cancel, remove_update_download_cancel,
+    UPDATE_DOWNLOAD_CANCELS,
 };
 
 /// 下载并安装更新（调用后阻塞，直到完成或取消）
@@ -20,8 +21,12 @@ pub async fn download_update_cmd(
         return Ok(());
     }
 
-    // 重置取消标志
-    UPDATE_DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
+    // 重置取消标志（兼容旧代码）
+    crate::update::UPDATE_DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
+
+    // P0-9: 为每个下载任务创建独立的取消信号
+    let (download_id, cancel_rx) = create_update_download_cancel();
+    let download_id_for_task = download_id.clone();
 
     // 确定下载目录（缓存目录）
     let download_dir = dirs::cache_dir().unwrap_or_else(|| std::env::temp_dir());
@@ -42,12 +47,14 @@ pub async fn download_update_cmd(
             &result.download_url,
             &dest_path_clone,
             result.file_size,
+            cancel_rx,
         ).await
     });
 
     // 等待下载完成
     match download_task.await {
         Ok(Ok(download_result)) => {
+            remove_update_download_cancel(&download_id_for_task);
             let download_path = download_result.download_path;
             let file_size = download_result.file_size;
 
@@ -94,6 +101,7 @@ pub async fn download_update_cmd(
                     error: e.to_string(),
                 },
             );
+            remove_update_download_cancel(&download_id_for_task);
             return Err(e.to_string());
         }
         Err(e) => {
@@ -104,6 +112,7 @@ pub async fn download_update_cmd(
                     error: format!("下载任务执行失败: {}", e),
                 },
             );
+            remove_update_download_cancel(&download_id_for_task);
             return Err(format!("下载任务执行失败: {}", e));
         }
     }
@@ -115,8 +124,19 @@ pub async fn download_update_cmd(
 #[tauri::command]
 pub async fn cancel_update_download(
     app: AppHandle,
+    download_id: Option<String>,
 ) -> Result<(), String> {
-    UPDATE_DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
+    if let Some(ref download_id) = download_id {
+        // 取消指定下载任务
+        if let Some(sender) = UPDATE_DOWNLOAD_CANCELS.lock().unwrap().get(download_id) {
+            let _ = sender.send(true);
+        }
+    } else {
+        // 兼容旧代码：取消所有下载任务
+        for sender in UPDATE_DOWNLOAD_CANCELS.lock().unwrap().values() {
+            let _ = sender.send(true);
+        }
+    }
     let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Cancelled);
     let _ = app.emit(
         EVT_UPDATE_DOWNLOAD_PROGRESS,
@@ -130,6 +150,7 @@ pub async fn cancel_update_download(
             message: "下载已取消".to_string(),
         },
     );
+
     Ok(())
 }
 

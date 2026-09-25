@@ -53,6 +53,7 @@ pub async fn download_update(
     download_url: &str,
     dest_path: &Path,
     expected_size: u64,
+    cancel_rx: tokio::sync::watch::Receiver<bool>,
 ) -> AnyResult<UpdateDownloadResult> {
     let start_time = std::time::Instant::now();
 
@@ -73,10 +74,6 @@ pub async fn download_update(
     let client = NetClient::builder()
         .user_agent("LlamaUI-Update/1.0")
         .build()?;
-
-    if crate::update::UPDATE_DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
-        return Err(anyhow::anyhow!("下载已取消"));
-    }
 
     let response = client.send_get(download_url, &[]).await?;
     let status = response.status();
@@ -108,7 +105,7 @@ pub async fn download_update(
     let mut progress_reporter = ProgressReporter::new(total, 10, Duration::from_millis(500));
 
     while let Some(chunk_result) = stream.next().await {
-        if crate::update::UPDATE_DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
+        if *cancel_rx.borrow() {
             let _ = fs::remove_file(dest_path);
             emit_progress(app, UpdateDownloadProgress {
                 stage: STAGE_CANCELLED.to_string(),
