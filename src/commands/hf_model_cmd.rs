@@ -226,7 +226,7 @@ pub async fn download_hf_model(
         .unwrap_or_else(|| state.download_dir.lock().clone());
     fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
     // P0-1: Token 通过 Authorization header 传递，不放入 URL 中
-    let token = state.hf_token.lock().clone().map(|t| t.to_string());
+    let token = state.hf_token.lock().clone().as_ref().map(|t| t.to_string());
     let download_url = format!("{}/{}/resolve/main/{}", HF_RESOLVE_BASE, model_id, filename);
     let out_path = dir.join(&safe_filename);
     let _out_path_str = out_path.to_string_lossy().to_string();
@@ -546,10 +546,14 @@ pub async fn get_hf_model_files(
 }
 
 #[tauri::command]
-pub fn set_hf_token(state: State<'_, HfState>, token: Option<String>) { *state.hf_token.lock() = token; }
+pub fn set_hf_token(state: State<'_, HfState>, token: Option<String>) {
+    *state.hf_token.lock() = Zeroizing::new(token);
+}
 
 #[tauri::command]
-pub fn get_hf_token(state: State<'_, HfState>) -> Option<String> { state.hf_token.lock().clone() }
+pub fn get_hf_token(state: State<'_, HfState>) -> Option<String> {
+    state.hf_token.lock().clone().as_ref().map(|t| t.to_string())
+}
 
 #[tauri::command]
 pub fn set_hf_download_dir(state: State<'_, HfState>, dir: String) { *state.download_dir.lock() = PathBuf::from(dir); }

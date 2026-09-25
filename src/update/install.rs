@@ -12,7 +12,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::Result as AnyResult;
-use sha2::Digest;
+// P0-5: SHA256 校验在 download.rs 中完成，此处不再重复导入 Digest
+
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 use zip::read::ZipArchive;

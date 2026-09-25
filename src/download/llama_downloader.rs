@@ -1858,7 +1858,7 @@ fn try_validate_asset_urls(
             "正在验证候选 URL..."
         );
 
-        let mut req = SHARED_CLIENT.head(&asset_url);
+        let req = SHARED_CLIENT.head(&asset_url);
         let resp = match req.timeout(std::time::Duration::from_secs(10)).send() {
             Ok(r) => r,
             Err(e) => {
