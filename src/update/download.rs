@@ -148,6 +148,16 @@ pub async fn download_update(
     file.flush()?;
     drop(file);
 
+    // P0-5: 下载完成后校验文件大小
+    if total > 0 && downloaded != total {
+        let _ = fs::remove_file(dest_path);
+        return Err(anyhow::anyhow!(
+            "文件大小不匹配：期望 {}，实际 {}",
+            total,
+            downloaded
+        ));
+    }
+
     let sha256 = compute_sha256(dest_path);
     let elapsed_ms = start_time.elapsed().as_millis() as u64;
 
