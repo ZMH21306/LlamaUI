@@ -54,6 +54,27 @@ fn sensitive_path_segments() -> &'static Regex {
     })
 }
 
+/// JSON key/value 模式（如 "token": "abc"）
+#[allow(clippy::expect_used)]
+fn json_kv_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| {
+        Regex::new(
+            r#"(?i)"?(token|secret|auth|key|password|passwd|api[_-]?key|auth[_-]?token)"?\s*:\s*"?(\S+)"?"#,
+        )
+        .expect("static regex literal must compile")
+    })
+}
+
+/// Bearer token 模式（如 Authorization: Bearer xyz）
+#[allow(clippy::expect_used)]
+fn bearer_token_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| {
+        Regex::new(r"(?i)\bBearer\s+(\S+)").expect("static regex literal must compile")
+    })
+}
+
 /// 对单行日志进行脱敏处理。
 ///
 /// # 处理规则
@@ -94,6 +115,18 @@ pub fn sanitize_log(input: &str) -> String {
             result = format!("{}{}/***", base, home_str);
         }
     }
+
+    // 4. 处理 JSON 格式的 key/value（如 "token": "abc"）
+    result = json_kv_pattern()
+        .replace_all(&result, |caps: &regex::Captures| {
+            format!("{}: ***", &caps[1])
+        })
+        .to_string();
+
+    // 5. 处理 Bearer token（如 Authorization: Bearer xyz）
+    result = bearer_token_pattern()
+        .replace_all(&result, "Bearer ***")
+        .to_string();
 
     result
 }

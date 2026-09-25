@@ -3,6 +3,7 @@
 //! 提供模型目录扫描、模型列表查询、按标签过滤、快速切换等能力。
 
 use super::AppState;
+use tokio::task::spawn_blocking;
 use tauri::State;
 
 /// 列出所有已扫描的模型。
@@ -22,8 +23,14 @@ pub fn filter_models_by_tag(
 
 /// 刷新所有模型目录索引。
 #[tauri::command]
-pub fn refresh_models(state: State<'_, AppState>) {
-    state.model_manager.refresh_all();
+pub async fn refresh_models(state: State<'_, AppState>) -> Result<(), String> {
+    let manager = state.model_manager.clone();
+    spawn_blocking(move || {
+        manager.refresh_all();
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {}", e))?;
+    Ok(())
 }
 
 /// 选择当前活跃的模型。

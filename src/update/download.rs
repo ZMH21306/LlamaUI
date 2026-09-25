@@ -6,7 +6,6 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result as AnyResult;

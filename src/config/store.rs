@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 const CONFIG_FILE: &str = "config.json";
 
@@ -178,7 +178,7 @@ impl AppConfig {
 }
 
 pub struct ConfigStore {
-    inner: Arc<Mutex<AppConfig>>,
+    inner: Arc<RwLock<AppConfig>>,
     path: PathBuf,
 }
 
@@ -249,13 +249,13 @@ impl ConfigStore {
             }
         }
         Self {
-            inner: Arc::new(Mutex::new(cfg)),
+            inner: Arc::new(RwLock::new(cfg)),
             path,
         }
     }
 
     pub fn get(&self) -> AppConfig {
-        self.inner.lock().clone()
+        self.inner.read().clone()
     }
 
     pub fn set(&self, new_cfg: AppConfig) -> anyhow::Result<()> {
@@ -265,7 +265,7 @@ impl ConfigStore {
         let mut new_cfg = new_cfg;
         new_cfg._v = CURRENT_CONFIG_VERSION;
         {
-            let mut guard = self.inner.lock();
+            let mut guard = self.inner.write();
             *guard = new_cfg.clone();
         }
         save_to_disk(&self.path, &new_cfg)
