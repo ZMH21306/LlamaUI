@@ -13,10 +13,12 @@ pub static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub mod check;
 pub mod download;
+pub mod install;
 pub mod manifest;
 
 pub use check::{
     check_for_updates, cleanup_old_installation, is_newer_version, get_platform,
     OldInstallation, UpdateCheckResult,
 };
-pub use download::{download_update};
+pub use download::download_update;
+pub use install::install_update;

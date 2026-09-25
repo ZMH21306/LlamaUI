@@ -1,4 +1,4 @@
-/* =========================================================
+﻿/* =========================================================
    LlamaUI 路 澶фā鍨嬫帶鍒跺彴
    璁捐绯荤粺锛氭繁绌虹传涓婚 / 8pt 闂磋窛 / 12px 鍦嗚 / 涓夋爮甯冨眬
    璁捐鐞嗗康锛氶湏铏归潚 + 鐢靛厜绱?鈥?绉戞妧鎰熴€佷笓涓氥€佺幇浠?
@@ -309,10 +309,36 @@ code {
 }
 .status-pill[data-status="Crashed"] .status-dot { background: var(--danger); }
 
+/* ---- Llama Version Badge ---- */
+.llama-version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--mono);
+  color: var(--accent-2);
+  background: var(--accent-soft);
+  border: 1px solid rgba(91, 141, 239, 0.3);
+  border-radius: 999px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  cursor: default;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.llama-version-badge:hover { opacity: 1; background: var(--accent); color: var(--text-on-accent); }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
+
+.btn-primary.downloading { cursor: progress; }
 
 /* ---- 鎸夐挳 ---- */
 .btn-primary, .btn-secondary, .btn-danger {
@@ -1556,19 +1582,18 @@ body.light-theme .card { background: var(--bg-1); }
 
 
 /* =========================================================
-   LlamaUI 路 Enhanced Styles v2
-   Added: Responsive design, animation system, interaction enhancements
+   LlamaUI Enhanced Styles v2
    ========================================================= */
 
 /* ---- Theme Toggle Button ---- */
-.btn-icon.theme-icon-spinning svg {
-  animation: theme-rotate 0.4s var(--ease-out);
+.btn-icon.theme-icon-spinning .theme-icon-wrapper {
+  animation: theme-toggle-pulse 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-@keyframes theme-rotate {
-  0% { transform: rotate(0deg); }
-  50% { transform: rotate(180deg); }
-  100% { transform: rotate(360deg); } }
-/* ---- Card Entrance Animation ----
+@keyframes theme-toggle-pulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.72); }
+  100% { transform: scale(1); }
+}
 
 /* ---- Card Entrance Animation ---- */
 @keyframes card-enter {
@@ -1791,7 +1816,7 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   flex-direction: column;
   gap: 4px;
 }
-
+.download-detail {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1836,6 +1861,33 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   50%  { transform: translateX(180%); }
   100% { transform: translateX(380%); }
 }
+.download-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--gradient-primary);
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+.download-bar-fill.indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+.download-bar-fill.indeterminate::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--dl-indeterminate-w, 30%);
+  height: 100%;
+  background: var(--gradient-primary);
+  animation: indeterminate-slide 1.4s ease-in-out infinite;
+}
+.download-complete .btn-text { color: var(--success); }
+.download-failed .btn-text { color: var(--danger); }
+.download-progress-panel[hidden] {
+  display: none !important;
+}
+
 .download-percent {
   font-size: 12px;
   font-weight: 700;

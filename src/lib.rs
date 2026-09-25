@@ -133,6 +133,7 @@ pub fn run() {
             commands::detect_cmd::detect_models_dir,
             commands::detect_cmd::cancel_detection,
             commands::detect_cmd::check_models_dir,
+            commands::detect_cmd::get_llama_version,
             // 启动初始化
             commands::init_cmd::run_initialization,
             // 杂项

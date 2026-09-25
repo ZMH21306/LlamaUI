@@ -96,6 +96,7 @@
         <section class="card">
           <header class="card-header">
             <h2>程序与模型位置</h2>
+            <span class="llama-version-badge" id="llamaVersionBadge" title="识别到的 llama-server 版本"></span>
           </header>
           <div class="card-body">
             <div class="field">
@@ -121,6 +122,15 @@
               <button class="btn-primary btn-block" id="downloadLlamaBtn">
                 <span class="btn-text" id="downloadBtnText">🚀 自动下载 llama-server</span>
               </button>
+              <div class="download-progress-panel" id="downloadProgressPanel" hidden>
+                <div class="download-bar-row">
+                  <div class="download-bar-track">
+                    <div class="download-bar-fill" id="downloadProgressFill"></div>
+                  </div>
+                  <span class="download-percent" id="downloadProgressPercent">0%</span>
+                </div>
+                <div class="download-detail" id="downloadProgressDetail"></div>
+              </div>
             </div>
           </div>
         </section>

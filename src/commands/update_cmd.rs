@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::events::{UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE};
 use crate::update::{
-    check_for_updates, cleanup_old_installation, download_update, UpdateCheckResult,
+    check_for_updates, cleanup_old_installation, download_update, install_update, UpdateCheckResult,
     UPDATE_DOWNLOAD_CANCEL,
 };
 
@@ -47,25 +47,44 @@ pub async fn download_update_cmd(
 
     // 等待下载完成
     match download_task.await {
-        Ok(Ok(_result)) => {
-            // 发送完成状态
+        Ok(Ok(download_result)) => {
+            let download_path = download_result.download_path;
+            let file_size = download_result.file_size;
+
+            // 发送下载完成状态
             let _ = app.emit(EVT_UPDATE_STATE, UpdateState::DownloadCompleted {
-                download_path: dest_path.to_string_lossy().to_string(),
-                file_size: result.file_size,
+                download_path: download_path.clone(),
+                file_size,
             });
-            // 发送进度完成事件
             let _ = app.emit(
                 EVT_UPDATE_DOWNLOAD_PROGRESS,
                 UpdateDownloadProgress {
                     stage: "completed".to_string(),
                     progress: 1.0,
-                    downloaded: result.file_size,
-                    total: result.file_size,
+                    downloaded: file_size,
+                    total: file_size,
                     speed_mbps: 0.0,
                     eta_secs: None,
-                    message: "下载完成，准备安装".to_string(),
+                    message: "下载完成，开始安装".to_string(),
                 },
             );
+
+            // 安装更新（同步执行）
+            match install_update(&app, std::path::Path::new(&download_path), file_size).await {
+                Ok(_) => {
+                    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Completed {
+                        new_version: String::new(),
+                    });
+                    tracing::info!(target: "UpdateCmd", "更新安装成功");
+                }
+                Err(e) => {
+                    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Failed {
+                        error: format!("安装失败：{}", e),
+                    });
+                    tracing::error!(target: "UpdateCmd", error = %e, "更新安装失败");
+                    return Err(format!("安装失败：{}", e));
+                }
+            }
         }
         Ok(Err(e)) => {
             // 发送失败状态

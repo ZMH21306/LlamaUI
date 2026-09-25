@@ -12,12 +12,16 @@
 //! 所以这两个 detect 命令都通过 [`tokio::task::spawn_blocking`] 把同步
 //! 检测转移到 blocking 线程池。
 
+use regex::Regex;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tauri::{AppHandle, State};
+use tokio::time::timeout;
 
 use crate::detect::{self, DetectResult};
+use crate::util::process::silent_tokio_command;
 
 use super::AppState;
 
@@ -117,6 +121,41 @@ pub fn cancel_detection(state: State<'_, AppState>) -> bool {
     }
     guard.clear();
     true
+}
+
+/// 读取指定 llama-server 可执行文件的版本。
+#[tauri::command]
+pub async fn get_llama_version(path: String) -> Result<String, String> {
+    let output = timeout(
+        Duration::from_secs(5),
+        silent_tokio_command(&path).arg("--version").output(),
+    )
+    .await
+    .map_err(|_| "读取版本超时".to_string())?
+    .map_err(|e| format!("读取版本失败: {}", e))?;
+
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if let Some(caps) = Regex::new(r"(?i)(?:llama-server|llama\.cpp)[^0-9A-Za-z]*([0-9]+|b[0-9]+)")
+        .ok()
+        .and_then(|re| re.captures(&text))
+    {
+        return Ok(caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string());
+    }
+    if let Some(caps) = Regex::new(r"(?i)\b(?:version|v)\s*[:=]?\s*(b?[0-9]+(?:\.[0-9]+)*)")
+        .ok()
+        .and_then(|re| re.captures(&text))
+    {
+        return Ok(caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string());
+    }
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .ok_or_else(|| "未解析到版本".to_string())
 }
 
 /// 用户手动选择模型目录后，校验其合规性。
