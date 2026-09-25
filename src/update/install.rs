@@ -18,7 +18,9 @@ use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
 use zip::read::ZipArchive;
 
-use crate::events::{UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE};
+use crate::events::{
+    UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE,
+};
 
 fn emit_progress(app: &AppHandle, progress: UpdateDownloadProgress) {
     let _ = app.emit(EVT_UPDATE_DOWNLOAD_PROGRESS, progress);
@@ -123,46 +125,49 @@ fn replace_exe_and_dist(exe_dir: &Path, extracted_root: &Path) -> AnyResult<()> 
 ///
 /// 解压 ZIP → 校验完整性 → 备份旧文件 → 替换 exe 和 dist → 清理缓存。
 /// 安装期间会通过 `EVT_UPDATE_DOWNLOAD_PROGRESS` 和 `EVT_UPDATE_STATE` 推送进度。
-pub async fn install_update(
-    app: &AppHandle,
-    zip_path: &Path,
-    total_bytes: u64,
-) -> AnyResult<()> {
+pub async fn install_update(app: &AppHandle, zip_path: &Path, total_bytes: u64) -> AnyResult<()> {
     info!(target: "UpdateInstall", zip = %zip_path.display(), "开始安装更新");
 
-    emit_progress(app, UpdateDownloadProgress {
-        stage: "extracting".to_string(),
-        progress: 0.15,
-        downloaded: 0,
-        total: total_bytes,
-        speed_mbps: 0.0,
-        eta_secs: None,
-        message: "正在解压更新包...".to_string(),
-    });
+    emit_progress(
+        app,
+        UpdateDownloadProgress {
+            stage: "extracting".to_string(),
+            progress: 0.15,
+            downloaded: 0,
+            total: total_bytes,
+            speed_mbps: 0.0,
+            eta_secs: None,
+            message: "正在解压更新包...".to_string(),
+        },
+    );
 
     let temp_dir = std::env::temp_dir().join(format!("LlamaUI-update-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
-    let zip_file = fs::File::open(zip_path)
-        .map_err(|e| anyhow::anyhow!("无法打开更新包: {}", e))?;
-    let mut archive = ZipArchive::new(zip_file).map_err(|e| anyhow::anyhow!("更新包解析失败: {}", e))?;
-    let extracted = extract_zip(&mut archive, &temp_dir)
-        .map_err(|e| anyhow::anyhow!("解压失败: {}", e))?;
+    let zip_file =
+        fs::File::open(zip_path).map_err(|e| anyhow::anyhow!("无法打开更新包: {}", e))?;
+    let mut archive =
+        ZipArchive::new(zip_file).map_err(|e| anyhow::anyhow!("更新包解析失败: {}", e))?;
+    let extracted =
+        extract_zip(&mut archive, &temp_dir).map_err(|e| anyhow::anyhow!("解压失败: {}", e))?;
 
-    emit_progress(app, UpdateDownloadProgress {
-        stage: "verifying".to_string(),
-        progress: 0.55,
-        downloaded: extracted,
-        total: total_bytes,
-        speed_mbps: 0.0,
-        eta_secs: None,
-        message: "正在校验更新包...".to_string(),
-    });
+    emit_progress(
+        app,
+        UpdateDownloadProgress {
+            stage: "verifying".to_string(),
+            progress: 0.55,
+            downloaded: extracted,
+            total: total_bytes,
+            speed_mbps: 0.0,
+            eta_secs: None,
+            message: "正在校验更新包...".to_string(),
+        },
+    );
 
     validate_extracted(&temp_dir)?;
 
-    let current_exe = std::env::current_exe()
-        .map_err(|e| anyhow::anyhow!("无法定位当前可执行文件: {}", e))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| anyhow::anyhow!("无法定位当前可执行文件: {}", e))?;
     let exe_dir = current_exe
         .parent()
         .ok_or_else(|| anyhow::anyhow!("无法解析当前可执行文件目录"))?;
@@ -172,21 +177,26 @@ pub async fn install_update(
     let _ = fs::remove_file(zip_path);
     let _ = fs::remove_dir_all(&temp_dir);
 
-    emit_progress(app, UpdateDownloadProgress {
-        stage: "installed".to_string(),
-        progress: 1.0,
-        downloaded: total_bytes,
-        total: total_bytes,
-        speed_mbps: 0.0,
-        eta_secs: None,
-        message: "更新安装完成，请重启应用程序".to_string(),
-    });
+    emit_progress(
+        app,
+        UpdateDownloadProgress {
+            stage: "installed".to_string(),
+            progress: 1.0,
+            downloaded: total_bytes,
+            total: total_bytes,
+            speed_mbps: 0.0,
+            eta_secs: None,
+            message: "更新安装完成，请重启应用程序".to_string(),
+        },
+    );
 
-    emit_state(app, UpdateState::Completed {
-        new_version: String::new(),
-    });
+    emit_state(
+        app,
+        UpdateState::Completed {
+            new_version: String::new(),
+        },
+    );
 
     info!(target: "UpdateInstall", "自更新安装完成");
     Ok(())
 }
-

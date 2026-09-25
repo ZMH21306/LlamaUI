@@ -17,8 +17,7 @@ use crate::net::{NetClient, NetError};
 
 /// 内置的 Ed25519 公钥（Base64 编码）。
 /// 用于校验 Manifest 的签名，防止中间人攻击。
-pub const MANIFEST_PUBLIC_KEY_BASE64: &str =
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+pub const MANIFEST_PUBLIC_KEY_BASE64: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// Manifest 根结构
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -67,13 +66,19 @@ impl AssetMap {
         match platform {
             "windows-x64" => self.windows_x64.as_ref().or(self.windows_x64_alt.as_ref()),
             "linux-x64" | "linux-amd64" => self.linux_x64.as_ref().or(self.linux_amd64.as_ref()),
-            "linux-aarch64" | "linux-arm64" => self.linux_aarch64.as_ref().or(self.linux_arm64.as_ref()),
-            "darwin-x64" | "darwin-amd64" | "macos-x64" => {
-                self.darwin_x64.as_ref().or(self.darwin_amd64.as_ref()).or(self.macos_x64.as_ref())
+            "linux-aarch64" | "linux-arm64" => {
+                self.linux_aarch64.as_ref().or(self.linux_arm64.as_ref())
             }
-            "darwin-aarch64" | "darwin-arm64" | "macos-aarch64" => {
-                self.darwin_aarch64.as_ref().or(self.darwin_arm64.as_ref()).or(self.macos_aarch64.as_ref())
-            }
+            "darwin-x64" | "darwin-amd64" | "macos-x64" => self
+                .darwin_x64
+                .as_ref()
+                .or(self.darwin_amd64.as_ref())
+                .or(self.macos_x64.as_ref()),
+            "darwin-aarch64" | "darwin-arm64" | "macos-aarch64" => self
+                .darwin_aarch64
+                .as_ref()
+                .or(self.darwin_arm64.as_ref())
+                .or(self.macos_aarch64.as_ref()),
             _ => None,
         }
     }
@@ -98,8 +103,9 @@ pub struct ManifestClient {
 impl ManifestClient {
     /// 创建默认 Manifest 客户端。
     pub fn new() -> Result<Self, NetError> {
-        let manifest_url = env::var("UPDATE_MANIFEST_URL")
-            .unwrap_or_else(|_| "https://update.llamaui.app/releases/latest/manifest.json".to_string());
+        let manifest_url = env::var("UPDATE_MANIFEST_URL").unwrap_or_else(|_| {
+            "https://update.llamaui.app/releases/latest/manifest.json".to_string()
+        });
         Self::with_url(&manifest_url)
     }
 
@@ -118,8 +124,7 @@ impl ManifestClient {
     pub async fn fetch(&self) -> Result<UpdateManifest, NetError> {
         info!(target: "UpdateCheck", url = %self.manifest_url, "正在获取更新 Manifest");
         let body = self.client.get(&self.manifest_url, &[]).await?;
-        let manifest: UpdateManifest = serde_json::from_str(&body)
-            .map_err(NetError::Json)?;
+        let manifest: UpdateManifest = serde_json::from_str(&body).map_err(NetError::Json)?;
         info!(target: "UpdateCheck", version = %manifest.latest_version, "Manifest 获取成功");
         Ok(manifest)
     }

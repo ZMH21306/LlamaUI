@@ -97,7 +97,9 @@ pub fn sanitize_log(input: &str) -> String {
     let mut result = input.to_string();
 
     // 1. 处理 URL 中的认证信息
-    result = url_auth_pattern().replace_all(&result, "//$1:***@").to_string();
+    result = url_auth_pattern()
+        .replace_all(&result, "//$1:***@")
+        .to_string();
 
     // 2. 处理 key/token/secret 赋值
     result = api_key_pattern()
@@ -178,7 +180,10 @@ mod tests {
         // 测试包含 home 目录和敏感目录的路径脱敏
         if let Some(home) = dirs::home_dir() {
             let home_str = home.to_string_lossy();
-            let input = format!("Loading model from {}/projects/secrets/models/gemma.gguf", home_str);
+            let input = format!(
+                "Loading model from {}/projects/secrets/models/gemma.gguf",
+                home_str
+            );
             let output = sanitize_log(&input);
             // 敏感路径段应被脱敏
             assert!(

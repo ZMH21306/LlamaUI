@@ -100,18 +100,22 @@ llama-server --models-dir <目录> --port <端口> -ngl 99 --host 127.0.0.1
 
 | 模块 | 职责 |
 |------|------|
-| `commands` | Tauri IPC 命令适配层（21 个命令） |
+| `commands` | Tauri IPC 命令适配层（服务、配置、检测、下载、模型、更新等命令） |
 | `server` | llama-server 进程管理（启动/停止/监控/日志） |
 | `detect` | 自动检测（4 阶段优先级链） |
 | `init` | 启动初始化（环境检查 → 驱动检查 → 自动加载） |
 | `config` | 配置持久化（JSON + schema 版本迁移） |
-| `config_io` | 配置导入/导出（JSON 格式） |
-| `model_management` | 模型管理（加载/卸载/模型信息） |
+| `download` | 模型/应用下载（HF、llama.cpp） |
+| `models` | 模型目录索引与快速切换 |
+| `remote` | 远程服务器管理 |
+| `gpu` | GPU 检测与诊断 |
+| `net` | HTTP 客户端、重试与代理 |
+| `update` | 自动更新检查、下载与安装 |
 | `recovery` | 错误诊断与恢复建议 |
-| `error` | 统一错误类型（AppError + 子错误） |
-| `events` | 事件名常量 + payload 类型（5 个事件） |
-| `log` | 日志发射统一入口 |
-| `util` | 通用工具（路径/时间/URL 白名单） |
+| `errors` | 统一错误类型（AppError + 子错误） |
+| `events` | 事件名常量 + payload 类型 |
+| `log` | 日志发射、脱敏与 tracing 初始化 |
+| `util` | 通用工具（路径/时间/URL/代理/进度） |
 
 ## 安全特性
 
@@ -186,19 +190,22 @@ cargo clippy --all-targets --release
 ```
 LlamaUI/
 ├── src/
-│   ├── commands/          # Tauri IPC 命令
-│   ├── server/            # 进程管理（子模块：lifecycle/job/cmdline/port/state/metrics/log_channel/winapi/log_truncate/tasks）
-│   ├── detect/            # 自动检测（4 阶段：env→venv→key_dirs→full_disk）
+│   ├── commands/          # Tauri IPC 命令（config/detect/download/gpu/hf_model/init/model/server/update 等）
+│   ├── server/            # 进程管理（lifecycle/job/cmdline/port/state/tasks 等）
+│   ├── detect/            # 自动检测（4 阶段优先级链）
 │   ├── init/              # 启动初始化（环境检查 → 驱动检查 → 自动加载）
-│   ├── util/              # 通用工具（路径/时间/URL 白名单）
-│   ├── config.rs          # 配置持久化
-│   ├── config_io.rs       # 配置导入/导出
-│   ├── error.rs           # 统一错误类型
+│   ├── config/            # 配置持久化（store/io/mod）
+│   ├── download/          # 模型/应用下载（HF、llama.cpp）
+│   ├── models/            # 模型目录索引与快速切换
+│   ├── remote/            # 远程服务器管理
+│   ├── gpu/               # GPU 检测与诊断
+│   ├── net/               # HTTP 客户端、重试与代理
+│   ├── update/            # 自动更新检查、下载与安装
+│   ├── recovery/          # 错误诊断与恢复
+│   ├── errors/            # 统一错误类型
 │   ├── events.rs          # 事件名 + payload
-│   ├── log.rs             # 日志发射
-│   ├── recovery.rs        # 错误诊断与恢复
-│   ├── update_check.rs    # 版本更新检查
-│   ├── metrics_enhanced.rs# 增强版性能指标
+│   ├── log/               # 日志发射、脱敏与 tracing 初始化
+│   ├── util/              # 通用工具（路径/时间/URL/代理/进度）
 │   ├── main.rs            # 二进制入口
 │   └── lib.rs             # Crate 根
 ├── dist/                  # 前端静态资源（零构建）
@@ -222,11 +229,11 @@ LlamaUI/
 
 ## 测试
 
-项目包含 194 个单元测试，覆盖关键安全逻辑：
+项目包含 206 个单元测试，覆盖关键安全逻辑：
 
 ```bash
 cargo test --lib
-# test result: ok. 196 passed; 0 failed
+# test result: ok. 206 passed; 0 failed
 ```
 
 **测试覆盖**：

@@ -3,8 +3,8 @@
 //! 提供模型目录扫描、模型列表查询、按标签过滤、快速切换等能力。
 
 use super::AppState;
-use tokio::task::spawn_blocking;
 use tauri::State;
+use tokio::task::spawn_blocking;
 
 /// 列出所有已扫描的模型。
 #[tauri::command]

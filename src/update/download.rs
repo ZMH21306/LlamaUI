@@ -60,15 +60,18 @@ pub async fn download_update(
         fs::create_dir_all(parent)?;
     }
 
-    emit_progress(app, UpdateDownloadProgress {
-        stage: STAGE_INIT.to_string(),
-        progress: 0.0,
-        downloaded: 0,
-        total: expected_size,
-        speed_mbps: 0.0,
-        eta_secs: None,
-        message: "准备下载更新包...".to_string(),
-    });
+    emit_progress(
+        app,
+        UpdateDownloadProgress {
+            stage: STAGE_INIT.to_string(),
+            progress: 0.0,
+            downloaded: 0,
+            total: expected_size,
+            speed_mbps: 0.0,
+            eta_secs: None,
+            message: "准备下载更新包...".to_string(),
+        },
+    );
 
     let client = NetClient::builder()
         .user_agent("LlamaUI-Update/1.0")
@@ -78,15 +81,18 @@ pub async fn download_update(
     let status = response.status();
     if !status.is_success() && status.as_u16() != 206 {
         let msg = format!("下载失败：HTTP {}", status.as_u16());
-        emit_progress(app, UpdateDownloadProgress {
-            stage: STAGE_FAILED.to_string(),
-            progress: 0.0,
-            downloaded: 0,
-            total: expected_size,
-            speed_mbps: 0.0,
-            eta_secs: None,
-            message: msg.clone(),
-        });
+        emit_progress(
+            app,
+            UpdateDownloadProgress {
+                stage: STAGE_FAILED.to_string(),
+                progress: 0.0,
+                downloaded: 0,
+                total: expected_size,
+                speed_mbps: 0.0,
+                eta_secs: None,
+                message: msg.clone(),
+            },
+        );
         return Err(anyhow::anyhow!("{}", msg));
     }
 
@@ -106,15 +112,18 @@ pub async fn download_update(
     while let Some(chunk_result) = stream.next().await {
         if *cancel_rx.borrow() {
             let _ = fs::remove_file(dest_path);
-            emit_progress(app, UpdateDownloadProgress {
-                stage: STAGE_CANCELLED.to_string(),
-                progress: 0.0,
-                downloaded,
-                total,
-                speed_mbps: 0.0,
-                eta_secs: None,
-                message: "下载已取消".to_string(),
-            });
+            emit_progress(
+                app,
+                UpdateDownloadProgress {
+                    stage: STAGE_CANCELLED.to_string(),
+                    progress: 0.0,
+                    downloaded,
+                    total,
+                    speed_mbps: 0.0,
+                    eta_secs: None,
+                    message: "下载已取消".to_string(),
+                },
+            );
             return Err(anyhow::anyhow!("下载已取消"));
         }
 
@@ -123,21 +132,24 @@ pub async fn download_update(
         downloaded += chunk.len() as u64;
 
         if let Some((progress, dl, speed, eta)) = progress_reporter.observe(downloaded) {
-            emit_progress(app, UpdateDownloadProgress {
-                stage: STAGE_DOWNLOADING.to_string(),
-                progress,
-                downloaded: dl,
-                total,
-                speed_mbps: speed / 1_048_576.0,
-                eta_secs: eta,
-                message: format!(
-                    "下载中 {:.1}%（{:.1} MB / {:.1} MB，{:.1} MB/s）",
-                    progress * 100.0,
-                    dl as f64 / 1_048_576.0,
-                    total as f64 / 1_048_576.0,
-                    speed / 1_048_576.0
-                ),
-            });
+            emit_progress(
+                app,
+                UpdateDownloadProgress {
+                    stage: STAGE_DOWNLOADING.to_string(),
+                    progress,
+                    downloaded: dl,
+                    total,
+                    speed_mbps: speed / 1_048_576.0,
+                    eta_secs: eta,
+                    message: format!(
+                        "下载中 {:.1}%（{:.1} MB / {:.1} MB，{:.1} MB/s）",
+                        progress * 100.0,
+                        dl as f64 / 1_048_576.0,
+                        total as f64 / 1_048_576.0,
+                        speed / 1_048_576.0
+                    ),
+                },
+            );
         }
     }
 
@@ -164,15 +176,18 @@ pub async fn download_update(
         "更新包下载完成"
     );
 
-    emit_progress(app, UpdateDownloadProgress {
-        stage: STAGE_COMPLETED.to_string(),
-        progress: 1.0,
-        downloaded,
-        total,
-        speed_mbps: 0.0,
-        eta_secs: None,
-        message: "下载完成".to_string(),
-    });
+    emit_progress(
+        app,
+        UpdateDownloadProgress {
+            stage: STAGE_COMPLETED.to_string(),
+            progress: 1.0,
+            downloaded,
+            total,
+            speed_mbps: 0.0,
+            eta_secs: None,
+            message: "下载完成".to_string(),
+        },
+    );
 
     Ok(UpdateDownloadResult {
         download_path: dest_path.to_string_lossy().to_string(),
@@ -188,7 +203,7 @@ fn compute_sha256(path: &Path) -> Option<String> {
     let data = fs::read(path).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(&data);
-        Some(format!("{:x}", hasher.finalize()))
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]

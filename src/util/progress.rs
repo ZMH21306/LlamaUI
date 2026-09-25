@@ -83,7 +83,7 @@ impl ProgressReporter {
 
         let speed_bps = if self.samples.len() >= 2 {
             let first = &self.samples[0];
-            let last = self.samples.last().unwrap();
+            let last = self.samples.last().expect("samples 长度至少为 2");
             let elapsed = last.instant.duration_since(first.instant).as_secs_f64();
             if elapsed > 0.0 {
                 (last.downloaded - first.downloaded) as f64 / elapsed
@@ -167,7 +167,7 @@ mod tests {
         assert!(eta.is_none());
     }
 
-        #[test]
+    #[test]
     fn progress_reporter_eta_calculation() {
         let total = 10000;
         let mut reporter = ProgressReporter::new(total, 3, Duration::from_millis(0));

@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use tokio::sync::watch;
 
@@ -21,20 +21,31 @@ pub static UPDATE_DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// 多下载任务取消信号映射表：`download_id -> watch::Sender<bool>`
 /// 新代码应使用此结构，逐步替代 UPDATE_DOWNLOAD_CANCEL。
-pub static UPDATE_DOWNLOAD_CANCELS: LazyLock<Mutex<HashMap<String, watch::Sender<bool>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+pub static UPDATE_DOWNLOAD_CANCELS: OnceLock<Mutex<HashMap<String, watch::Sender<bool>>>> =
+    OnceLock::new();
 
 /// 创建一个新的取消接收器，返回 (download_id, cancel_rx)
 /// download_id 为 UUID，用于后续取消特定下载任务。
 pub fn create_update_download_cancel() -> (String, watch::Receiver<bool>) {
     let (tx, rx) = watch::channel(false);
     let download_id = uuid::Uuid::new_v4().to_string();
-    UPDATE_DOWNLOAD_CANCELS.lock().unwrap().insert(download_id.clone(), tx);
+    if let Ok(mut guard) = UPDATE_DOWNLOAD_CANCELS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        guard.insert(download_id.clone(), tx);
+    }
     (download_id, rx)
 }
 
 /// 移除指定 download_id 的取消信号（下载完成/失败/取消后调用）。
 pub fn remove_update_download_cancel(download_id: &str) {
-    UPDATE_DOWNLOAD_CANCELS.lock().unwrap().remove(download_id);
+    if let Ok(mut guard) = UPDATE_DOWNLOAD_CANCELS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        guard.remove(download_id);
+    }
 }
 
 pub mod check;
@@ -43,8 +54,8 @@ pub mod install;
 pub mod manifest;
 
 pub use check::{
-    check_for_updates, cleanup_old_installation, is_newer_version, get_platform,
-    OldInstallation, UpdateCheckResult,
+    check_for_updates, cleanup_old_installation, get_platform, is_newer_version, OldInstallation,
+    UpdateCheckResult,
 };
 pub use download::download_update;
 pub use install::install_update;

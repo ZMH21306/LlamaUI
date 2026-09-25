@@ -10,28 +10,24 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// 共享的阻塞 HTTP 客户端（直连 reqwest，不再依赖自研下载引擎）
-static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .timeout(Duration::from_secs(300))
-        .connect_timeout(Duration::from_secs(30))
-        .user_agent("LlamaUI/0.7.0")
-        .build()
-        .expect("构建 reqwest blocking Client 失败")
-});
+#[allow(clippy::expect_used)]
+static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
 
-/// 版本查询专用客户端（短超时，避免在 2% 阶段长时间卡住）
-static VERSION_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .timeout(Duration::from_secs(30))
-        .connect_timeout(Duration::from_secs(15))
-        .user_agent("LlamaUI/0.7.0")
-        .build()
-        .expect("构建版本查询 Client 失败")
-});
+/// 获取共享阻塞 HTTP 客户端。
+fn shared_client() -> &'static Client {
+    SHARED_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(300))
+            .connect_timeout(Duration::from_secs(30))
+            .user_agent("LlamaUI/0.7.0")
+            .build()
+            .expect("构建 reqwest blocking Client 失败")
+    })
+}
 
 fn current_os() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -56,7 +52,7 @@ fn current_arch() -> &'static str {
 }
 /// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证），并返回 Content-Length 大小
 fn curl_head(url: &str) -> anyhow::Result<u64> {
-    let response = SHARED_CLIENT.head(url).send()?;
+    let response = shared_client().head(url).send()?;
     let status = response.status();
 
     // 尝试从响应头中提取文件大小（Content-Length）
@@ -97,7 +93,6 @@ fn curl_head(url: &str) -> anyhow::Result<u64> {
 pub mod stage_progress {
     pub const INIT_END: f64 = 0.02;
     pub const FETCHING_VERSION_START: f64 = 0.02;
-    pub const FETCHING_VERSION_END: f64 = 0.06;
     pub const PREPARING_ASSET_START: f64 = 0.06;
     pub const PREPARING_ASSET_END: f64 = 0.08;
     pub const FINDING_ASSET_START: f64 = 0.08;
@@ -132,7 +127,7 @@ fn curl_download(
                 progress: progress_start,
                 downloaded: 0,
                 total: total_size,
-                                message: format!("开始下载 ({:.1} MB)", total_size as f64 / 1048576.0),
+                message: format!("开始下载 ({:.1} MB)", total_size as f64 / 1048576.0),
                 speed_mbps: 0.0,
                 eta_secs: None,
                 detail: None,
@@ -150,7 +145,8 @@ fn curl_download(
 
     for attempt in 1..=MAX_ATTEMPTS {
         if attempt > 1 {
-            let backoff = Duration::from_millis(500 * attempt as u64).min(Duration::from_secs(2));
+            let backoff =
+                Duration::from_millis(500 * u64::from(attempt)).min(Duration::from_secs(2));
             tracing::warn!(target: "LlamaDownloader", attempt, ?backoff, "下载失败，准备重试");
             std::thread::sleep(backoff);
             if let Some(cb) = progress_callback {
@@ -159,7 +155,7 @@ fn curl_download(
                     progress: progress_start,
                     downloaded: 0,
                     total: total_size,
-                                        message: format!("重试第 {} 次...", attempt),
+                    message: format!("重试第 {} 次...", attempt),
                     speed_mbps: 0.0,
                     eta_secs: None,
                     detail: None,
@@ -167,14 +163,14 @@ fn curl_download(
             }
         }
 
-            if let Some(ct) = cancel_token {
-                if ct.load(std::sync::atomic::Ordering::Relaxed) {
-                    tracing::info!(target: "LlamaDownloader", attempt, "下载被取消");
-                    return Err(anyhow::anyhow!("下载已取消"));
-                }
+        if let Some(ct) = cancel_token {
+            if ct.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::info!(target: "LlamaDownloader", attempt, "下载被取消");
+                return Err(anyhow::anyhow!("下载已取消"));
             }
+        }
 
-            let mut resp = match SHARED_CLIENT.get(url).send() {
+        let mut resp = match shared_client().get(url).send() {
             Ok(r) => r,
             Err(e) => {
                 last_error = e.to_string();
@@ -215,7 +211,7 @@ fn curl_download(
                 progress: progress_start + 0.001 * (progress_end - progress_start),
                 downloaded: 0,
                 total: size,
-                                message: format!("准备下载 {:.1} MB", size as f64 / 1048576.0),
+                message: format!("准备下载 {:.1} MB", size as f64 / 1048576.0),
                 speed_mbps: 0.0,
                 eta_secs: None,
                 detail: Some(DownloadProgressDetail {
@@ -315,7 +311,7 @@ fn curl_download(
             }
             downloaded += n as u64;
 
-                    // 时间节流：每 500ms 至少上报一次，或每 100KB 累积跨越边界时上报，或下载完成时上报
+            // 时间节流：每 500ms 至少上报一次，或每 100KB 累积跨越边界时上报，或下载完成时上报
             let now = std::time::Instant::now();
             let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= 100;
             let boundary_cross = downloaded % 100_000 < n as u64;
@@ -451,7 +447,7 @@ fn curl_download_parallel(
             progress: progress_start,
             downloaded: 0,
             total: total_size,
-                        message: format!(
+            message: format!(
                 "开始下载 ({:.1} MB, {} 线程)...",
                 total_size as f64 / 1_048_576.0,
                 num_chunks
@@ -544,7 +540,11 @@ fn curl_download_parallel(
 
     // 最后一次完整上报
     let current = *downloaded.lock().unwrap();
-    let raw_progress = if total_size > 0 { current as f64 / total_size as f64 } else { 0.0 };
+    let raw_progress = if total_size > 0 {
+        current as f64 / total_size as f64
+    } else {
+        0.0
+    };
     let global_progress = progress_start + raw_progress * (progress_end - progress_start);
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
@@ -598,13 +598,13 @@ fn curl_download_parallel(
                 progress: global_progress,
                 downloaded: total_written,
                 total: total_size,
-                    message: format!(
-                        "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
-                        total_written as f64 / 1_048_576.0,
-                        total_size as f64 / 1_048_576.0,
-                        global_progress * 100.0,
-                        speed_mbps
-                    ),
+                message: format!(
+                    "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
+                    total_written as f64 / 1_048_576.0,
+                    total_size as f64 / 1_048_576.0,
+                    global_progress * 100.0,
+                    speed_mbps
+                ),
                 speed_mbps,
                 eta_secs: if speed_mbps > 0.0 {
                     Some(((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64)
@@ -717,7 +717,7 @@ fn progress_simple(stage: &str, progress: f64, message: String) -> DownloadProgr
 pub struct DownloadResult {
     pub success: bool,
     pub path: String,
-    pub version: String,  // 添加版本字段
+    pub version: String, // 添加版本字段
     pub file_size: u64,
     pub sha256: String,
     pub elapsed_ms: u64,
@@ -767,9 +767,6 @@ struct GitHubRelease {
     assets: Vec<GitHubAsset>,
     #[serde(default)]
     prerelease: bool,
-    /// 版本来源（用于前端显示进度信息）
-    #[serde(skip)]
-    source: &'static str,
 }
 
 /// GitHub Release 资产
@@ -1324,12 +1321,13 @@ fn try_fetch_with_client_direct(
     if let Ok(tag) = std::env::var("LLAMA_CPP_VERSION") {
         let tag_owned = tag.clone();
         tracing::info!(target: "LlamaDownloader", tag = %tag_owned, "使用环境变量指定的版本");
-        if let Some((valid_tag, _asset_name, _)) = try_validate_asset_urls(&tag, &os, &arch, progress_callback) {
+        if let Some((valid_tag, _asset_name, _)) =
+            try_validate_asset_urls(&tag, &os, &arch, progress_callback)
+        {
             return Ok(GitHubRelease {
                 tag_name: valid_tag.clone(),
                 assets: build_virtual_assets(&valid_tag, &os, &arch),
                 prerelease: false,
-                source: "env",
             });
         }
     }
@@ -1343,12 +1341,13 @@ fn try_fetch_with_client_direct(
         );
         let os = current_os();
         let arch = current_arch();
-        if let Some((valid_tag, _asset_name, _)) = try_validate_asset_urls(&nightly_tag, &os, &arch, progress_callback) {
+        if let Some((valid_tag, _asset_name, _)) =
+            try_validate_asset_urls(&nightly_tag, &os, &arch, progress_callback)
+        {
             return Ok(GitHubRelease {
                 tag_name: valid_tag.clone(),
                 assets: build_virtual_assets(&valid_tag, &os, &arch),
                 prerelease: true,
-                source: "nightly",
             });
         }
     }
@@ -1359,12 +1358,13 @@ fn try_fetch_with_client_direct(
     tracing::warn!(target: "LlamaDownloader", tag = %tag_owned, "所有策略失败，回退到硬编码版本");
     let os = current_os();
     let arch = current_arch();
-    if let Some((valid_tag, _asset_name, _)) = try_validate_asset_urls(&tag, &os, &arch, progress_callback) {
+    if let Some((valid_tag, _asset_name, _)) =
+        try_validate_asset_urls(&tag, &os, &arch, progress_callback)
+    {
         return Ok(GitHubRelease {
             tag_name: valid_tag.clone(),
             assets: build_virtual_assets(&valid_tag, &os, &arch),
             prerelease: false,
-            source: "fallback",
         });
     }
 
@@ -1617,7 +1617,12 @@ pub fn download_and_install(
     tracing::info!(target: "LlamaDownloader", path = %llama_server_path.display(), bytes = file_size, "安装完成");
 
     // 10. SHA256 完整性校验（快速校验）
-    let sha256 = compute_sha256_fast(&llama_server_path, progress_callback, file_size, cancel_token)?;
+    let sha256 = compute_sha256_fast(
+        &llama_server_path,
+        progress_callback,
+        file_size,
+        cancel_token,
+    )?;
     tracing::info!(target: "LlamaDownloader", sha256 = %sha256, "SHA256 校验完成");
 
     // 11. 发送完成事件（在 spawn_blocking 内通过 callback 发送）
@@ -1723,8 +1728,9 @@ fn compute_sha256_fast(
                         speed_mbps
                     ),
                     speed_mbps,
-                                        eta_secs: Some(
-                        ((file_size - bytes_read) as f64 / 1_048_576.0 / speed_mbps.max(0.001)) as u64,
+                    eta_secs: Some(
+                        ((file_size - bytes_read) as f64 / 1_048_576.0 / speed_mbps.max(0.001))
+                            as u64,
                     ),
                     detail: Some(DownloadProgressDetail {
                         step: "SHA256 校验".to_string(),
@@ -1785,7 +1791,7 @@ fn fetch_nightly_tag_direct() -> Option<String> {
             "https://github.com/ggml-org/llama.cpp/releases/download/{}/nightly-tag.txt",
             stable_tag
         );
-        let mut req = SHARED_CLIENT.get(&url);
+        let mut req = shared_client().get(&url);
         req = req.timeout(std::time::Duration::from_secs(10));
         if let Some(resp) = req.send().ok() {
             if resp.status().is_success() {
@@ -1858,7 +1864,7 @@ fn try_validate_asset_urls(
             "正在验证候选 URL..."
         );
 
-        let req = SHARED_CLIENT.head(&asset_url);
+        let req = shared_client().head(&asset_url);
         let resp = match req.timeout(std::time::Duration::from_secs(10)).send() {
             Ok(r) => r,
             Err(e) => {

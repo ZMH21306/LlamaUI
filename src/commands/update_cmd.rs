@@ -1,22 +1,25 @@
 //! 自动更新检查命令。
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::events::{UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE};
+use crate::events::{
+    UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE,
+};
 use crate::update::{
-    check_for_updates, cleanup_old_installation, download_update, install_update, UpdateCheckResult,
-    create_update_download_cancel, remove_update_download_cancel,
-    UPDATE_DOWNLOAD_CANCELS,
+    check_for_updates, cleanup_old_installation, create_update_download_cancel, download_update,
+    install_update, remove_update_download_cancel, UpdateCheckResult, UPDATE_DOWNLOAD_CANCELS,
 };
 
 /// 下载并安装更新（调用后阻塞，直到完成或取消）
 #[tauri::command]
-pub async fn download_update_cmd(
-    app: AppHandle,
-) -> Result<(), String> {
-    let result = check_for_updates().await.map_err(|e| format!("检查更新失败：{}", e))?;
+pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
+    let result = check_for_updates()
+        .await
+        .map_err(|e| format!("检查更新失败：{}", e))?;
     if !result.update_available {
         return Ok(());
     }
@@ -33,9 +36,12 @@ pub async fn download_update_cmd(
     let dest_path = download_dir.join(format!("LlamaUI-{}-update.zip", result.latest_version));
 
     // 发送下载开始状态
-    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::DownloadStarted {
-        total_bytes: result.file_size,
-    });
+    let _ = app.emit(
+        EVT_UPDATE_STATE,
+        UpdateState::DownloadStarted {
+            total_bytes: result.file_size,
+        },
+    );
 
     // 在后台任务中下载
     let app_clone = app.clone();
@@ -48,7 +54,8 @@ pub async fn download_update_cmd(
             &dest_path_clone,
             result.file_size,
             cancel_rx,
-        ).await
+        )
+        .await
     });
 
     // 等待下载完成
@@ -59,10 +66,13 @@ pub async fn download_update_cmd(
             let file_size = download_result.file_size;
 
             // 发送下载完成状态
-            let _ = app.emit(EVT_UPDATE_STATE, UpdateState::DownloadCompleted {
-                download_path: download_path.clone(),
-                file_size,
-            });
+            let _ = app.emit(
+                EVT_UPDATE_STATE,
+                UpdateState::DownloadCompleted {
+                    download_path: download_path.clone(),
+                    file_size,
+                },
+            );
             let _ = app.emit(
                 EVT_UPDATE_DOWNLOAD_PROGRESS,
                 UpdateDownloadProgress {
@@ -79,15 +89,21 @@ pub async fn download_update_cmd(
             // 安装更新（同步执行）
             match install_update(&app, std::path::Path::new(&download_path), file_size).await {
                 Ok(_) => {
-                    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Completed {
-                        new_version: String::new(),
-                    });
+                    let _ = app.emit(
+                        EVT_UPDATE_STATE,
+                        UpdateState::Completed {
+                            new_version: String::new(),
+                        },
+                    );
                     tracing::info!(target: "UpdateCmd", "更新安装成功");
                 }
                 Err(e) => {
-                    let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Failed {
-                        error: format!("安装失败：{}", e),
-                    });
+                    let _ = app.emit(
+                        EVT_UPDATE_STATE,
+                        UpdateState::Failed {
+                            error: format!("安装失败：{}", e),
+                        },
+                    );
                     tracing::error!(target: "UpdateCmd", error = %e, "更新安装失败");
                     return Err(format!("安装失败：{}", e));
                 }
@@ -128,13 +144,23 @@ pub async fn cancel_update_download(
 ) -> Result<(), String> {
     if let Some(ref download_id) = download_id {
         // 取消指定下载任务
-        if let Some(sender) = UPDATE_DOWNLOAD_CANCELS.lock().unwrap().get(download_id) {
-            let _ = sender.send(true);
+        if let Ok(guard) = UPDATE_DOWNLOAD_CANCELS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            if let Some(sender) = guard.get(download_id) {
+                let _ = sender.send(true);
+            }
         }
     } else {
         // 兼容旧代码：取消所有下载任务
-        for sender in UPDATE_DOWNLOAD_CANCELS.lock().unwrap().values() {
-            let _ = sender.send(true);
+        if let Ok(guard) = UPDATE_DOWNLOAD_CANCELS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            for sender in guard.values() {
+                let _ = sender.send(true);
+            }
         }
     }
     let _ = app.emit(EVT_UPDATE_STATE, UpdateState::Cancelled);
@@ -158,19 +184,16 @@ pub async fn cancel_update_download(
 #[tauri::command]
 pub async fn check_updates() -> Result<UpdateCheckResult, String> {
     tracing::info!(target: "UpdateCmd", "收到检查更新请求");
-    check_for_updates()
-        .await
-        .map_err(|e| {
-            tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
-            format!("检查更新失败：{}", e)
-        })
+    check_for_updates().await.map_err(|e| {
+        tracing::error!(target: "UpdateCmd", error = %e, "检查更新失败");
+        format!("检查更新失败：{}", e)
+    })
 }
 
 /// 清理旧版本
 #[tauri::command]
 pub fn cleanup_old_version(path: String) -> Result<(), String> {
-    cleanup_old_installation(&path)
-        .map_err(|e| format!("清理失败：{}", e))
+    cleanup_old_installation(&path).map_err(|e| format!("清理失败：{}", e))
 }
 
 #[cfg(test)]

@@ -7,11 +7,11 @@
 //     内部转换 ConfigError → anyhow::Error。
 
 use crate::errors::ConfigError;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 const CONFIG_FILE: &str = "config.json";
 
@@ -111,10 +111,14 @@ impl AppConfig {
             other => return Err(ConfigError::InvalidMode(other.to_string())),
         }
         if !(128..=1_048_576).contains(&self.ctx_size) {
-            return Err(ConfigError::CtxSizeOutOfRange { value: self.ctx_size });
+            return Err(ConfigError::CtxSizeOutOfRange {
+                value: self.ctx_size,
+            });
         }
         if !(-1..=200).contains(&self.n_gpu_layers) {
-            return Err(ConfigError::GpuLayersOutOfRange { value: self.n_gpu_layers });
+            return Err(ConfigError::GpuLayersOutOfRange {
+                value: self.n_gpu_layers,
+            });
         }
         if self.mtp_draft_n_max > 16 {
             return Err(ConfigError::MtpDraftOutOfRange {
@@ -205,16 +209,11 @@ impl ConfigStore {
             // 在第一个空格处（程序后）插入 --models-dir "%%models_dir%%"
             if let Some(idx) = cfg.custom_command.find(' ') {
                 let (head, tail) = cfg.custom_command.split_at(idx);
-                cfg.custom_command = format!(
-                    "{} --models-dir \"%%models_dir%%\"{}",
-                    head, tail
-                );
+                cfg.custom_command = format!("{} --models-dir \"%%models_dir%%\"{}", head, tail);
             } else {
                 // 命令只有一个 token（程序名），直接追加
-                cfg.custom_command = format!(
-                    "{} --models-dir \"%%models_dir%%\"",
-                    cfg.custom_command
-                );
+                cfg.custom_command =
+                    format!("{} --models-dir \"%%models_dir%%\"", cfg.custom_command);
             }
             let _ = save_to_disk(&path, &cfg);
             tracing::info!(
@@ -225,17 +224,17 @@ impl ConfigStore {
         // 一次性迁移：models_dir 为空时自动检测 WinGet 模型目录
         if cfg.models_dir.is_empty() {
             if let Some(local) = dirs::data_local_dir() {
-                let winget_models = local
-                    .join("Microsoft")
-                    .join("WinGet")
-                    .join("Packages");
+                let winget_models = local.join("Microsoft").join("WinGet").join("Packages");
                 // 查找 ggml.llamacpp_* 目录下的 models 子目录
                 if let Ok(entries) = std::fs::read_dir(&winget_models) {
                     for entry in entries.flatten() {
                         let name = entry.file_name();
                         let name_str = name.to_string_lossy();
-                        if name_str.starts_with("ggml.llamacpp_") && entry.path().join("models").is_dir() {
-                            cfg.models_dir = entry.path().join("models").to_string_lossy().to_string();
+                        if name_str.starts_with("ggml.llamacpp_")
+                            && entry.path().join("models").is_dir()
+                        {
+                            cfg.models_dir =
+                                entry.path().join("models").to_string_lossy().to_string();
                             let _ = save_to_disk(&path, &cfg);
                             tracing::info!(
                                 target: "Config",

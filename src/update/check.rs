@@ -71,15 +71,13 @@ pub async fn check_for_updates() -> Result<UpdateCheckResult, NetError> {
 
     // 验证 Manifest 签名（若提供）
     let signature_verified = match &manifest.signature {
-        Some(_) => {
-            match verify_manifest_signature(&manifest) {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::warn!(target: "UpdateCheck", error = %e, "签名验证失败");
-                    false
-                }
+        Some(_) => match verify_manifest_signature(&manifest) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(target: "UpdateCheck", error = %e, "签名验证失败");
+                false
             }
-        }
+        },
         None => false,
     };
 
@@ -118,20 +116,22 @@ fn verify_manifest_signature(manifest: &super::manifest::UpdateManifest) -> Resu
     if pubkey_bytes.len() != 32 {
         return Err(format!("公钥长度错误：{}", pubkey_bytes.len()));
     }
-    let pubkey_array: [u8; 32] = pubkey_bytes.try_into().unwrap();
-    let verifying_key = VerifyingKey::from_bytes(&pubkey_array)
-        .map_err(|e| format!("公钥格式错误：{}", e))?;
+    let pubkey_array: [u8; 32] = pubkey_bytes
+        .try_into()
+        .map_err(|_| "公钥长度错误".to_string())?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&pubkey_array).map_err(|e| format!("公钥格式错误：{}", e))?;
 
     // 解析签名（Base64）
     let sig_bytes = STANDARD
         .decode(signature)
         .map_err(|e| format!("解析签名失败：{}", e))?;
-    let signature = Signature::from_slice(&sig_bytes)
-        .map_err(|e| format!("签名格式错误：{}", e))?;
+    let signature =
+        Signature::from_slice(&sig_bytes).map_err(|e| format!("签名格式错误：{}", e))?;
 
     // 对 Manifest 的 JSON 序列化字节进行验证
-    let manifest_json = serde_json::to_vec(manifest)
-        .map_err(|e| format!("序列化 Manifest 失败：{}", e))?;
+    let manifest_json =
+        serde_json::to_vec(manifest).map_err(|e| format!("序列化 Manifest 失败：{}", e))?;
 
     verifying_key
         .verify(&manifest_json, &signature)
@@ -170,13 +170,11 @@ pub fn is_newer_version(latest: &str, current: &str) -> bool {
     }
 
     // 主版本号相等，比较预发布标识
-    match (l_pre.as_deref(), c_pre.as_deref()) {
+    match (l_pre, c_pre) {
         (None, None) => false,
-        (Some(_), None) => false,
         (None, Some(_)) => true,
-        (Some(l), Some(c)) => {
-            l.cmp(c) == Ordering::Greater
-        }
+        (Some(_), None) => false,
+        (Some(l), Some(c)) => l.cmp(c) == Ordering::Greater,
     }
 }
 
@@ -200,7 +198,6 @@ pub fn get_platform() -> String {
     };
     format!("{}-{}", os, a)
 }
-
 
 /// 扫描旧版本安装目录。
 fn detect_old_installations(current_version: &str) -> Vec<OldInstallation> {
@@ -268,10 +265,8 @@ fn scan_for_old_installations(
                 })
                 .unwrap_or(0)
                 .to_string();
-                        if version != current_version
-                && !installs
-                    .iter()
-                    .any(|i| i.path == path.to_string_lossy())
+            if version != current_version
+                && !installs.iter().any(|i| i.path == path.to_string_lossy())
             {
                 let last_modified = version.parse().unwrap_or(0);
                 installs.push(OldInstallation {
@@ -282,9 +277,7 @@ fn scan_for_old_installations(
             }
             if let Some(ver) = extract_version_from_name(name_str) {
                 if ver != current_version
-                    && !installs
-                        .iter()
-                        .any(|i| i.path == path.to_string_lossy())
+                    && !installs.iter().any(|i| i.path == path.to_string_lossy())
                 {
                     let last_modified = fs::metadata(&path)
                         .and_then(|m| m.modified())
@@ -411,7 +404,7 @@ mod tests {
         assert_eq!(extract_version_from_name("random"), None);
     }
 
-        #[test]
+    #[test]
     fn test_split_pre_release() {
         assert_eq!(split_pre_release("1.0.0"), ("1.0.0", None));
         assert_eq!(split_pre_release("1.0.0-rc1"), ("1.0.0", Some("rc1")));
