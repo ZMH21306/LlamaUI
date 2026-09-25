@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use futures::stream::{self, StreamExt};
 use crate::download::hf_downloader::HfDownloader;
 use crate::net::NetClient;
+use zeroize::Zeroizing;
 
 /// HF API 响应中的文件缓存条目
 #[derive(Debug, Clone)]
@@ -64,7 +65,7 @@ pub struct HfDownloadResult {
 }
 
 pub struct HfState {
-    pub hf_token: Mutex<Option<String>>,
+    pub hf_token: Mutex<Zeroizing<Option<String>>>,
     pub download_dir: Mutex<PathBuf>,
     /// 下载取消信号：`download_id → watch::Sender<bool>`。
     pub download_cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
@@ -88,7 +89,7 @@ impl HfState {
             });
         let token = std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty());
         Self {
-            hf_token: Mutex::new(token),
+            hf_token: Mutex::new(Zeroizing::new(token)),
             download_dir: Mutex::new(default_dir),
             download_cancels: Mutex::new(HashMap::new()),
             file_cache: Mutex::new(HashMap::new()),
@@ -103,6 +104,7 @@ const HF_API_BASE: &str = "https://huggingface.co/api";
 const HF_RESOLVE_BASE: &str = "https://huggingface.co";
 
 /// 异步 HTTP GET（使用 NetClient）。
+/// 返回 (body, status_code)。错误时返回 (错误信息, 0) 但不丢失真实状态码信息。
 async fn hf_get_async(path: &str, token: Option<&str>) -> Result<(String, u16), String> {
     let url = format!("{}{}", HF_API_BASE, path);
     let client = NetClient::builder()
@@ -122,14 +124,23 @@ async fn hf_get_async(path: &str, token: Option<&str>) -> Result<(String, u16), 
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    match client.get(&url, &header_refs).await {
-        Ok(body) => Ok((body, 200)),
+    // 使用 send_get 获取完整响应，包含准确的 StatusCode
+    match client.send_get(&url, &header_refs).await {
+        Ok(response) => {
+            let status = response.status();
+            let status_code = status.as_u16();
+            let body = response.text().await
+                .map_err(|e| format!("读取响应失败：{}", e))?;
+            Ok((body, status_code))
+        }
         Err(e) => {
             let msg = e.to_string();
-            let status = if msg.contains("401") { 401 }
-                else if msg.contains("403") { 403 }
-                else if msg.contains("429") { 429 }
-                else if msg.contains("404") { 404 }
+            // NetError 包含准确的状态码信息，尝试提取
+            let status = if msg.contains("HTTP 401") { 401 }
+                else if msg.contains("HTTP 403") { 403 }
+                else if msg.contains("HTTP 429") { 429 }
+                else if msg.contains("HTTP 404") { 404 }
+                else if msg.contains("HTTP 5") { 500 } // 5xx 统一归为 500
                 else { 0 };
             Ok((msg, status))
         }
@@ -146,7 +157,7 @@ async fn hf_head_size_async(url: &str, token: Option<&str>) -> Option<u64> {
         Err(_) => return None,
     };
 
-        let mut headers: Vec<(String, String)> = vec![
+    let mut headers: Vec<(String, String)> = vec![
         ("User-Agent".to_string(), "LlamaUI/0.7.0".to_string()),
     ];
     if let Some(t) = token {
@@ -170,7 +181,7 @@ async fn hf_head_size_async(url: &str, token: Option<&str>) -> Option<u64> {
             }
         }
         Err(_) => None,
-        }
+    }
 }
 
 #[tauri::command]
@@ -214,11 +225,9 @@ pub async fn download_hf_model(
         .map(PathBuf::from)
         .unwrap_or_else(|| state.download_dir.lock().clone());
     fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
-    let token = state.hf_token.lock().clone();
-    let mut download_url = format!("{}/{}/resolve/main/{}", HF_RESOLVE_BASE, model_id, filename);
-    if let Some(ref token_val) = token {
-        download_url.push_str(&format!("?token={}", token_val));
-    }
+    // P0-1: Token 通过 Authorization header 传递，不放入 URL 中
+    let token = state.hf_token.lock().clone().map(|t| t.to_string());
+    let download_url = format!("{}/{}/resolve/main/{}", HF_RESOLVE_BASE, model_id, filename);
     let out_path = dir.join(&safe_filename);
     let _out_path_str = out_path.to_string_lossy().to_string();
     let start_time = std::time::Instant::now();
@@ -261,7 +270,7 @@ pub async fn download_hf_model(
             download_id: download_id_for_emit.clone(),
         },
     );
-    let downloader = match HfDownloader::new() {
+    let downloader = match HfDownloader::new(token.clone()) {
         Ok(d) => d,
         Err(e) => {
             let _ = app.emit("hf-download-progress", HfDownloadProgress {
@@ -269,7 +278,7 @@ pub async fn download_hf_model(
                 progress: 0.0,
                 downloaded: 0,
                 total: expected_size.unwrap_or(0),
-                                speed: None,
+                speed: None,
                 eta: None,
                 model_id: model_id.clone(),
                 filename: filename.clone(),

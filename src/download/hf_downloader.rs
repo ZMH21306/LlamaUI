@@ -24,16 +24,17 @@ use crate::util::progress::ProgressReporter;
 /// 下载器
 pub struct HfDownloader {
     client: NetClient,
+    token: Option<String>,
 }
 
 impl HfDownloader {
     /// 创建下载器实例。
-    pub fn new() -> AnyResult<Self> {
+    pub fn new(token: Option<String>) -> AnyResult<Self> {
         let client = NetClient::builder()
             .user_agent("LlamaUI/0.7.0")
             .build()
             .map_err(|e| anyhow::anyhow!("创建 HTTP 客户端失败：{}", e))?;
-        Ok(Self { client })
+        Ok(Self { client, token })
     }
 
     /// 执行文件下载（指数退避自动重试，最多 3 次）。
@@ -107,10 +108,9 @@ impl HfDownloader {
             ("User-Agent".to_string(), "LlamaUI/0.7.0".to_string()),
             ("Accept".to_string(), "*/*".to_string()),
         ];
-        // 从 URL 中提取 token 参数（如果存在）
-        if let Some(token_pos) = url.find("?token=") {
-            let token_val = &url[token_pos + 7..];
-            headers.push(("Authorization".to_string(), format!("Bearer {}", token_val)));
+        // P0-1: 使用 Authorization header 传递 token，而不是将其嵌入 URL 中
+        if let Some(ref token) = self.token {
+            headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
         }
         let header_refs: Vec<(&str, &str)> = headers
             .iter()

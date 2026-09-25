@@ -80,6 +80,7 @@ futures = "0.3"
 sysinfo = "0.31"
 sha2 = "0.10"
 base64 = "0.22"
+zeroize = { version = "1", features = ["derive"] }
 regex = "1"
 flate2 = "1"
 tar = "0.4"
