@@ -28,6 +28,9 @@ pub struct UpdateManifest {
     /// Ed25519 签名（Base64 编码）。可选：若服务器未签名则为 None。
     #[serde(default)]
     pub signature: Option<String>,
+    /// 发布说明（Markdown 格式）
+    #[serde(default)]
+    pub release_notes: Option<String>,
 }
 
 /// 平台资产映射
