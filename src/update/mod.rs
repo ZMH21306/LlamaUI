@@ -50,6 +50,7 @@ pub fn remove_update_download_cancel(download_id: &str) {
 
 pub mod check;
 pub mod download;
+pub mod error;
 pub mod install;
 pub mod manifest;
 
@@ -58,4 +59,5 @@ pub use check::{
     UpdateCheckResult,
 };
 pub use download::download_update;
+pub use error::UpdateError;
 pub use install::install_update;
