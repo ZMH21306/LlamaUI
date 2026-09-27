@@ -196,9 +196,8 @@ pub fn is_newer_version(latest: &str, current: &str) -> bool {
 
     // 主版本号相等，比较预发布标识
     match (l_pre, c_pre) {
-        (None, None) => false,
         (None, Some(_)) => true,
-        (Some(_), None) => false,
+        (Some(_), None) | (None, None) => false,
         (Some(l), Some(c)) => l.cmp(c) == Ordering::Greater,
     }
 }

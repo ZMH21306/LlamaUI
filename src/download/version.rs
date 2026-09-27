@@ -6,6 +6,8 @@
 //! - 构造 GitHub Release tag
 //! - 版本比较
 
+#![allow(dead_code)]
+
 /// 解析 llama-server 输出的版本号
 ///
 /// 常见输出格式：
@@ -32,7 +34,7 @@ pub fn parse_llama_version(output: &str) -> Option<String> {
     // 3) 语义版本 vX.Y.Z
     if let Some(idx) = text.find("version: ") {
         let after = &text[idx + "version: ".len()..];
-        let end = after.find(|c: char| c == ' ' || c == '(' || c == '\n').unwrap_or(after.len());
+        let end = after.find(|c: char| matches!(c, ' ' | '(' | '\n')).unwrap_or(after.len());
         let v = after[..end].trim().trim_start_matches('v');
         if !v.is_empty() {
             return Some(v.to_string());
@@ -54,9 +56,9 @@ pub fn parse_llama_version(output: &str) -> Option<String> {
 /// - `bNNNNN` → `bNNNNN`
 /// - 语义版本 → `vX.Y.Z`
 pub fn to_release_tag(version: &str) -> String {
-    if version.starts_with('b') || version.starts_with("b") {
-        version.to_string()
-    } else if version.starts_with('v') {
+    // Return as-is for pre-release tags starting with 'b' (build numbers)
+    // or 'v' (semantic version), otherwise prepend 'v'
+    if version.starts_with('b') || version.starts_with('v') {
         version.to_string()
     } else {
         format!("v{}", version)
