@@ -10,10 +10,10 @@
 //! 设计原则：此模块**不依赖** `crate::config` / `crate::server` / `crate::detect`，
 //! 任何层都可以 `use crate::util::*`。
 
+pub mod http;
 pub mod path;
 pub mod process;
+pub mod progress;
 pub mod proxy;
 pub mod time;
 pub mod url;
-pub mod http;
-pub mod progress;

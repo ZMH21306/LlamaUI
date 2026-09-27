@@ -171,9 +171,28 @@ pub fn sanitize_filename(input: &str) -> Result<String, FilenameError> {
             let seg_upper = seg.to_ascii_uppercase();
             if matches!(
                 seg_upper.as_str(),
-                "CON" | "NUL" | "PRN" | "AUX"
-                    | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
-                    | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+                "CON"
+                    | "NUL"
+                    | "PRN"
+                    | "AUX"
+                    | "LPT1"
+                    | "LPT2"
+                    | "LPT3"
+                    | "LPT4"
+                    | "LPT5"
+                    | "LPT6"
+                    | "LPT7"
+                    | "LPT8"
+                    | "LPT9"
+                    | "COM1"
+                    | "COM2"
+                    | "COM3"
+                    | "COM4"
+                    | "COM5"
+                    | "COM6"
+                    | "COM7"
+                    | "COM8"
+                    | "COM9"
             ) {
                 return Err(FilenameError::DeviceName);
             }
@@ -188,9 +207,28 @@ pub fn sanitize_filename(input: &str) -> Result<String, FilenameError> {
     let upper = input.to_ascii_uppercase();
     if matches!(
         upper.as_str(),
-        "CON" | "NUL" | "PRN" | "AUX"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+        "CON"
+            | "NUL"
+            | "PRN"
+            | "AUX"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
     ) {
         return Err(FilenameError::DeviceName);
     }
@@ -264,37 +302,53 @@ mod tests {
     #[test]
     fn segment_eq_with_separator_finds_middle() {
         // 路径中段含 `\temp\`
-        assert!(segment_eq_with_separator("c:\\foo\\temp\\bar", "\\", "temp"));
+        assert!(segment_eq_with_separator(
+            "c:\\foo\\temp\\bar",
+            "\\",
+            "temp"
+        ));
     }
 
     #[test]
     fn segment_eq_with_separator_rejects_partial() {
         // `tempbar` 不是 `temp` + 分隔符
-        assert!(!segment_eq_with_separator("c:\\foo\\tempbar\\bar", "\\", "temp"));
+        assert!(!segment_eq_with_separator(
+            "c:\\foo\\tempbar\\bar",
+            "\\",
+            "temp"
+        ));
     }
 
     #[test]
     fn is_world_writable_detects_temp_dir() {
         // 父目录末段是 temp
-        assert!(is_world_writable_path(Path::new("C:\\users\\x\\AppData\\Local\\Temp\\llama-server.exe")));
+        assert!(is_world_writable_path(Path::new(
+            "C:\\users\\x\\AppData\\Local\\Temp\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_detects_middle_temp() {
         // 父目录中含 \temp\
-        assert!(is_world_writable_path(Path::new("C:\\foo\\temp\\bar\\llama-server.exe")));
+        assert!(is_world_writable_path(Path::new(
+            "C:\\foo\\temp\\bar\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_allows_normal_dirs() {
         // 普通目录
-        assert!(!is_world_writable_path(Path::new("C:\\Program Files\\llama.cpp\\llama-server.exe")));
+        assert!(!is_world_writable_path(Path::new(
+            "C:\\Program Files\\llama.cpp\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_handles_relative_paths() {
         // 相对路径
-        assert!(!is_world_writable_path(Path::new("target/debug/llama-server.exe")));
+        assert!(!is_world_writable_path(Path::new(
+            "target/debug/llama-server.exe"
+        )));
     }
 
     #[test]
@@ -320,36 +374,78 @@ mod tests {
 
     #[test]
     fn sanitize_filename_rejects_path_traversal() {
-        assert_eq!(sanitize_filename("../etc/passwd").err(), Some(FilenameError::PathTraversal));
-        assert_eq!(sanitize_filename("..\\evil.exe").err(), Some(FilenameError::PathTraversal));
-        assert_eq!(sanitize_filename("foo/../../bar").err(), Some(FilenameError::PathTraversal));
+        assert_eq!(
+            sanitize_filename("../etc/passwd").err(),
+            Some(FilenameError::PathTraversal)
+        );
+        assert_eq!(
+            sanitize_filename("..\\evil.exe").err(),
+            Some(FilenameError::PathTraversal)
+        );
+        assert_eq!(
+            sanitize_filename("foo/../../bar").err(),
+            Some(FilenameError::PathTraversal)
+        );
     }
 
     #[test]
     fn sanitize_filename_rejects_absolute() {
-        assert_eq!(sanitize_filename("/etc/passwd").err(), Some(FilenameError::AbsolutePath));
-        assert_eq!(sanitize_filename("\\\\server\\share\\file").err(), Some(FilenameError::AbsolutePath));
+        assert_eq!(
+            sanitize_filename("/etc/passwd").err(),
+            Some(FilenameError::AbsolutePath)
+        );
+        assert_eq!(
+            sanitize_filename("\\\\server\\share\\file").err(),
+            Some(FilenameError::AbsolutePath)
+        );
     }
 
     #[test]
     fn sanitize_filename_rejects_windows_drive() {
-        assert_eq!(sanitize_filename("C:\\windows\\system32\\cmd.exe").err(), Some(FilenameError::AbsolutePath));
-        assert_eq!(sanitize_filename("d:/data/model.gguf").err(), Some(FilenameError::AbsolutePath));
+        assert_eq!(
+            sanitize_filename("C:\\windows\\system32\\cmd.exe").err(),
+            Some(FilenameError::AbsolutePath)
+        );
+        assert_eq!(
+            sanitize_filename("d:/data/model.gguf").err(),
+            Some(FilenameError::AbsolutePath)
+        );
     }
 
     #[test]
     fn sanitize_filename_rejects_device_names() {
-        assert_eq!(sanitize_filename("CON").err(), Some(FilenameError::DeviceName));
-        assert_eq!(sanitize_filename("NUL").err(), Some(FilenameError::DeviceName));
-        assert_eq!(sanitize_filename("LPT1").err(), Some(FilenameError::DeviceName));
-        assert_eq!(sanitize_filename("COM1").err(), Some(FilenameError::DeviceName));
-        assert_eq!(sanitize_filename("prn").err(), Some(FilenameError::DeviceName)); // 大小不敏感
+        assert_eq!(
+            sanitize_filename("CON").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("NUL").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("LPT1").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("COM1").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("prn").err(),
+            Some(FilenameError::DeviceName)
+        ); // 大小不敏感
     }
 
     #[test]
     fn sanitize_filename_rejects_control_chars() {
-        assert_eq!(sanitize_filename("model\x00.gguf").err(), Some(FilenameError::Nul));
-        assert_eq!(sanitize_filename("model\n.gguf").err(), Some(FilenameError::ControlChar));
+        assert_eq!(
+            sanitize_filename("model\x00.gguf").err(),
+            Some(FilenameError::Nul)
+        );
+        assert_eq!(
+            sanitize_filename("model\n.gguf").err(),
+            Some(FilenameError::ControlChar)
+        );
     }
 
     #[test]
@@ -359,13 +455,22 @@ mod tests {
 
     #[test]
     fn sanitize_filename_accepts_underscore_and_dash() {
-        assert_eq!(sanitize_filename("my-model_v2.gguf").unwrap(), "my-model_v2.gguf");
+        assert_eq!(
+            sanitize_filename("my-model_v2.gguf").unwrap(),
+            "my-model_v2.gguf"
+        );
     }
 
     #[test]
     fn sanitize_filename_rejects_multiple_segments() {
         // 含子目录的路径应被拒绝（仅允许单层文件名）
-        assert_eq!(sanitize_filename("sub/model.gguf").err(), Some(FilenameError::Subdirectory));
-        assert_eq!(sanitize_filename("sub\\model.gguf").err(), Some(FilenameError::Subdirectory));
+        assert_eq!(
+            sanitize_filename("sub/model.gguf").err(),
+            Some(FilenameError::Subdirectory)
+        );
+        assert_eq!(
+            sanitize_filename("sub\\model.gguf").err(),
+            Some(FilenameError::Subdirectory)
+        );
     }
 }

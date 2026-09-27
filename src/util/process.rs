@@ -72,4 +72,3 @@ pub fn silent_tokio_command(program: &str) -> TokioCommand {
     }
     cmd
 }
-
