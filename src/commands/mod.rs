@@ -30,11 +30,11 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
-pub mod config_io_cmd;
 pub mod config_cmd;
+pub mod config_io_cmd;
 pub mod detect_cmd;
 pub mod download_cmd;
 pub mod export_cmd;
@@ -96,9 +96,7 @@ impl AppState {
             detect_cancels: Mutex::new(Vec::new()),
             download_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             model_manager,
-            remote_server_manager: std::sync::Arc::new(
-                crate::remote::RemoteServerManager::new(),
-            ),
+            remote_server_manager: std::sync::Arc::new(crate::remote::RemoteServerManager::new()),
         }
     }
 }
