@@ -1384,14 +1384,9 @@ function handleUpdateProgress(progress) {
     bar.textContent = `${Math.round((progress.progress || 0) * 100)}%`;
   }
 
-  // 统一格式：阶段 · 已用 Xs · 速度 · 剩余
+  // 统一格式：阶段 · 大小 · 速度 · 剩余
+  // （已用时间不在提示文本中显示，避免与进度条百分比重复）
   const parts = [progress.message || progress.stage_name || progress.stage || '下载中'];
-
-  if (progress.elapsed_ms != null) {
-    parts.push('已用 ' + (progress.elapsed_ms / 1000).toFixed(1) + 's');
-  } else if (progress.elapsed_secs != null) {
-    parts.push('已用 ' + progress.elapsed_secs + 's');
-  }
 
   if (typeof progress.speed_mbps === 'number' && progress.speed_mbps > 0) {
     parts.push(formatSpeed(progress.speed_mbps));
@@ -1919,19 +1914,17 @@ function attachUIListeners() {
       renderProgressImpl(p);
       lastProgressMs = Date.now();
     }
-    // 唯一的状态文本构建函数：阶段 · 大小 · 已用 · 速度 · 剩余
-    // 所有写入者（进度事件 / 本地定时器）都必须走这里，保证格式完全一致，不会交替闪烁
+    // 唯一的状态文本构建函数：阶段 · 大小 · 速度 · 剩余
+    // 所有写入者（进度事件 / 心跳定时器）都必须走这里，保证格式完全一致，不会交替闪烁
     function buildDownloadStatusText(p) {
       const stage = (p && p.stage) || 'fetching_version';
       const stageName = stageMap[stage] || stage;
-      const elapsed = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
       const parts = [stageName];
 
       // 大小：已下载 / 总大小
       if (p && typeof p.downloaded === 'number' && typeof p.total === 'number' && p.total > 0) {
         parts.push(formatSize(p.downloaded) + ' / ' + formatSize(p.total));
       }
-      parts.push('已用 ' + elapsed + 's');
 
       // 速度与剩余时间
       if (p && p.stage === 'downloading' && typeof p.speed_mbps === 'number' && p.speed_mbps > 0) {
@@ -1967,9 +1960,7 @@ function attachUIListeners() {
     //
     // 为什么要它：后端进度事件在高速下载时可能间隔 4~6s 才发一次，
     // 导致 UI 看起来卡住。这里不做任何数据伪造——进度条宽度、大小、
-    // 速度都直接取自 lastProgressData（后端真实上报值），
-    // 只有「已用 Xs」是本地按真实经过时间计算的，
-    // 保证用户始终看到至少 1s 一次的真实更新。
+    // 速度、剩余时间全部直接取自 lastProgressData（后端真实上报值）。
     //
     // 关键：心跳与事件流共用 buildDownloadStatusText()，格式完全一致，
     // 不会重现此前两个写入者格式不同导致的闪烁交替。
