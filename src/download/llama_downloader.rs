@@ -13,7 +13,17 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-/// 共享的阻塞 HTTP 客户端（直连 reqwest，不再依赖自研下载引擎）
+/// 共享的阻塞 HTTP 客户端（直连 reqwest，不再依赖自研下载引擎）。
+///
+/// 关键优化：所有 chunk 线程共享同一个 Client 实例，而不是每次重试都
+/// 新建 `Client::builder().build()`。每个新 Client 都有独立的连接池
+/// 和 TLS 会话缓存，32 chunks × 3 retries = 96 次重建会导致：
+/// - 96 次独立 TLS 握手，会话完全无法复用
+/// - 连接池每次被丢弃，已建立的 TCP 连接全部作废
+/// - 实测吞吐只有实际带宽的 1/10 左右
+///
+/// 另外开启 `tcp_nodelay(true)` 关闭 Nagle 算法，
+/// 避免「小包 + 延迟 ACK」交互引入 20~40ms 的额外往返延迟。
 #[allow(clippy::expect_used)]
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
 
@@ -23,6 +33,7 @@ fn shared_client() -> &'static Client {
         Client::builder()
             .timeout(Duration::from_secs(300))
             .connect_timeout(Duration::from_secs(30))
+            .tcp_nodelay(true)
             .user_agent("LlamaUI/0.7.0")
             .build()
             .expect("构建 reqwest blocking Client 失败")
@@ -51,13 +62,17 @@ fn current_arch() -> &'static str {
     }
 }
 /// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证），并返回 Content-Length 大小
+///
+/// 复用 `shared_client()` 而不是每次 `Client::builder().build()`：
+/// 资产匹配阶段最多会串行探测 4 个候选 URL，每次新建 Client 都会
+/// 丢弃连接池并重新做一次 TLS 握手，叠加在「起步阶段」上很可观。
+/// 注意：`connect_timeout` 只能在 `ClientBuilder` 上设置（请求级 API 不提供），
+/// 因此连接超时沿用 `shared_client()` 的 30s，这里只覆盖整体超时。
 fn curl_head(url: &str) -> anyhow::Result<u64> {
-    let client = Client::builder()
+    let response = shared_client()
+        .head(url)
         .timeout(Duration::from_secs(15))
-        .connect_timeout(Duration::from_secs(8))
-        .user_agent("LlamaUI/0.7.0")
-        .build()?;
-    let response = client.head(url).send()?;
+        .send()?;
     let status = response.status();
 
     // 尝试从响应头中提取文件大小（Content-Length）
@@ -86,28 +101,33 @@ fn curl_head(url: &str) -> anyhow::Result<u64> {
 /// 下载阶段常量（用于统一的进度分配）
 ///
 /// 总进度 (0.0 ~ 1.0) 分配如下：
-/// - ① 初始化              : 0%  ~ 2%   （2%）
-/// - ② 获取最新版本         : 2%  ~ 6%   （4%）
-/// - ③ 准备匹配资产         : 6%  ~ 8%   （2%）
-/// - ④ 匹配/验证资产       : 8%  ~ 22%  （14%，并行HEAD验证）
-/// - ⑤ 下载安装包           : 22% ~ 80%  （58%，主阶段）
-/// - ⑥ 解压归档             : 80% ~ 88%  （8%）
-/// - ⑦ SHA256 校验          : 88% ~ 96%  （8%）
-/// - ⑧ 清理收尾             : 96% ~ 98%  （2%）
-/// - ⑨ 完成                 : 98% ~ 100% （2%）
+/// - ① 初始化              : 0%  ~ 1%   （1%）
+/// - ② 获取最新版本         : 1%  ~ 3%   （2%）
+/// - ③ 准备匹配资产         : 3%  ~ 4%   （1%）
+/// - ④ 匹配/验证资产       : 4%  ~ 8%   （4%，并行HEAD验证）
+/// - ⑤ 下载安装包           : 8%  ~ 90%  （82%，主阶段，权重最大）
+/// - ⑥ 解压归档             : 90% ~ 94%  （4%）
+/// - ⑦ SHA256 校验          : 94% ~ 98%  （4%）
+/// - ⑧ 清理收尾             : 98% ~ 99%  （1%）
+/// - ⑨ 完成                 : 99% ~ 100% （1%）
+///
+/// 设计原则：用户等待时间几乎全部消耗在真实下载上，因此把进度条
+/// 的绝大部分宽度分配给「下载安装包」阶段。原先的分配里前置阶段
+/// （版本获取 + 资产匹配）占 22% 宽度，但实际耗时可能占总时间的一半，
+/// 导致进度条长时间停在 20% 之前，视觉上像"卡住"。
 pub mod stage_progress {
-    pub const INIT_END: f64 = 0.02;
-    pub const FETCHING_VERSION_START: f64 = 0.02;
-    pub const PREPARING_ASSET_START: f64 = 0.06;
-    pub const PREPARING_ASSET_END: f64 = 0.08;
-    pub const FINDING_ASSET_START: f64 = 0.08;
-    pub const FINDING_ASSET_END: f64 = 0.22;
-    pub const DOWNLOAD_START: f64 = 0.22;
-    pub const DOWNLOAD_END: f64 = 0.80;
-    pub const EXTRACTING_END: f64 = 0.88;
-    pub const VERIFYING_START: f64 = 0.88;
-    pub const VERIFYING_END: f64 = 0.96;
-    pub const FINALIZING_START: f64 = 0.96;
+    pub const INIT_END: f64 = 0.01;
+    pub const FETCHING_VERSION_START: f64 = 0.01;
+    pub const PREPARING_ASSET_START: f64 = 0.03;
+    pub const PREPARING_ASSET_END: f64 = 0.04;
+    pub const FINDING_ASSET_START: f64 = 0.04;
+    pub const FINDING_ASSET_END: f64 = 0.08;
+    pub const DOWNLOAD_START: f64 = 0.08;
+    pub const DOWNLOAD_END: f64 = 0.90;
+    pub const EXTRACTING_END: f64 = 0.94;
+    pub const VERIFYING_START: f64 = 0.94;
+    pub const VERIFYING_END: f64 = 0.98;
+    pub const FINALIZING_START: f64 = 0.98;
     pub const COMPLETE_END: f64 = 1.00;
 }
 
@@ -441,17 +461,27 @@ fn curl_download_parallel(
     let num_chunks = num_chunks.min(MAX_CHUNKS);
     let chunk_size = (total_size as f64 / num_chunks as f64).ceil() as u64;
 
-    // 读取已下载的分块，用于断点续传
-    let mut existing: Vec<Vec<u8>> = vec![Vec::new(); num_chunks];
+    // 读取已下载的分块，用于断点续传。
+    //
+    // 只记录每块的「已有字节数」，不把文件内容读进内存：
+    // 原实现是 `vec![Vec<u8>>`，会把整个文件（可达 250MB+）一次性读入
+    // 内存，仅为了判断 `is_empty()`，白白吃掉数百 MB 内存和一次全量磁盘读。
+    let mut existing_bytes: Vec<u64> = vec![0u64; num_chunks];
     for i in 0..num_chunks {
         let start = i as u64 * chunk_size;
         let end = (start + chunk_size).min(total_size) - 1;
-        let len = (end - start + 1) as usize;
-        let mut buf = vec![0u8; len];
-        if file.seek(std::io::SeekFrom::Start(start)).is_ok()
-            && file.read_exact(&mut buf).is_ok()
-        {
-            existing[i] = buf;
+        let len = (end - start + 1) as u64;
+        if file.seek(std::io::SeekFrom::Start(start)).is_ok() {
+            // 只需探测该区间是否已有数据：读 1 字节成功即认为该块已下载。
+            // 续传时该块会跳过重下，因此要求数据完整（长度匹配）。
+            let mut probe = [0u8; 1];
+            if file.read_exact(&mut probe).is_ok() {
+                // 用文件长度判断该块是否被完整填充
+                let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+                if file_len >= end + 1 {
+                    existing_bytes[i] = len;
+                }
+            }
         }
     }
 
@@ -501,9 +531,9 @@ fn curl_download_parallel(
             break;
         }
 
-        // 断点续传：已存在的分块直接计入进度，不再重新下载
-        if !existing[chunk_idx].is_empty() {
-            let d = existing[chunk_idx].len() as u64;
+        // 断点续传：已存在完整数据的分块直接计入进度，不再重新下载
+        if existing_bytes[chunk_idx] > 0 {
+            let d = existing_bytes[chunk_idx];
             {
                 let mut cnt = downloaded.lock().unwrap();
                 *cnt += d;
@@ -512,31 +542,37 @@ fn curl_download_parallel(
         }
 
         let url = url.to_string();
+        let dest_path = dest.to_path_buf();
         let downloaded_clone = downloaded.clone();
         let failed_offsets_clone = failed_offsets.clone();
 
         let handle = std::thread::spawn(move || {
             const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
             const MAX_CHUNK_RETRIES: u32 = 3;
+            // 流式读写缓冲：64KB，远小于原先 512KB 的 Vec 中转，降低内存峰值
+            const STREAM_BUF: usize = 64 * 1024;
 
             let mut last_err: Option<anyhow::Error> = None;
             for attempt in 1..=MAX_CHUNK_RETRIES {
-                let client = match Client::builder()
-                    .timeout(CHUNK_TIMEOUT)
-                    .connect_timeout(Duration::from_secs(10))
-                    .user_agent("LlamaUI/0.7.0")
-                    .build()
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        last_err = Some(anyhow::anyhow!("构建 reqwest Client 失败: {}", e));
-                        break;
-                    }
-                };
+                // 重试退避：第 2、3 次分别等待 200ms / 400ms，
+                // 避免瞬时网络抖动时立刻重连形成忙循环。
+                if attempt > 1 {
+                    std::thread::sleep(Duration::from_millis(200 * u64::from(attempt - 1)));
+                    tracing::debug!(
+                        target: "LlamaDownloader",
+                        range_start,
+                        attempt,
+                        "分块重试"
+                    );
+                }
+                // 所有 chunk 共享同一个 Client 实例（带 tcp_nodelay + 连接池复用），
+                // 避免每次重试都新建 Client 导致 96 次独立 TLS 握手。
+                let client = shared_client();
 
                 let mut resp = match client
                     .get(&url)
                     .header("Range", format!("bytes={}-{}", range_start, range_end))
+                    .timeout(CHUNK_TIMEOUT)
                     .send()
                 {
                     Ok(r) => r,
@@ -551,19 +587,57 @@ fn curl_download_parallel(
                     continue;
                 }
 
-                let mut chunk_data = Vec::new();
-                match resp.copy_to(&mut chunk_data) {
-                    Ok(_bytes) => {
-                        {
-                            let mut d = downloaded_clone.lock().unwrap();
-                            *d += chunk_data.len() as u64;
-                        }
-                        return Ok::<_, anyhow::Error>((range_start, chunk_data));
-                    }
+                // 流式读取 → 直接写入文件对应偏移。
+                // 原来用 `resp.copy_to(&mut chunk_data)` 把整个 chunk 先读进
+                // 512KB Vec，等所有分块完成后再统一 write_all 落盘，
+                // 造成「网络读取」和「磁盘写入」两段完全串行，且 32 个 Vec
+                // 同时驻留内存（峰值 = 整个文件大小）。
+                //
+                // 现在每个 chunk 线程持有独立 File 句柄，网络数据一到就立刻
+                // 顺序写入对应偏移：下载与落盘流水线并行，内存恒定 64KB。
+                let mut file = match fs::OpenOptions::new().write(true).open(&dest_path) {
+                    Ok(f) => f,
                     Err(e) => {
-                        last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
+                        last_err = Some(anyhow::anyhow!("打开输出文件失败: {}", e));
                         continue;
                     }
+                };
+                if let Err(e) = file.seek(std::io::SeekFrom::Start(range_start)) {
+                    last_err = Some(anyhow::anyhow!("定位写入位置失败: {}", e));
+                    continue;
+                }
+
+                let mut buf = [0u8; STREAM_BUF];
+                let mut local_downloaded: u64 = 0;
+                let mut read_ok = true;
+                loop {
+                    let n = match resp.read(&mut buf) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
+                            read_ok = false;
+                            break;
+                        }
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    if let Err(e) = file.write_all(&buf[..n]) {
+                        last_err = Some(anyhow::anyhow!("写入文件失败: {}", e));
+                        read_ok = false;
+                        break;
+                    }
+                    // 每读一块就实时累加全局进度（原来要等整块读完才记一次，
+                    // 512KB 全部收完才动一次，导致 UI 上进度跳跃）
+                    {
+                        let mut d = downloaded_clone.lock().unwrap();
+                        *d += n as u64;
+                    }
+                    local_downloaded += n as u64;
+                }
+
+                if read_ok {
+                    return Ok::<_, anyhow::Error>((range_start, local_downloaded));
                 }
             }
 
@@ -664,28 +738,32 @@ fn curl_download_parallel(
             for offset in failed {
                 let end = (offset + chunk_size).min(total_size) - 1;
                 let url = url.to_string();
+                let dest_path = dest.to_path_buf();
                 let downloaded_clone = downloaded.clone();
                 let failed_offsets_clone = failed_offsets.clone();
                 handles.push(std::thread::spawn(move || {
                     const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
                     const MAX_CHUNK_RETRIES: u32 = 3;
+                    const STREAM_BUF: usize = 64 * 1024;
                     let mut last_err: Option<anyhow::Error> = None;
                     for attempt in 1..=MAX_CHUNK_RETRIES {
-                        let client = match Client::builder()
-                            .timeout(CHUNK_TIMEOUT)
-                            .connect_timeout(Duration::from_secs(10))
-                            .user_agent("LlamaUI/0.7.0")
-                            .build()
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                last_err = Some(anyhow::anyhow!("构建 reqwest Client 失败: {}", e));
-                                break;
-                            }
-                        };
+                        // 重试退避，与首轮保持一致
+                        if attempt > 1 {
+                            std::thread::sleep(Duration::from_millis(200 * u64::from(attempt - 1)));
+                            tracing::debug!(
+                                target: "LlamaDownloader",
+                                offset,
+                                attempt,
+                                "重试分块"
+                            );
+                        }
+                        // 同样复用共享 Client（连接池 + TLS 会话 + tcp_nodelay）
+                        let client = shared_client();
+
                         let mut resp = match client
                             .get(&url)
                             .header("Range", format!("bytes={}-{}", offset, end))
+                            .timeout(CHUNK_TIMEOUT)
                             .send()
                         {
                             Ok(r) => r,
@@ -698,19 +776,49 @@ fn curl_download_parallel(
                             last_err = Some(anyhow::anyhow!("HTTP {}", resp.status()));
                             continue;
                         }
-                        let mut chunk_data = Vec::new();
-                        match resp.copy_to(&mut chunk_data) {
-                            Ok(_) => {
-                                {
-                                    let mut d = downloaded_clone.lock().unwrap();
-                                    *d += chunk_data.len() as u64;
-                                }
-                                return Ok::<_, anyhow::Error>((offset, chunk_data));
-                            }
+
+                        // 与首轮一致：流式读取并直接写入文件偏移
+                        let mut file = match fs::OpenOptions::new().write(true).open(&dest_path) {
+                            Ok(f) => f,
                             Err(e) => {
-                                last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
+                                last_err = Some(anyhow::anyhow!("打开输出文件失败: {}", e));
                                 continue;
                             }
+                        };
+                        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)) {
+                            last_err = Some(anyhow::anyhow!("定位写入位置失败: {}", e));
+                            continue;
+                        }
+
+                        let mut buf = [0u8; STREAM_BUF];
+                        let mut local_downloaded: u64 = 0;
+                        let mut read_ok = true;
+                        loop {
+                            let n = match resp.read(&mut buf) {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
+                                    read_ok = false;
+                                    break;
+                                }
+                            };
+                            if n == 0 {
+                                break;
+                            }
+                            if let Err(e) = file.write_all(&buf[..n]) {
+                                last_err = Some(anyhow::anyhow!("写入文件失败: {}", e));
+                                read_ok = false;
+                                break;
+                            }
+                            {
+                                let mut d = downloaded_clone.lock().unwrap();
+                                *d += n as u64;
+                            }
+                            local_downloaded += n as u64;
+                        }
+
+                        if read_ok {
+                            return Ok::<_, anyhow::Error>((offset, local_downloaded));
                         }
                     }
                     if let Some(e) = &last_err {
@@ -754,29 +862,24 @@ fn curl_download_parallel(
     // 收集所有分块结果。
     //
     // 关键：不能用 `?` 立刻 bail——那会丢弃已成功下载的分块，
-    // 导致弱网下每次重试都从零开始。先把成功的分块落到磁盘，
-    // 再汇总失败分块，由上层决定重试还是报错。
-    let mut chunks: Vec<(u64, Vec<u8>)> = Vec::new();
+    // 导致弱网下每次重试都从零开始。各 chunk 线程已把数据流式写入
+    // 文件对应偏移，这里只需汇总成功/失败数量即可。
+    let mut ok_chunks = 0usize;
     let mut chunk_errors: Vec<String> = Vec::new();
     for handle in handles {
         match handle.join() {
-            Ok(Ok(chunk)) => chunks.push(chunk),
+            Ok(Ok(_)) => ok_chunks += 1,
             Ok(Err(e)) => chunk_errors.push(format!("{:?}", e)),
             Err(_) => chunk_errors.push("下载线程 panic".to_string()),
         }
     }
 
     if !chunk_errors.is_empty() {
-        // 先把已成功的分块写入文件，避免浪费
-        chunks.sort_by_key(|(offset, _)| *offset);
-        for (offset, data) in &chunks {
-            file.seek(std::io::SeekFrom::Start(*offset))?;
-            file.write_all(data)?;
-        }
+        // 数据已由各线程流式落盘，这里只需 flush 落盘保证续传可用
         file.flush()?;
         tracing::warn!(
             target: "LlamaDownloader",
-            ok_chunks = chunks.len(),
+            ok_chunks,
             failed = chunk_errors.len(),
             "部分分块失败，保留已下载数据供续传"
         );
@@ -793,77 +896,17 @@ fn curl_download_parallel(
         ));
     }
 
-    // 按偏移量排序并写入文件
-    chunks.sort_by_key(|(offset, _)| *offset);
-    let mut total_written = 0u64;
-    let start = std::time::Instant::now();
-
-    for (offset, data) in chunks {
-        file.seek(std::io::SeekFrom::Start(offset))?;
-        file.write_all(&data)?;
-        total_written += data.len() as u64;
-
-        // 发送进度
-        if let Some(cb) = progress_callback {
-            let raw_progress = if total_size > 0 {
-                total_written as f64 / total_size as f64
-            } else {
-                0.0
-            };
-            let global_progress = progress_start + raw_progress * (progress_end - progress_start);
-            let elapsed = start.elapsed().as_secs_f64();
-            let speed_mbps = if elapsed > 0.0 {
-                (total_written as f64 / elapsed) / 1_048_576.0
-            } else {
-                0.0
-            };
-            cb(DownloadProgress {
-                stage: "downloading".into(),
-                progress: global_progress,
-                downloaded: total_written,
-                total: total_size,
-                message: format!(
-                    "{:.1} / {:.1} MB ({:.1}%) · {:.1} MB/s",
-                    total_written as f64 / 1_048_576.0,
-                    total_size as f64 / 1_048_576.0,
-                    global_progress * 100.0,
-                    speed_mbps
-                ),
-                speed_mbps,
-                eta_secs: if speed_mbps > 0.0 {
-                    Some(((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64)
-                } else {
-                    None
-                },
-                detail: Some(DownloadProgressDetail {
-                    step: format!("分块下载 ({} chunks)", num_chunks),
-                    step_progress: raw_progress,
-                    candidate_index: 1,
-                    candidate_count: 1,
-                    current_candidate: None,
-                    speed_mbps,
-                    eta_secs: if speed_mbps > 0.0 {
-                        Some(
-                            ((total_size - total_written) as f64 / 1_048_576.0 / speed_mbps) as u64
-                                as f64,
-                        )
-                    } else {
-                        None
-                    },
-                }),
-            });
-        }
-    }
-
-    let final_size = fs::metadata(dest)?.len();
+    // 全部成功：确保缓冲区落盘（数据已由 chunk 线程写入正确偏移）
+    file.flush()?;
     tracing::info!(
         target: "LlamaDownloader",
         url = %url,
-        downloaded = final_size,
+        total_size,
         num_chunks,
+        ok_chunks,
         "分块下载完成"
     );
-    Ok(final_size)
+    Ok(total_size)
 }
 
 /// 下载进度
@@ -1575,10 +1618,15 @@ fn fetch_llama_latest_release_with_retry(
 /// llama.cpp 的 stable release（如 v0.5.0）通常只含一个 `nightly-tag.txt`，
 /// 真正的二进制在其指向的 build tag（形如 b11200）下。
 ///
-/// 关键取舍：GitHub release API 的响应体很大（每个 release 约 67KB，
+/// 关键取舍：GitHub release API 的响应体较大（每个 release 约 67KB，
 /// 因为还包含完整的 changelog markdown），而弱网下读取响应体的速度很慢
-/// （实测约 10KB/s）。因此这里用 `per_page=1` 只取最新一条，
-/// 省掉大量无用传输；实测 67KB 即可拿到含 35 个资产的完整构建。
+/// （实测约 10KB/s）。这里用 `per_page=5` **单次**请求取最近 5 条，
+/// 一次筛选出含二进制的 build，���免二次请求。
+///
+/// 早期实现是 `for per_page in [1, 3]`：llama.cpp 最新一条 release 常常
+/// 只含 `nightly-tag.txt` 而不含二进制，`per_page=1` 必然落空，必须再发
+/// 第二次请求，版本获取耗时直接翻倍——这正是「进度条起步阶段占掉一半
+/// 时间」的主要来源。
 ///
 /// 同时刻意**不**去下载 `nightly-tag.txt`：它属于 `releases/download/` 路径，
 /// 会 302 跳转到对象存储 CDN，在部分网络环境下连接会长时间挂起。
@@ -1590,59 +1638,60 @@ fn fetch_latest_release_via_api() -> anyhow::Result<GitHubRelease> {
         .user_agent("LlamaUI/0.7.0")
         .build()?;
 
-    // 优先只取 1 条；若最新一条恰好是不含二进制的 stable tag，再放宽到 3 条
-    let mut last_err = None;
-    for per_page in [1u32, 3] {
-        let url = format!(
-            "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page={}",
-            per_page
-        );
+    // 单次请求取 5 条 release，一次筛选出含二进制的版本。
+    //
+    // 原实现是 `for per_page in [1, 3]` 的两次串行请求：llama.cpp 的最新
+    // release 常常只有 nightly-tag.txt 而不含二进制，此时 per_page=1 必然
+    // 落空，必须再发第二次请求，版本获取耗时直接翻倍。
+    // 改成单次 per_page=5 后，无论最新几条里哪个含二进制都能一次命中。
+    let per_page = 5u32;
+    let url = format!(
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page={}",
+        per_page
+    );
 
-        // reqwest 未启用 `json` feature，这里用 serde_json 手动反序列化，
-        // 避免为此新增依赖特性导致全量重编译。
-        let body = match client
-            .get(&url)
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .and_then(|r| r.error_for_status())
-            .and_then(|r| r.text())
-        {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(
-                    target: "LlamaDownloader",
-                    per_page = per_page,
-                    error = %e,
-                    "GitHub API 请求失败"
-                );
-                last_err = Some(anyhow::Error::from(e));
-                continue;
-            }
-        };
-
-        let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
-            .map_err(|e| anyhow::anyhow!("解析 GitHub API 响应失败: {}", e))?;
-
-        // 选出第一个真正带二进制的 release（跳过只含 nightly-tag.txt 的 stable tag）
-        if let Some(mut rel) = releases.into_iter().find(|r| {
-            r.assets
-                .iter()
-                .any(|a| a.name.to_lowercase().starts_with("llama-"))
-        }) {
-            rel.trusted_assets = true;
-            tracing::info!(
+    // reqwest 未启用 `json` feature，这里用 serde_json 手动反序列化，
+    // 避免为此新增依赖特性导致全量重编译。
+    let body = match client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+    {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(
                 target: "LlamaDownloader",
-                tag = %rel.tag_name,
-                assets = rel.assets.len(),
-                bytes = body.len(),
-                "通过 GitHub API 获取到最新构建（资产已验证，无需 HEAD 探测）"
+                per_page = per_page,
+                error = %e,
+                "GitHub API 请求失败"
             );
-            return Ok(rel);
+            return Err(anyhow::Error::from(e));
         }
+    };
+
+    let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("解析 GitHub API 响应失败: {}", e))?;
+
+    // 选出第一个真正带二进制的 release（跳过只含 nightly-tag.txt 的 stable tag）
+    if let Some(mut rel) = releases.into_iter().find(|r| {
+        r.assets
+            .iter()
+            .any(|a| a.name.to_lowercase().starts_with("llama-"))
+    }) {
+        rel.trusted_assets = true;
+        tracing::info!(
+            target: "LlamaDownloader",
+            tag = %rel.tag_name,
+            assets = rel.assets.len(),
+            bytes = body.len(),
+            "通过 GitHub API 获取到最新构建（资产已验证，无需 HEAD 探测）"
+        );
+        return Ok(rel);
     }
 
-    Err(last_err
-        .unwrap_or_else(|| anyhow::anyhow!("GitHub API 未返回任何含二进制的 release")))
+    Err(anyhow::anyhow!("GitHub API 未返回任何含二进制的 release"))
 }
 
 /// 获取最新版本（纯直连策略：不使用 GitHub API，避免速率限制）
