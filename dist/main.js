@@ -1385,9 +1385,7 @@ function handleUpdateProgress(progress) {
   }
 
   // 统一格式：阶段 · 已用 Xs · 速度 · 剩余
-  const parts = [];
-  const stageName = progress.stage_name || progress.stage || '下载中';
-  parts.push(stageName);
+  const parts = [progress.message || progress.stage_name || progress.stage || '下载中'];
 
   if (progress.elapsed_ms != null) {
     parts.push('已用 ' + (progress.elapsed_ms / 1000).toFixed(1) + 's');
@@ -1430,7 +1428,8 @@ function handleUpdateState(state) {
 
   if (isDownloading || hasRecentProgress) {
     el.style.display = 'block';
-    el.textContent = state.message || '';
+    // 不修改 el.textContent，避免与 updateProgressLabel 冲突
+    // 由 handleUpdateProgress() 统一管理 label 内容
   } else {
     // 完成/失败/取消/无更新：立即隐藏面板
     el.style.display = 'none';
@@ -1439,6 +1438,16 @@ function handleUpdateState(state) {
   // 下载完成/失败/取消：立即隐藏，避免残留
   if (state.Completed || state.Failed || state.Cancelled) {
     el.style.display = 'none';
+  }
+
+  // 同步更新 label，确保状态文字与进度信息一致
+  const label = document.getElementById('updateProgressLabel');
+  if (label && isDownloading) {
+    const parts = [state.message || state.stage || '下载中'];
+    if (state.elapsed_secs != null) parts.push('已用 ' + state.elapsed_secs + 's');
+    if (typeof state.speed_mbps === 'number' && state.speed_mbps > 0) parts.push(formatSpeed(state.speed_mbps));
+    if (typeof state.eta_secs === 'number' && state.eta_secs > 0) parts.push('剩余 ' + formatETA(state.eta_secs));
+    label.textContent = parts.join(' · ');
   }
 }
 
