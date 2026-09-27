@@ -123,6 +123,53 @@ pub fn cancel_detection(state: State<'_, AppState>) -> bool {
     true
 }
 
+/// 从 `llama-server --version` 的输出中提取版本号。
+///
+/// 优先读取 `build N`，并统一显示为下载标签使用的 `bN` 格式。
+/// 例如：`version: 0.4.0-dev (build 10809, ...)` → `b10809`。
+/// 没有 build 信息时，再回退到普通版本号或原始输出。
+fn parse_llama_version(text: &str) -> Option<String> {
+    // llama.cpp 的开发版通常同时包含语义版本和 build 编号。
+    // 这里的 build 编号与下载页面显示的 bNNNN 标签对应，优先使用它。
+    if let Some(caps) = Regex::new(r"(?i)\bbuild\s*[:=]?\s*(b?[0-9]+)\b")
+        .ok()
+        .and_then(|re| re.captures(text))
+    {
+        let value = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        if value.starts_with('b') || value.starts_with('B') {
+            return Some(format!("b{}", &value[1..]));
+        }
+        return Some(format!("b{}", value));
+    }
+
+    // 兼容 `llama-server b1234` / `llama.cpp 1234` 形式的输出。
+    if let Some(caps) = Regex::new(r"(?i)(?:llama-server|llama\.cpp)[^0-9A-Za-z]*([0-9]+|b[0-9]+)")
+        .ok()
+        .and_then(|re| re.captures(text))
+    {
+        return caps.get(1).map(|m| m.as_str()).map(|value| {
+            if value.starts_with('b') || value.starts_with('B') {
+                format!("b{}", &value[1..])
+            } else {
+                value.to_string()
+            }
+        });
+    }
+
+    // 兼容只有 `version: 0.4.0` 或 `version = 1.2.3` 的输出。
+    if let Some(caps) = Regex::new(r"(?i)\b(?:version|v)\s*[:=]?\s*(b?[0-9]+(?:\.[0-9]+)*)")
+        .ok()
+        .and_then(|re| re.captures(text))
+    {
+        return caps.get(1).map(|m| m.as_str()).map(str::to_string);
+    }
+
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
 /// 读取指定 llama-server 可执行文件的版本。
 #[tauri::command]
 pub async fn get_llama_version(path: String) -> Result<String, String> {
@@ -139,23 +186,7 @@ pub async fn get_llama_version(path: String) -> Result<String, String> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    if let Some(caps) = Regex::new(r"(?i)(?:llama-server|llama\.cpp)[^0-9A-Za-z]*([0-9]+|b[0-9]+)")
-        .ok()
-        .and_then(|re| re.captures(&text))
-    {
-        return Ok(caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string());
-    }
-    if let Some(caps) = Regex::new(r"(?i)\b(?:version|v)\s*[:=]?\s*(b?[0-9]+(?:\.[0-9]+)*)")
-        .ok()
-        .and_then(|re| re.captures(&text))
-    {
-        return Ok(caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string());
-    }
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.to_string())
-        .ok_or_else(|| "未解析到版本".to_string())
+    parse_llama_version(&text).ok_or_else(|| "未解析到版本".to_string())
 }
 
 /// 用户手动选择模型目录后，校验其合规性。
@@ -239,7 +270,10 @@ pub fn check_models_dir(path: String) -> ModelsDirCheck {
                 "已找到 {} 个 .gguf 模型文件{}",
                 gguf_count,
                 if subdir_with_gguf > 0 {
-                    format!("（另发现 {} 个子目录也含 .gguf，建议进入具体模型目录确认）", subdir_with_gguf)
+                    format!(
+                        "（另发现 {} 个子目录也含 .gguf，建议进入具体模型目录确认）",
+                        subdir_with_gguf
+                    )
                 } else {
                     String::new()
                 }
@@ -270,10 +304,31 @@ pub fn check_models_dir(path: String) -> ModelsDirCheck {
 
 #[cfg(test)]
 mod tests {
-    //! 覆盖：取消标志管理、`check_models_dir` 在 tmp 目录上的行为。
+    //! 覆盖：版本解析、取消标志管理、`check_models_dir` 在 tmp 目录上的行为。
     use super::*;
     use crate::detect::CancelFlag;
     use std::sync::{Arc, Mutex};
+
+    /// 验证开发版输出优先使用 build 编号，格式与下载完成后的 bNNNN 一致。
+    #[test]
+    fn parse_llama_version_prefers_build_number() {
+        let text = "version: 0.4.0-dev (build 10809, commit 5266f24da) built with Clang";
+        assert_eq!(parse_llama_version(text).as_deref(), Some("b10809"));
+    }
+
+    /// 验证只有语义版本时仍能正常解析。
+    #[test]
+    fn parse_llama_version_falls_back_to_semver() {
+        let text = "version: 0.4.0";
+        assert_eq!(parse_llama_version(text).as_deref(), Some("0.4.0"));
+    }
+
+    /// 验证已经带 b 前缀的 llama-server 输出不会重复添加前缀。
+    #[test]
+    fn parse_llama_version_normalizes_tag_prefix() {
+        let text = "llama-server b1609";
+        assert_eq!(parse_llama_version(text).as_deref(), Some("b1609"));
+    }
 
     /// 验证 `CancelFlag` 通过 `Arc::ptr_eq` 区分不同实例。
     /// 防止后续重构时错误地用 `Arc::eq`（比较值）导致并发检测互相覆盖。

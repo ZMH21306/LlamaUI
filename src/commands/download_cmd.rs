@@ -23,14 +23,12 @@ pub async fn download_llama_server(
     state.download_cancel.store(false, Ordering::Relaxed);
 
     // 确定安装目录
-    let dir = install_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".llamaui")
-                .join("llama-cpp")
-        });
+    let dir = install_dir.map(PathBuf::from).unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".llamaui")
+            .join("llama-cpp")
+    });
 
     // 确定 GPU 后端
     let gpu_backend = backend
@@ -45,9 +43,12 @@ pub async fn download_llama_server(
     );
 
     // 发送开始状态 + 初始进度事件
-    let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Started {
-        backend: gpu_backend.as_str().to_string(),
-    });
+    let _ = app.emit(
+        EVT_DOWNLOAD_STATE,
+        DownloadState::Started {
+            backend: gpu_backend.as_str().to_string(),
+        },
+    );
     let _ = app.emit(
         "download-progress",
         DownloadProgress {
@@ -91,9 +92,10 @@ pub async fn download_llama_server(
         let msg = format!("下载任务执行失败: {}", e);
         tracing::error!(target: "DownloadCmd", error = %e, "spawn_blocking 失败");
         // 发送失败状态
-        let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Failed {
-            error: msg.clone(),
-        });
+        let _ = app.emit(
+            EVT_DOWNLOAD_STATE,
+            DownloadState::Failed { error: msg.clone() },
+        );
         msg
     })?
     .map_err(|e| {
@@ -103,20 +105,24 @@ pub async fn download_llama_server(
         if msg.contains("取消") {
             let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelled);
         } else {
-            let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Failed {
-                error: msg.clone(),
-            });
+            let _ = app.emit(
+                EVT_DOWNLOAD_STATE,
+                DownloadState::Failed { error: msg.clone() },
+            );
         }
         msg
     })?;
 
     // 发送完成状态
-    let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Completed {
-        path: result.path.clone(),
-        file_size: result.file_size,
-        sha256: result.sha256.clone(),
-        elapsed_ms: result.elapsed_ms,
-    });
+    let _ = app.emit(
+        EVT_DOWNLOAD_STATE,
+        DownloadState::Completed {
+            path: result.path.clone(),
+            file_size: result.file_size,
+            sha256: result.sha256.clone(),
+            elapsed_ms: result.elapsed_ms,
+        },
+    );
 
     tracing::info!(
         target: "DownloadCmd",
@@ -138,7 +144,7 @@ pub async fn cancel_download_llama_server(
     state.download_cancel.store(true, Ordering::Relaxed);
     tracing::info!(target: "DownloadCmd", "收到取消下载请求");
     let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelling);
-        Ok(())
+    Ok(())
 }
 
 /// 检测 GPU 后端
