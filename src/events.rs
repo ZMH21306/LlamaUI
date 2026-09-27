@@ -50,11 +50,37 @@ pub enum ServerStatus {
 /// 下载状态事件（llama-server 下载流程）
 pub const EVT_DOWNLOAD_STATE: &str = "download-state";
 
+/// 下载日志条目（用于前端日志显示）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadLogEntry {
+    /// 日志文本
+    pub message: String,
+    /// 日志级别（"info", "warn", "error"）
+    #[serde(default)]
+    pub level: String,
+    /// 当前阶段（如 "initializing", "fetching_version", "downloading" 等）
+    #[serde(default)]
+    pub stage: String,
+    /// 是否自动滚动到底部
+    #[serde(default = "default_true")]
+    pub auto_scroll: bool,
+}
+
+fn default_true() -> bool { true }
+
 /// 下载状态变更事件（llama-server 下载流程）
+/// 
+/// **设计要点**：
+/// - 所有状态变更通过此事件通知前端，前端根据此状态机驱动 UI
+/// - `Running` 状态下每次进度更新都会附带一个 `progress` 事件（见 `EVT_DOWNLOAD_PROGRESS`）
+/// - `Failed` 和 `Cancelled` 是终态，触发后不再发射任何状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DownloadState {
     /// 开始下载
-    Started { backend: String },
+    Started { 
+        backend: String,
+        log_message: Option<String>,
+    },
     /// 下载进行中
     Running,
     /// 正在取消
@@ -67,10 +93,27 @@ pub enum DownloadState {
         file_size: u64,
         sha256: String,
         elapsed_ms: u64,
+        log_message: Option<String>,
     },
     /// 下载失败
-    Failed { error: String },
+    Failed { 
+        error: String,
+        log_entry: Option<DownloadLogEntry>,
+    },
 }
+
+impl DownloadState {
+    /// 是否为终态（不会再接收任何状态事件）
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, DownloadState::Cancelled | DownloadState::Completed { .. } | DownloadState::Failed { .. })
+    }
+}
+
+/// 下载进度事件（实时推送给前端）
+/// 
+/// 此事件与 `DownloadState::Running` 配合使用，在每次进度更新时发射。
+/// 前端应在收到 `DownloadState::Running` 后开始监听此事件。
+pub const EVT_DOWNLOAD_PROGRESS: &str = "download-progress";
 
 // ============================================================
 // 更新相关事件
