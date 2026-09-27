@@ -1428,8 +1428,6 @@ function handleUpdateState(state) {
 
   if (isDownloading || hasRecentProgress) {
     el.style.display = 'block';
-    // 不修改 el.textContent，避免与 updateProgressLabel 冲突
-    // 由 handleUpdateProgress() 统一管理 label 内容
   } else {
     // 完成/失败/取消/无更新：立即隐藏面板
     el.style.display = 'none';
@@ -1440,15 +1438,7 @@ function handleUpdateState(state) {
     el.style.display = 'none';
   }
 
-  // 同步更新 label，确保状态文字与进度信息一致
-  const label = document.getElementById('updateProgressLabel');
-  if (label && isDownloading) {
-    const parts = [state.message || state.stage || '下载中'];
-    if (state.elapsed_secs != null) parts.push('已用 ' + state.elapsed_secs + 's');
-    if (typeof state.speed_mbps === 'number' && state.speed_mbps > 0) parts.push(formatSpeed(state.speed_mbps));
-    if (typeof state.eta_secs === 'number' && state.eta_secs > 0) parts.push('剩余 ' + formatETA(state.eta_secs));
-    label.textContent = parts.join(' · ');
-  }
+  // 仅由 handleUpdateProgress() 统一管理 label 内容，避免多事件源竞争
 }
 
 async function checkUpdates() {
@@ -1460,7 +1450,13 @@ async function checkUpdates() {
       const toast = document.getElementById('updateToast');
       if (toast) {
         toast.style.display = 'block';
-        toast.textContent = `新版本 ${result.latest_version} 可用，当前 ${result.current_version}`;
+        toast.hidden = false;
+        // 必须写入 label 子元素：toast.textContent = ... 会清空整个子 DOM，
+        // 把 updateProgressLabel / updateProgressBar 一并删除，导致进度 UI 永久丢失
+        const label = document.getElementById('updateProgressLabel');
+        if (label) {
+          label.textContent = `新版本 ${result.latest_version} 可用，当前 ${result.current_version}`;
+        }
       }
     } else {
       console.log('[update] 已是最新版本');
@@ -1477,7 +1473,10 @@ async function checkUpdates() {
 // 隐藏更新面板（调用时机：无更新、检查结束、失败、完成后1秒）
 function hideUpdateToast() {
   const el = document.getElementById('updateToast');
-  if (el) el.style.display = 'none';
+  if (el) {
+    el.style.display = 'none';
+    el.hidden = true;
+  }
 }
 
 async function downloadUpdate(downloadUrl) {
@@ -1901,9 +1900,7 @@ function attachUIListeners() {
     };
     let unlisten = null;
     let stuckTimer = null;
-    let tickTimer = null;
-    // 最近一次进度数据：即使后端长时间无事件，也能据此定时刷新「已用时间」
-    let lastProgressData = null;
+    // 最近一次进度事件时间：用于「长时间无进度」超时检测
     let lastProgressMs = Date.now();
     let isDownloading = true; // 防覆盖标志：cleanup 后为 false，阻止 progress 事件在完成后覆盖按钮文字
 
@@ -1911,50 +1908,45 @@ function attachUIListeners() {
       isDownloading = false;
       if (unlisten) { unlisten(); unlisten = null; }
       if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }
-      if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     }
     function renderProgress(p) {
       if (!isDownloading) return;
-      lastProgressData = p;
       renderProgressImpl(p);
       lastProgressMs = Date.now();
     }
-    // 渲染进度面板（不更新 lastProgressMs，便于 tickTimer 单独重绘已用时间）
+    // 唯一的状态文本构建函数：阶段 · 大小 · 已用 · 速度 · 剩余
+    // 所有写入者（进度事件 / 本地定时器）都必须走这里，保证格式完全一致，不会交替闪烁
+    function buildDownloadStatusText(p) {
+      const stage = (p && p.stage) || 'fetching_version';
+      const stageName = stageMap[stage] || stage;
+      const elapsed = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
+      const parts = [stageName];
+
+      // 大小：已下载 / 总大小
+      if (p && typeof p.downloaded === 'number' && typeof p.total === 'number' && p.total > 0) {
+        parts.push(formatSize(p.downloaded) + ' / ' + formatSize(p.total));
+      }
+      parts.push('已用 ' + elapsed + 's');
+
+      // 速度与剩余时间
+      if (p && p.stage === 'downloading' && typeof p.speed_mbps === 'number' && p.speed_mbps > 0) {
+        parts.push(formatSpeed(p.speed_mbps));
+        if (typeof p.eta_secs === 'number' && p.eta_secs > 0) {
+          parts.push('剩余 ' + formatETA(p.eta_secs));
+        }
+      }
+      return parts.join(' · ');
+    }
+    // 渲染进度面板：唯一写入点，保证提示文本只有一个来源
     function renderProgressImpl(p) {
       if (!isDownloading) return; // 下载结束后不再更新，防止闪烁
       const pct = Math.max(0, Math.min(100, Math.round((p.progress || 0) * 100)));
-      const elapsed = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
-      const stageName = stageMap[p.stage] || p.stage;
       if (panel) {
         panel.hidden = false;
         fill.style.width = pct + '%';
         percent.textContent = pct + '%';
       }
-      // 进度信息只更新进度面板，按钮文字保持不变
-      if (p.stage === 'downloading' && typeof p.speed_mbps === 'number' && p.speed_mbps > 0) {
-        const speedStr = formatSpeed(p.speed_mbps);
-        const etaStr = typeof p.eta_secs === 'number' && p.eta_secs > 0 ? formatETA(p.eta_secs) : '';
-        const sizeStr = typeof p.downloaded === 'number' && typeof p.total === 'number' && p.total > 0
-          ? formatSize(p.downloaded) + ' / ' + formatSize(p.total)
-          : '';
-        const extra = [sizeStr, '已用 ' + elapsed + 's', speedStr, etaStr ? '剩余 ' + etaStr : '']
-          .filter(Boolean)
-          .join(' · ');
-        if (detail) detail.textContent = extra;
-      } else if (detail) {
-        detail.textContent = `${stageName} · 已用 ${elapsed}s`;
-      }
-    }
-    // 记录最后一次进度数据，每 100ms 独立重绘「已用时间」，不依赖后端事件频率
-    function startTickTimer() {
-      if (tickTimer) return;
-      tickTimer = setInterval(() => {
-        if (!isDownloading || !detail) return;
-        const elapsed = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
-        const stage = (lastProgressData && lastProgressData.stage) || 'fetching_version';
-        const stageName = stageMap[stage] || stage;
-        detail.textContent = `${stageName} · 已用 ${elapsed}s`;
-      }, 100);
+      if (detail) detail.textContent = buildDownloadStatusText(p);
     }
     function renderIdle(message) {
       if (!isDownloading) return;
@@ -1971,7 +1963,6 @@ function attachUIListeners() {
     els.downloadLlamaBtn.classList.add('downloading');
     els.downloadLlamaBtn.classList.remove('download-complete', 'download-failed');
     renderIdle('准备下载...');
-    startTickTimer();
     stuckTimer = setInterval(() => {
       if (els.downloadLlamaBtn.disabled && Date.now() - lastProgressMs > STUCK_TIMEOUT_MS) {
         cleanup();
