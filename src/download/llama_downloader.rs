@@ -478,7 +478,7 @@ fn curl_download_parallel(
             if file.read_exact(&mut probe).is_ok() {
                 // 用文件长度判断该块是否被完整填充
                 let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-                if file_len >= end + 1 {
+                if file_len > end {
                     existing_bytes[i] = len;
                 }
             }
@@ -828,7 +828,14 @@ fn curl_download_parallel(
                             error = %e,
                             "重试分块仍失败，标记为失败"
                         );
-                        failed_offsets_clone.lock().unwrap().push(offset);
+                        match failed_offsets_clone.lock() {
+                            Ok(mut guard) => {
+                                guard.push(offset);
+                            }
+                            Err(poisoned) => {
+                                poisoned.into_inner().push(offset);
+                            }
+                        }
                     }
                     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("分块下载未知失败")))
                 }));
@@ -1003,8 +1010,8 @@ pub enum GpuBackend {
 }
 
 impl GpuBackend {
-    /// 从字符串解析
-    pub fn from_str(s: &str) -> Self {
+    /// 从字符串解析 GPU 后端
+    pub fn parse_backend(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "cuda" | "cuda12" | "cuda12_4" | "cuda-12.4" => GpuBackend::Cuda12_4,
             "cuda13" | "cuda13_3" | "cuda-13.3" => GpuBackend::Cuda13_3,
@@ -1477,9 +1484,7 @@ fn smart_find_asset<'a>(
         let url_owned = url.clone();
         std::thread::spawn(move || {
             let result = curl_head(&url_owned);
-            if tx.send((i, result)).is_ok() {
-                return;
-            }
+            if tx.send((i, result)).is_ok() {}
         });
     }
 
@@ -1503,8 +1508,8 @@ fn smart_find_asset<'a>(
                     cb(progress_with(
                         "finding_asset",
                         stage_progress::FINDING_ASSET_END,
-                        candidate_index as u64,
-                        total_candidates as u64,
+                        u64::from(candidate_index),
+                        u64::from(total_candidates),
                         format!(
                             "✅ 候选 {}/{} 可用，选中：{}",
                             candidate_index, total_candidates, candidate_name
@@ -1535,16 +1540,16 @@ fn smart_find_asset<'a>(
                     cb(progress_with(
                         "finding_asset",
                         stage_progress::FINDING_ASSET_START
-                            + (candidate_index as f64 / total_candidates as f64) * asset_range,
-                        candidate_index as u64,
-                        total_candidates as u64,
+                            + (f64::from(candidate_index) / f64::from(total_candidates)) * asset_range,
+                        u64::from(candidate_index),
+                        u64::from(total_candidates),
                         format!(
                             "❌ {}/{} 失败（{}），尝试下一个...",
                             candidate_index, total_candidates, e
                         ),
                         DownloadProgressDetail {
                             step: format!("❌ {}/{} 失败", candidate_index, total_candidates),
-                            step_progress: candidate_index as f64 / total_candidates as f64,
+                            step_progress: f64::from(candidate_index) / f64::from(total_candidates),
                             candidate_index,
                             candidate_count: total_candidates,
                             current_candidate: Some(candidate_name.clone()),
@@ -1569,7 +1574,7 @@ fn smart_find_asset<'a>(
                 "finding_asset",
                 stage_progress::FINDING_ASSET_END,
                 0,
-                total_candidates as u64,
+                u64::from(total_candidates),
                 format!("⚠️ 所有候选验证失败，回退到：{}", asset.name),
                 DownloadProgressDetail {
                     step: format!("⚠️ 回退到：{}", asset.name),
@@ -2478,7 +2483,8 @@ mod tests {
             "不应优先选择捆绑 CUDA runtime 的超大包: {}",
             picked.0.name
         );
-        println!(
+        // 调试输出（仅用于本地验证）
+        eprintln!(
             "tag={} backend={} picked={} ({:.1} MB) in {:?}",
             release.tag_name,
             backend.as_str(),
@@ -2517,15 +2523,15 @@ mod tests {
 
     #[test]
     fn test_gpu_backend_from_str() {
-        assert_eq!(GpuBackend::from_str("cuda"), GpuBackend::Cuda12_4);
-        assert_eq!(GpuBackend::from_str("cuda-12.4"), GpuBackend::Cuda12_4);
-        assert_eq!(GpuBackend::from_str("cuda-13.3"), GpuBackend::Cuda13_3);
-        assert_eq!(GpuBackend::from_str("cuda13"), GpuBackend::Cuda13_3);
-        assert_eq!(GpuBackend::from_str("rocm"), GpuBackend::Rocm);
-        assert_eq!(GpuBackend::from_str("vulkan"), GpuBackend::Vulkan);
-        assert_eq!(GpuBackend::from_str("metal"), GpuBackend::Metal);
-        assert_eq!(GpuBackend::from_str("cpu"), GpuBackend::Cpu);
-        assert_eq!(GpuBackend::from_str("unknown"), GpuBackend::Cpu);
+        assert_eq!(GpuBackend::parse_backend("cuda"), GpuBackend::Cuda12_4);
+        assert_eq!(GpuBackend::parse_backend("cuda-12.4"), GpuBackend::Cuda12_4);
+        assert_eq!(GpuBackend::parse_backend("cuda-13.3"), GpuBackend::Cuda13_3);
+        assert_eq!(GpuBackend::parse_backend("cuda13"), GpuBackend::Cuda13_3);
+        assert_eq!(GpuBackend::parse_backend("rocm"), GpuBackend::Rocm);
+        assert_eq!(GpuBackend::parse_backend("vulkan"), GpuBackend::Vulkan);
+        assert_eq!(GpuBackend::parse_backend("metal"), GpuBackend::Metal);
+        assert_eq!(GpuBackend::parse_backend("cpu"), GpuBackend::Cpu);
+        assert_eq!(GpuBackend::parse_backend("unknown"), GpuBackend::Cpu);
     }
 
     #[test]
