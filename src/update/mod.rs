@@ -58,6 +58,4 @@ pub use check::{
     check_for_updates, cleanup_old_installation, get_platform, is_newer_version, OldInstallation,
     UpdateCheckResult,
 };
-pub use download::download_update;
-pub use error::UpdateError;
 pub use install::install_update;
