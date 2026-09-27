@@ -5,6 +5,8 @@
 //! - CPU 架构检测
 //! - GPU 后端检测（自动选择最合适的 llama.cpp 构建）
 
+#![allow(dead_code)]
+
 /// GPU 后端类型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GpuBackend {

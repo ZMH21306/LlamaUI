@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 安装事务日志文件名
+/// 安装事务日志文件名（兼容外部引用，内部通过 InstallState::state_path 计算）
 pub const STATE_FILE: &str = "install-state.json";
 
 /// 安装事务状态
@@ -95,6 +95,7 @@ pub enum InstallError {
     Io(std::io::Error),
     MissingBinary(String),
     Cancelled,
+    /// 保留以防外部调用者需要构造此错误（当前内部未使用）
     RollbackFailed(String),
 }
 

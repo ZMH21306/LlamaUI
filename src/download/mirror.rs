@@ -9,16 +9,16 @@
 //! - `LLAMAUI_MIRROR`：启用镜像模式 (true/false)
 //! - `LLAMAUI_CUSTOM_MIRROR`：自定义镜像前缀
 
+#![allow(dead_code)]
+
 use std::env;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 
 /// GitHub Releases URL 正则（编译一次）
-#[allow(dead_code)]
 static RELEASE_RE: OnceLock<regex::Regex> = OnceLock::new();
 
-#[allow(dead_code)]
 fn get_release_regex() -> &'static regex::Regex {
     RELEASE_RE.get_or_init(|| {
         regex::Regex::new(
@@ -28,10 +28,8 @@ fn get_release_regex() -> &'static regex::Regex {
 }
 
 /// 成功计数器
-#[allow(dead_code)]
 static SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 失败计数器
-#[allow(dead_code)]
 static FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// 镜像配置
