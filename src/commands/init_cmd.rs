@@ -13,10 +13,7 @@ use super::AppState;
 /// 运行三步初始化流程：环境检查 → 安装检查 → 自动加载。
 /// 每步结果会作为日志组与状态事件发送到前端。
 #[tauri::command]
-pub async fn run_initialization(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn run_initialization(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let cfg = state.config.get();
     crate::init::run_initialization(&app, &cfg).await
 }

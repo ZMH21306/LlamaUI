@@ -107,7 +107,12 @@ fn build_key_dir_roots() -> Vec<PathBuf> {
             roots.push(home.join("llama.cpp").join("build").join("bin"));
             roots.push(home.join("Documents").join("llama.cpp"));
             roots.push(home.join("scoop").join("apps").join("llama.cpp"));
-            roots.push(home.join("scoop").join("apps").join("llama.cpp").join("current"));
+            roots.push(
+                home.join("scoop")
+                    .join("apps")
+                    .join("llama.cpp")
+                    .join("current"),
+            );
             // LlamaUI 默认下载目录：~/.llamaui/llama-cpp（本应用自己下载的安装位置）
             roots.push(home.join(".llamaui").join("llama-cpp"));
         }
