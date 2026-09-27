@@ -7,8 +7,8 @@
 //! 提升了 GPU 检测的性能、可靠性和用户体验。
 
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
@@ -20,7 +20,10 @@ pub enum GpuDetectionError {
     /// 检测超时
     Timeout { tool: String, timeout_secs: u64 },
     /// 系统命令执行失败
-    CommandFailed { tool: String, exit_code: Option<i32> },
+    CommandFailed {
+        tool: String,
+        exit_code: Option<i32>,
+    },
     /// 命令不存在
     CommandNotFound { tool: String },
     /// 系统不支持
@@ -211,19 +214,28 @@ impl CircuitBreaker {
 
     /// 检查是否需要重置状态
     fn should_reset(&self) -> bool {
-        let last_failure = self.last_failure_time.try_lock().map(|g| *g).unwrap_or_else(|_| Instant::now());
+        let last_failure = self
+            .last_failure_time
+            .try_lock()
+            .map(|g| *g)
+            .unwrap_or_else(|_| Instant::now());
         last_failure.elapsed().as_secs() > self.config.reset_timeout_secs
     }
 
     /// 检查是否处于半开状态
     fn is_half_open(&self) -> bool {
-        let last_failure = self.last_failure_time.try_lock().map(|g| *g).unwrap_or_else(|_| Instant::now());
+        let last_failure = self
+            .last_failure_time
+            .try_lock()
+            .map(|g| *g)
+            .unwrap_or_else(|_| Instant::now());
         last_failure.elapsed().as_secs() >= self.config.half_open_timeout_secs
     }
 }
 
 /// 全局断路器实例（使用 OnceLock）
-static NVIDIA_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
+static NVIDIA_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> =
+    std::sync::OnceLock::new();
 static AMD_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
 static APPLE_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
 static ROCM_CIRCUIT_BREAKER: std::sync::OnceLock<Arc<CircuitBreaker>> = std::sync::OnceLock::new();
@@ -357,7 +369,7 @@ pub async fn detect_all_gpus_async() -> Result<Vec<GpuInfo>, GpuDetectionError> 
             let rocm_str = gpu.rocm_version.as_deref().unwrap_or("?");
             let metal_str = gpu.metal_version.as_deref().unwrap_or("?");
             let apple_neuron_str = gpu.apple_neuron_version.as_deref().unwrap_or("?");
-            
+
             tracing::info!(
                 target: "GpuDetect",
                 vendor = %gpu.vendor,
@@ -399,7 +411,10 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
     // 使用断路器保护
     let nvidia_smi_task = async {
         silent_command("nvidia-smi")
-            .args(["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"])
+            .args([
+                "--query-gpu=name,memory.total,driver_version",
+                "--format=csv,noheader,nounits",
+            ])
             .output()
             .await
     };
@@ -419,10 +434,14 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    if lines.is_empty() { return None; }
+    if lines.is_empty() {
+        return None;
+    }
 
     let parts: Vec<&str> = lines[0].split(',').map(|s| s.trim()).collect();
-    if parts.len() < 3 { return None; }
+    if parts.len() < 3 {
+        return None;
+    }
 
     let name = parts[0].to_string();
     let memory: Option<u64> = parts[1].parse().ok();
@@ -432,8 +451,11 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
     let mut issues = Vec::new();
 
     if let Some(ref cuda) = cuda_version {
-        let cuda_major: u32 = cuda.split('.').next()
-            .and_then(|s| s.parse().ok()).unwrap_or(0);
+        let cuda_major: u32 = cuda
+            .split('.')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         if cuda_major < 11 {
             tracing::warn!(target: "GpuDetect", cuda_version = %cuda, "CUDA 版本过旧，llama.cpp 需要 CUDA 11.0+");
             issues.push(GpuIssue {
@@ -480,13 +502,13 @@ async fn detect_nvidia_gpu_async() -> Option<GpuInfo> {
 
 /// 异步检测 CUDA 版本
 async fn detect_cuda_version_async() -> Option<String> {
-    let nvidia_smi_task = async {
-        silent_command("nvidia-smi").output().await
-    };
+    let nvidia_smi_task = async { silent_command("nvidia-smi").output().await };
 
     match nvidia_circuit_breaker().call(nvidia_smi_task).await {
         Ok(output) => {
-            if !output.status.success() { return None; }
+            if !output.status.success() {
+                return None;
+            }
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
                 if line.contains("CUDA Version:") {
@@ -498,7 +520,7 @@ async fn detect_cuda_version_async() -> Option<String> {
                 }
             }
             None
-        },
+        }
         Err(_) => None,
     }
 }
@@ -521,7 +543,9 @@ async fn detect_amd_gpu_async() -> Option<GpuInfo> {
     }
 
     let mut available_backends = vec!["cpu".to_string()];
-    if rocm_version.is_some() { available_backends.push("rocm".to_string()); }
+    if rocm_version.is_some() {
+        available_backends.push("rocm".to_string());
+    }
     available_backends.push("vulkan".to_string());
 
     let recommended = if available_backends.contains(&"rocm".to_string()) {
@@ -531,19 +555,16 @@ async fn detect_amd_gpu_async() -> Option<GpuInfo> {
     };
 
     // 异步执行 lspci 检测
-    let lspci_task = async {
-        silent_command("lspci")
-            .arg("-nn")
-            .output()
-            .await
-    };
+    let lspci_task = async { silent_command("lspci").arg("-nn").output().await };
 
     let output = match amd_circuit_breaker().call(lspci_task).await {
         Ok(output) => output,
         Err(_) => return None,
     };
 
-    if !output.status.success() { return None; }
+    if !output.status.success() {
+        return None;
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
@@ -578,7 +599,9 @@ async fn detect_amd_gpu_async() -> Option<GpuInfo> {
 
 /// 异步检测 ROCm 版本
 async fn detect_rocm_version_async() -> Option<String> {
-    if !cfg!(target_os = "linux") { return None; }
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
 
     tracing::debug!(target: "GpuDetect", "异步检测 ROCm 版本...");
 
@@ -594,13 +617,13 @@ async fn detect_rocm_version_async() -> Option<String> {
     }
 
     // 异步执行 rocminfo
-    let rocminfo_task = async {
-        silent_command("rocminfo").output().await
-    };
+    let rocminfo_task = async { silent_command("rocminfo").output().await };
 
     match rocm_circuit_breaker().call(rocminfo_task).await {
         Ok(output) => {
-            if !output.status.success() { return None; }
+            if !output.status.success() {
+                return None;
+            }
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
                 if let Some(idx) = line.find("HSA Runtime Version:") {
@@ -612,7 +635,7 @@ async fn detect_rocm_version_async() -> Option<String> {
                 }
             }
             None
-        },
+        }
         Err(_) => None,
     }
 }
@@ -709,7 +732,11 @@ async fn detect_apple_silicon_gpu_async() -> Option<GpuInfo> {
     let available_backends = vec!["cpu".to_string(), "metal".to_string()];
 
     Some(GpuInfo {
-        model: if model.is_empty() { "Apple Silicon GPU".to_string() } else { model },
+        model: if model.is_empty() {
+            "Apple Silicon GPU".to_string()
+        } else {
+            model
+        },
         vendor: "Apple Silicon".to_string(),
         memory_mb,
         driver_version,
@@ -748,9 +775,7 @@ pub async fn diagnose_gpu_issues_async() -> Result<Vec<GpuIssue>, GpuDetectionEr
 async fn diagnose_cuda_runtime_async() -> Vec<GpuIssue> {
     let mut issues = Vec::new();
 
-    let nvidia_smi_task = async {
-        silent_command("nvidia-smi").output().await
-    };
+    let nvidia_smi_task = async { silent_command("nvidia-smi").output().await };
 
     match nvidia_circuit_breaker().call(nvidia_smi_task).await {
         Ok(output) => {
@@ -783,7 +808,7 @@ async fn diagnose_cuda_runtime_async() -> Vec<GpuIssue> {
                     auto_fixable: true,
                 });
             }
-        },
+        }
         Err(e) => {
             tracing::warn!(target: "GpuDetect", error = %e, "CUDA 诊断失败");
             issues.push(GpuIssue {
@@ -881,7 +906,10 @@ mod tests {
     #[test]
     fn test_circuit_breaker_creation() {
         let cb = CircuitBreaker::new("test-tool");
-        assert!(matches!(*cb.state.try_lock().unwrap(), CircuitBreakerState::Closed));
+        assert!(matches!(
+            *cb.state.try_lock().unwrap(),
+            CircuitBreakerState::Closed
+        ));
     }
 
     #[test]
@@ -893,7 +921,10 @@ mod tests {
             timeout_secs: 5,
         };
         let cb = CircuitBreaker::with_config("test-tool", config);
-        assert!(matches!(*cb.state.try_lock().unwrap(), CircuitBreakerState::Closed));
+        assert!(matches!(
+            *cb.state.try_lock().unwrap(),
+            CircuitBreakerState::Closed
+        ));
     }
 
     #[tokio::test]
@@ -925,26 +956,28 @@ mod tests {
                 half_open_timeout_secs: 1,
                 reset_timeout_secs: 60,
                 timeout_secs: 1,
-            }
+            },
         );
 
         // 连续失败2次后，断路器应该打开
-        let _ = cb.call(async { 
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            Ok::<(), &str>(())
-        }).await;
-        let _ = cb.call(async { 
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            Ok::<(), &str>(())
-        }).await;
-        
+        let _ = cb
+            .call(async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                Ok::<(), &str>(())
+            })
+            .await;
+        let _ = cb
+            .call(async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                Ok::<(), &str>(())
+            })
+            .await;
+
         // 第三次调用应该快速返回（断路器打开）
         let start = Instant::now();
-        let _ = cb.call(async { 
-            Ok::<(), &str>(())
-        }).await;
+        let _ = cb.call(async { Ok::<(), &str>(()) }).await;
         let elapsed = start.elapsed();
-        
+
         // 应该快速失败（断路器打开时跳过实际执行）
         assert!(elapsed < Duration::from_millis(100));
     }
