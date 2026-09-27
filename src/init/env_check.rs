@@ -83,49 +83,58 @@ pub(super) fn step_env_check(app: &AppHandle, cfg: &AppConfig) -> Result<(), Str
     } else {
         let p = Path::new(&cfg.models_dir);
         if !p.exists() {
-            let msg = format!("模型目录不存在：{}", cfg.models_dir);
-            emit_log_to(app, "system", &msg, Some(STEP_ENV));
-            return Err(msg);
-        }
-        if !p.is_dir() {
-            let msg = format!("路径不是目录：{}", cfg.models_dir);
-            emit_log_to(app, "system", &msg, Some(STEP_ENV));
-            return Err(msg);
-        }
-
-        // 统计 .gguf 文件数量
-        let mut gguf_count = 0usize;
-        let mut names: Vec<String> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(p) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_gguf = path
-                    .extension()
-                    .map(|e| e.eq_ignore_ascii_case("gguf"))
-                    .unwrap_or(false);
-                if is_gguf {
-                    gguf_count += 1;
-                    if names.len() < 10 {
-                        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                            names.push(name.to_string());
+            // 目录不存在：仅告警，不阻塞初始化（用户可后续手动设置或下载模型）
+            emit_log_to(
+                app,
+                "system",
+                &format!("注意：模型目录不存在：{}（可在后续配置中修正）", cfg.models_dir),
+                Some(STEP_ENV),
+            );
+        } else if !p.is_dir() {
+            emit_log_to(
+                app,
+                "system",
+                &format!("注意：路径不是目录：{}（可在后续配置中修正）", cfg.models_dir),
+                Some(STEP_ENV),
+            );
+        } else {
+            // 统计 .gguf 文件数量
+            let mut gguf_count = 0usize;
+            let mut names: Vec<String> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(p) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_gguf = path
+                        .extension()
+                        .map(|e| e.eq_ignore_ascii_case("gguf"))
+                        .unwrap_or(false);
+                    if is_gguf {
+                        gguf_count += 1;
+                        if names.len() < 10 {
+                            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                                names.push(name.to_string());
+                            }
                         }
                     }
                 }
             }
-        }
-        emit_log_to(
-            app,
-            "system",
-            &format!("模型目录合法，共 {} 个 .gguf 文件", gguf_count),
-            Some(STEP_ENV),
-        );
-        for n in &names {
-            emit_log_to(app, "system", &format!("  • {}", n), Some(STEP_ENV));
-        }
-        if gguf_count == 0 {
-            let msg = "模型目录下未发现 .gguf 文件，请将模型放入该目录".to_string();
-            emit_log_to(app, "system", &msg, Some(STEP_ENV));
-            return Err(msg);
+            emit_log_to(
+                app,
+                "system",
+                &format!("模型目录合法，共 {} 个 .gguf 文件", gguf_count),
+                Some(STEP_ENV),
+            );
+            for n in &names {
+                emit_log_to(app, "system", &format!("  • {}", n), Some(STEP_ENV));
+            }
+            if gguf_count == 0 {
+                emit_log_to(
+                    app,
+                    "system",
+                    "注意：模型目录下未发现 .gguf 文件，请放入模型文件",
+                    Some(STEP_ENV),
+                );
+            }
         }
     }
 
