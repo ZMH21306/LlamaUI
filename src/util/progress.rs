@@ -83,7 +83,7 @@ impl ProgressReporter {
 
         let speed_bps = if self.samples.len() >= 2 {
             let first = &self.samples[0];
-            let last = self.samples.last().expect("samples 长度至少为 2");
+            let last = self.samples.last().unwrap();
             let elapsed = last.instant.duration_since(first.instant).as_secs_f64();
             if elapsed > 0.0 {
                 (last.downloaded - first.downloaded) as f64 / elapsed

@@ -29,6 +29,7 @@
         clippy::bool_assert_comparison
     )
 )]
+#![allow(dead_code)]
 
 mod commands;
 mod config;
