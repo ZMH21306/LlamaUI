@@ -9,24 +9,26 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 /// 日志文件目录（`~/.llamaui/logs/`）
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// 获取日志文件目录
 pub fn log_dir() -> PathBuf {
-    LOG_DIR.get_or_init(|| {
-        if let Ok(custom) = std::env::var("LLAMAUI_LOG_DIR") {
-            return PathBuf::from(custom);
-        }
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".llamaui")
-            .join("logs")
-    }).clone()
+    LOG_DIR
+        .get_or_init(|| {
+            if let Ok(custom) = std::env::var("LLAMAUI_LOG_DIR") {
+                return PathBuf::from(custom);
+            }
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".llamaui")
+                .join("logs")
+        })
+        .clone()
 }
 
 /// 初始化 tracing 日志系统。
@@ -56,13 +58,10 @@ pub fn init() {
         .with_line_number(true)
         .with_writer(std::io::stderr)
         .with_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| {
-                    // 默认级别：INFO，自己的 crate 用 DEBUG
-                    tracing_subscriber::EnvFilter::new(
-                        "llama_ui_lib=debug,llama_ui=debug,info"
-                    )
-                }),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                // 默认级别：INFO，自己的 crate 用 DEBUG
+                tracing_subscriber::EnvFilter::new("llama_ui_lib=debug,llama_ui=debug,info")
+            }),
         );
 
     // 文件层：纯文本格式（含时间戳），DEBUG 及以上
@@ -75,9 +74,7 @@ pub fn init() {
         .with_writer(non_blocking)
         .with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| {
-                    tracing_subscriber::EnvFilter::new("debug")
-                }),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
         );
 
     // 注册 subscriber

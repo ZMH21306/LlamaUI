@@ -11,7 +11,7 @@ pub mod emitter;
 pub mod sanitizer;
 pub mod tracing_setup;
 
-pub use emitter::{emit_log, emit_log_to, emit_step, emit_status};
+pub use emitter::{emit_log, emit_log_to, emit_status, emit_step};
 pub use sanitizer::sanitize_log;
 pub use tracing_setup::get_log_file_path;
 pub use tracing_setup::init;
