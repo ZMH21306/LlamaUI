@@ -1,8 +1,8 @@
 //! 错误诊断与恢复建议命令。
 
-use tauri::State;
-use crate::recovery::{diagnose, DiagnosisResult, IssueType};
 use super::AppState;
+use crate::recovery::{diagnose, DiagnosisResult, IssueType};
+use tauri::State;
 
 /// 诊断当前配置
 #[tauri::command]
@@ -19,7 +19,7 @@ pub fn auto_fix_issues(
 ) -> Result<(), String> {
     let mut cfg = state.config.get();
     let mut fixed = false;
-    
+
     for issue_type in issue_types {
         if let IssueType::PortOccupied = issue_type {
             // 自动顺延端口
@@ -31,11 +31,11 @@ pub fn auto_fix_issues(
         }
         // 其他问题需要用户手动修复
     }
-    
+
     if fixed {
         state.config.set(cfg).map_err(|e| e.to_string())?;
     }
-    
+
     Ok(())
 }
 

@@ -50,29 +50,29 @@ pub enum IssueType {
 /// 诊断当前配置
 pub fn diagnose(cfg: &AppConfig) -> DiagnosisResult {
     let mut issues = Vec::new();
-    
+
     // 检查端口
     if let Err(issue) = check_port(cfg.port) {
         issues.push(issue);
     }
-    
+
     // 检查模型目录
     if let Err(issue) = check_models_dir(&cfg.models_dir) {
         issues.push(issue);
     }
-    
+
     // 检查 llama-server
     if let Err(issue) = check_llama_server(cfg.llama_server_path.as_deref()) {
         issues.push(issue);
     }
-    
+
     // 检查 GPU 显存（如果启用 GPU）
     if cfg.n_gpu_layers != 0 {
         if let Some(issue) = check_gpu_memory() {
             issues.push(issue);
         }
     }
-    
+
     DiagnosisResult {
         auto_fixable: issues.iter().any(|i| i.auto_fixable),
         issues,
@@ -86,7 +86,10 @@ fn check_port(port: u16) -> Result<(), DiagnosisIssue> {
         Err(_) => Err(DiagnosisIssue {
             issue_type: IssueType::PortOccupied,
             message: format!("端口 {} 已被占用", port),
-            suggestion: format!("建议开启「自动端口顺延」功能，或手动切换到其他端口（如 {}）", port + 1),
+            suggestion: format!(
+                "建议开启「自动端口顺延」功能，或手动切换到其他端口（如 {}）",
+                port + 1
+            ),
             auto_fixable: true,
         }),
     }
@@ -101,7 +104,7 @@ fn check_models_dir(path: &str) -> Result<(), DiagnosisIssue> {
             auto_fixable: false,
         });
     }
-    
+
     if !Path::new(path).exists() {
         return Err(DiagnosisIssue {
             issue_type: IssueType::ModelsDirMissing,
@@ -110,7 +113,7 @@ fn check_models_dir(path: &str) -> Result<(), DiagnosisIssue> {
             auto_fixable: false,
         });
     }
-    
+
     if !Path::new(path).is_dir() {
         return Err(DiagnosisIssue {
             issue_type: IssueType::ModelsDirMissing,
@@ -119,7 +122,7 @@ fn check_models_dir(path: &str) -> Result<(), DiagnosisIssue> {
             auto_fixable: false,
         });
     }
-    
+
     Ok(())
 }
 
@@ -146,17 +149,19 @@ fn check_llama_server(path: Option<&str>) -> Result<(), DiagnosisIssue> {
             return Ok(());
         }
     }
-    
+
     // 未指定路径，尝试从 PATH 查找
     if which::which("llama-server").is_err() {
         return Err(DiagnosisIssue {
             issue_type: IssueType::LlamaServerMissing,
             message: "未在系统中找到 llama-server".to_string(),
-            suggestion: "请从 llama.cpp releases 下载 llama-server 并放置到 PATH 中，或手动指定路径".to_string(),
+            suggestion:
+                "请从 llama.cpp releases 下载 llama-server 并放置到 PATH 中，或手动指定路径"
+                    .to_string(),
             auto_fixable: false,
         });
     }
-    
+
     Ok(())
 }
 
