@@ -1349,6 +1349,22 @@ const INSTALL_SHOW_TIMEOUT_MS = 3000; // 安装进度事件后最长显示时间
  * 仅在下载或安装阶段（stage 非 idle/complete/fail）时刷新进度条。
  * 如果已完成（Completed/Failed/Cancelled）则忽略，避免重置显示状态。
  */
+function formatSpeed(mbps) {
+  if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';
+  return (mbps * 1024).toFixed(0) + ' KB/s';
+}
+
+function formatETA(seconds) {
+  if (!seconds || seconds <= 0) return '';
+  const s = Math.round(seconds);
+  if (s < 60) return s + '秒';
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return m + '分' + (r > 0 ? r + '秒' : '');
+  const h = Math.floor(m / 60);
+  return h + '小时' + Math.floor((m % 60)) + '分';
+}
+
 function handleUpdateProgress(progress) {
   if (!progress) return;
   console.log('[update-progress]', progress);
@@ -1367,8 +1383,28 @@ function handleUpdateProgress(progress) {
     bar.style.width = `${Math.min(100, (progress.progress || 0) * 100)}%`;
     bar.textContent = `${Math.round((progress.progress || 0) * 100)}%`;
   }
+
+  // 统一格式：阶段 · 已用 Xs · 速度 · 剩余
+  const parts = [];
+  const stageName = progress.stage_name || progress.stage || '下载中';
+  parts.push(stageName);
+
+  if (progress.elapsed_ms != null) {
+    parts.push('已用 ' + (progress.elapsed_ms / 1000).toFixed(1) + 's');
+  } else if (progress.elapsed_secs != null) {
+    parts.push('已用 ' + progress.elapsed_secs + 's');
+  }
+
+  if (typeof progress.speed_mbps === 'number' && progress.speed_mbps > 0) {
+    parts.push(formatSpeed(progress.speed_mbps));
+  }
+
+  if (typeof progress.eta_secs === 'number' && progress.eta_secs > 0) {
+    parts.push('剩余 ' + formatETA(progress.eta_secs));
+  }
+
   const label = document.getElementById('updateProgressLabel');
-  if (label) label.textContent = progress.message || '';
+  if (label) label.textContent = parts.join(' · ');
 }
 
 /**
