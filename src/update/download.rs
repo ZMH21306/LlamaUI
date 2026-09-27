@@ -1,4 +1,4 @@
-//! 更新下载模块。
+﻿//! 更新下载模块。
 //!
 //! 下载更新压缩包，支持进度实时推送、取消、SHA256 校验。
 //! 使用异步流式下载（`NetClient` + `bytes_stream`），避免大文件 OOM。
@@ -70,6 +70,8 @@ pub async fn download_update(
             speed_mbps: 0.0,
             eta_secs: None,
             message: "准备下载更新包...".to_string(),
+            version: None,
+            step: None,
         },
     );
 
@@ -91,6 +93,8 @@ pub async fn download_update(
                 speed_mbps: 0.0,
                 eta_secs: None,
                 message: msg.clone(),
+                version: None,
+                step: None,
             },
         );
         return Err(anyhow::anyhow!("{}", msg));
@@ -117,11 +121,13 @@ pub async fn download_update(
                 UpdateDownloadProgress {
                     stage: STAGE_CANCELLED.to_string(),
                     progress: 0.0,
-                    downloaded,
-                    total,
+                    downloaded: 0,
+                    total: expected_size,
                     speed_mbps: 0.0,
                     eta_secs: None,
                     message: "下载已取消".to_string(),
+                    version: None,
+                    step: None,
                 },
             );
             return Err(anyhow::anyhow!("下载已取消"));
@@ -148,6 +154,8 @@ pub async fn download_update(
                         total as f64 / 1_048_576.0,
                         speed / 1_048_576.0
                     ),
+                    version: None,
+                    step: Some(format!("{:.1}% complete", progress * 100.0)),
                 },
             );
         }
@@ -186,6 +194,8 @@ pub async fn download_update(
             speed_mbps: 0.0,
             eta_secs: None,
             message: "下载完成".to_string(),
+            version: None,
+            step: Some("download_complete".to_string()),
         },
     );
 
@@ -198,7 +208,7 @@ pub async fn download_update(
 }
 
 /// 计算文件 SHA256 校验和。
-fn compute_sha256(path: &Path) -> Option<String> {
+pub fn compute_sha256(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     let data = fs::read(path).ok()?;
     let mut hasher = Sha256::new();
@@ -235,6 +245,8 @@ mod tests {
             speed_mbps: 1.5,
             eta_secs: Some(10),
             message: "下载中...".to_string(),
+            version: None,
+            step: None,
         };
         let json = serde_json::to_string(&progress).unwrap();
         let back: UpdateDownloadProgress = serde_json::from_str(&json).unwrap();
