@@ -1849,8 +1849,16 @@ function attachUIListeners() {
     const detail = els.downloadProgressDetail;
     const downloadStartMs = Date.now();
     const STUCK_TIMEOUT_MS = 90_000;
+    const stageMap = {
+      init: '初始化', fetching_version: '获取版本', finding_asset: '匹配资产',
+      downloading: '下载中', extracting: '解压中', verifying: '校验中',
+      complete: '完成', retrying: '重试中', finalizing: '收尾中'
+    };
     let unlisten = null;
     let stuckTimer = null;
+    let tickTimer = null;
+    // 最近一次进度数据：即使后端长时间无事件，也能据此定时刷新「已用时间」
+    let lastProgressData = null;
     let lastProgressMs = Date.now();
     let isDownloading = true; // 防覆盖标志：cleanup 后为 false，阻止 progress 事件在完成后覆盖按钮文字
 
@@ -1858,16 +1866,19 @@ function attachUIListeners() {
       isDownloading = false;
       if (unlisten) { unlisten(); unlisten = null; }
       if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }
+      if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     }
     function renderProgress(p) {
+      if (!isDownloading) return;
+      lastProgressData = p;
+      renderProgressImpl(p);
+      lastProgressMs = Date.now();
+    }
+    // 渲染进度面板（不更新 lastProgressMs，便于 tickTimer 单独重绘已用时间）
+    function renderProgressImpl(p) {
       if (!isDownloading) return; // 下载结束后不再更新，防止闪烁
       const pct = Math.max(0, Math.min(100, Math.round((p.progress || 0) * 100)));
       const elapsed = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
-      const stageMap = {
-        init: '初始化', fetching_version: '获取版本', finding_asset: '匹配资产',
-        downloading: '下载中', extracting: '解压中', verifying: '校验中',
-        complete: '完成', retrying: '重试中', finalizing: '收尾中'
-      };
       const stageName = stageMap[p.stage] || p.stage;
       if (panel) {
         panel.hidden = false;
@@ -1888,7 +1899,17 @@ function attachUIListeners() {
       } else if (detail) {
         detail.textContent = `${stageName} · 已用 ${elapsed}s`;
       }
-      lastProgressMs = Date.now();
+    }
+    // 记录最后一次进度数据，每 100ms 独立重绘「已用时间」，不依赖后端事件频率
+    function startTickTimer() {
+      if (tickTimer) return;
+      tickTimer = setInterval(() => {
+        if (!isDownloading || !detail) return;
+        const elapsed = ((Date.now() - downloadStartMs) / 1000).toFixed(1);
+        const stage = (lastProgressData && lastProgressData.stage) || 'fetching_version';
+        const stageName = stageMap[stage] || stage;
+        detail.textContent = `${stageName} · 已用 ${elapsed}s`;
+      }, 100);
     }
     function renderIdle(message) {
       if (!isDownloading) return;
@@ -1905,6 +1926,7 @@ function attachUIListeners() {
     els.downloadLlamaBtn.classList.add('downloading');
     els.downloadLlamaBtn.classList.remove('download-complete', 'download-failed');
     renderIdle('准备下载...');
+    startTickTimer();
     stuckTimer = setInterval(() => {
       if (els.downloadLlamaBtn.disabled && Date.now() - lastProgressMs > STUCK_TIMEOUT_MS) {
         cleanup();
