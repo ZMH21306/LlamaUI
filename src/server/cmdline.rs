@@ -78,8 +78,7 @@ pub fn expand_pro_vars(text: &str, cfg: &AppConfig) -> String {
     let program = resolve_program(cfg);
     let program_q = quote_path(&program);
     let models_q = quote_path(&cfg.models_dir);
-    text
-        .replace("%%llama_server%%", &program_q)
+    text.replace("%%llama_server%%", &program_q)
         .replace("%%llama_server_quote%%", &program_q)
         // P0-4 安全修复：%%models_dir%% 必须加引号，防止命令注入
         .replace("%%models_dir%%", &models_q)
@@ -162,7 +161,11 @@ pub fn validate_pro_program(prog: &str, cfg: &AppConfig) -> anyhow::Result<Strin
     if let Some(custom) = &cfg.llama_server_path {
         if !custom.is_empty() {
             let a = stripped.to_lowercase().replace('/', "\\");
-            let b = custom.to_lowercase().replace('/', "\\").trim_matches('"').to_string();
+            let b = custom
+                .to_lowercase()
+                .replace('/', "\\")
+                .trim_matches('"')
+                .to_string();
             if a == b {
                 // P0-1：即使匹配 cfg，仍走 validate_p0_path 做二次校验。
                 return validate_p0_path(stripped, stem, ALLOWED_STEMS, prog);
@@ -248,7 +251,10 @@ mod tests {
     #[test]
     fn validate_pro_program_rejects_powershell() {
         let cfg = empty_cfg();
-        let r = validate_pro_program("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", &cfg);
+        let r = validate_pro_program(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            &cfg,
+        );
         assert!(r.is_err(), "powershell.exe 必须被拒绝");
     }
 
@@ -314,7 +320,11 @@ mod tests {
         let v = split_command_line(r#""C:\Program Files\llama.cpp\llama-server.exe" -ngl 99"#);
         assert_eq!(
             v,
-            vec!["C:\\Program Files\\llama.cpp\\llama-server.exe", "-ngl", "99"]
+            vec![
+                "C:\\Program Files\\llama.cpp\\llama-server.exe",
+                "-ngl",
+                "99"
+            ]
         );
     }
 
@@ -356,7 +366,10 @@ mod tests {
         );
         // 整个被替换后的 models_dir 部分应在一个引号对内（防止分号分隔）。
         // 修正：quote_path 会把所有内部 `"` 转义为 `\"`，故期望串也必须带此转义。
-        assert!(expanded.contains(r#""D:\data\"; --api-key ATTACKER_KEY \"pwn""#),
-                "models_dir 必须被完整引号包裹：got {}", expanded);
+        assert!(
+            expanded.contains(r#""D:\data\"; --api-key ATTACKER_KEY \"pwn""#),
+            "models_dir 必须被完整引号包裹：got {}",
+            expanded
+        );
     }
 }
