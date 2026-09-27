@@ -1,4 +1,4 @@
-//! 自更新安装模块。
+﻿//! 自更新安装模块。
 //!
 //! 下载完成后：
 //! 1. 解压 ZIP 到临时目录
@@ -125,7 +125,12 @@ fn replace_exe_and_dist(exe_dir: &Path, extracted_root: &Path) -> AnyResult<()> 
 ///
 /// 解压 ZIP → 校验完整性 → 备份旧文件 → 替换 exe 和 dist → 清理缓存。
 /// 安装期间会通过 `EVT_UPDATE_DOWNLOAD_PROGRESS` 和 `EVT_UPDATE_STATE` 推送进度。
-pub async fn install_update(app: &AppHandle, zip_path: &Path, total_bytes: u64) -> AnyResult<()> {
+pub async fn install_update(
+    app: &AppHandle,
+    zip_path: &Path,
+    total_bytes: u64,
+    new_version: &str,
+) -> AnyResult<()> {
     info!(target: "UpdateInstall", zip = %zip_path.display(), "开始安装更新");
 
     emit_progress(
@@ -138,6 +143,8 @@ pub async fn install_update(app: &AppHandle, zip_path: &Path, total_bytes: u64) 
             speed_mbps: 0.0,
             eta_secs: None,
             message: "正在解压更新包...".to_string(),
+            version: Some(new_version.to_string()),
+            step: Some("extracting".to_string()),
         },
     );
 
@@ -161,6 +168,8 @@ pub async fn install_update(app: &AppHandle, zip_path: &Path, total_bytes: u64) 
             speed_mbps: 0.0,
             eta_secs: None,
             message: "正在校验更新包...".to_string(),
+            version: Some(new_version.to_string()),
+            step: Some("verifying".to_string()),
         },
     );
 
@@ -187,13 +196,16 @@ pub async fn install_update(app: &AppHandle, zip_path: &Path, total_bytes: u64) 
             speed_mbps: 0.0,
             eta_secs: None,
             message: "更新安装完成，请重启应用程序".to_string(),
+            version: Some(new_version.to_string()),
+            step: Some("completed".to_string()),
         },
     );
 
     emit_state(
         app,
         UpdateState::Completed {
-            new_version: String::new(),
+            new_version: new_version.to_string(),
+            elapsed_ms: 0,
         },
     );
 
