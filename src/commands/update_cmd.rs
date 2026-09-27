@@ -60,7 +60,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
     let download_id_for_task = download_id.clone();
 
     // 确定下载目录（缓存目录）
-    let download_dir = dirs::cache_dir().unwrap_or_else(|| std::env::temp_dir());
+    let download_dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
     let dest_path = download_dir.join(format!("LlamaUI-{}-update.zip", check_result.latest_version));
 
     // 发送下载开始状态
@@ -102,7 +102,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                 &check_result.sha256,
                 &app,
                 &check_result.latest_version,
-            ).await;
+            );
             
             if let Err(e) = verification_result {
                 emit_update_state(&app, UpdateState::Failed {
@@ -171,7 +171,7 @@ async fn download_with_retry(
         attempt += 1;
         
         // 取消检查
-        if cancel_rx.borrow().clone() {
+        if *cancel_rx.borrow() {
             return Err("下载已取消".to_string());
         }
         
@@ -222,15 +222,15 @@ async fn download_with_retry(
                 }
                 
                 // 指数退避：3s, 6s, 12s
-                let delay = 3u64.pow(attempt as u32);
+                let delay = 3u64.pow(attempt);
                 tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
             }
         }
     }
 }
 
-/// 验证下载文件完整性
-async fn verify_download_file(
+/// 验证下载文件完整性（同步版本）
+fn verify_download_file(
     file_path: &str,
     expected_size: u64,
     expected_sha256: &Option<String>,
