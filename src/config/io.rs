@@ -23,8 +23,8 @@ pub fn import_config(json_str: &str) -> anyhow::Result<AppConfig> {
     if !value.is_object() {
         return Err(anyhow::anyhow!("JSON 必须是一个对象"));
     }
-    let cfg: AppConfig = serde_json::from_value(value)
-        .map_err(|e| anyhow::anyhow!("配置格式无效：{}", e))?;
+    let cfg: AppConfig =
+        serde_json::from_value(value).map_err(|e| anyhow::anyhow!("配置格式无效：{}", e))?;
     if cfg._v == 0 || cfg._v > 1_000_000 {
         return Err(anyhow::anyhow!("配置版本号 {} 不合理", cfg._v));
     }

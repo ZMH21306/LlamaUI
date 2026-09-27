@@ -9,7 +9,5 @@ pub mod io;
 pub mod store;
 
 // 便于外部 `use crate::config::AppConfig` 直接访问
-pub use store::{
-    AppConfig, ConfigStore, CURRENT_CONFIG_VERSION, DEFAULT_PRO_CUSTOM_COMMAND,
-};
 pub use io::{export_config, import_config};
+pub use store::{AppConfig, ConfigStore, CURRENT_CONFIG_VERSION, DEFAULT_PRO_CUSTOM_COMMAND};
