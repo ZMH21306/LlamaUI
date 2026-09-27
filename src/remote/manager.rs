@@ -14,10 +14,10 @@
 //! - API 密钥通过环境变量或配置文件传递，不落盘日志
 //! - 连接超时限制为 10s，防止长挂起
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 /// 远程服务器基本信息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,25 +60,29 @@ impl RemoteServerInfo {
         let is_local = self.url.contains("localhost") || self.url.contains("127.0.0.1");
         // 远程必须使用 HTTPS
         if !is_local && !self.url.starts_with("https://") {
-            return Err(
-                "远程服务器必须使用 HTTPS 协议（本地 localhost 允许 HTTP）".to_string(),
-            );
+            return Err("远程服务器必须使用 HTTPS 协议（本地 localhost 允许 HTTP）".to_string());
         }
         // 安全校验：远程 URL 的主机名不能是敏感内部地址
         if !is_local {
-            if let Some(host) = self.url.strip_prefix("https://").or_else(|| self.url.strip_prefix("http://")) {
+            if let Some(host) = self
+                .url
+                .strip_prefix("https://")
+                .or_else(|| self.url.strip_prefix("http://"))
+            {
                 let host = host.split('/').next().unwrap_or(host);
                 let host = host.split(':').next().unwrap_or(host);
-                let blocked_hosts: &[&str] = &[
-                    "localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254",
-                ];
+                let blocked_hosts: &[&str] =
+                    &["localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254"];
                 for blocked in blocked_hosts {
                     if host == *blocked {
                         return Err(format!("不允许的远程主机：{}", host));
                     }
                 }
                 // 拒绝私有 IP 段
-                if host.starts_with("192.168.") || host.starts_with("10.") || host.starts_with("172.") {
+                if host.starts_with("192.168.")
+                    || host.starts_with("10.")
+                    || host.starts_with("172.")
+                {
                     return Err(format!("不允许的私有网络主机：{}", host));
                 }
             }
@@ -151,14 +155,11 @@ pub fn probe_remote_server(url: &str, api_key: Option<&str>) -> Result<bool, Str
         .map_err(|e| format!("初始化 HTTP 客户端失败：{}", e))?;
 
     let target_url = format!("{}/v1/models", url);
-    let mut headers: Vec<(&str, String)> = vec![
-        ("User-Agent", "LlamaUI-RemoteProbe".to_string()),
-    ];
+    let mut headers: Vec<(&str, String)> = vec![("User-Agent", "LlamaUI-RemoteProbe".to_string())];
     if let Some(key) = api_key {
         headers.push(("Authorization", format!("Bearer {}", key)));
     }
-    let header_refs: Vec<(&str, &str)> =
-        headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let header_refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
     match client.get(&target_url, &header_refs) {
         Ok(_) => Ok(true),

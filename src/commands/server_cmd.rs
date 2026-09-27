@@ -42,21 +42,14 @@ pub struct StatusResponse {
 /// Windows 上额外创建 Job Object 绑定子进程，父进程任何方式死亡时内核会
 /// 回收子进程。
 #[tauri::command]
-pub async fn start_server(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn start_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let cfg = state.config.get();
     tracing::info!(target: "ServerCmd", mode = %cfg.mode, port = cfg.port, "收到启动服务请求");
-    state
-        .server
-        .start(app, cfg)
-        .await
-        .map_err(|e| {
-            let msg = crate::server::lifecycle::chinese_error(&e);
-            tracing::error!(target: "ServerCmd", error = %e, "启动服务失败");
-            msg
-        })
+    state.server.start(app, cfg).await.map_err(|e| {
+        let msg = crate::server::lifecycle::chinese_error(&e);
+        tracing::error!(target: "ServerCmd", error = %e, "启动服务失败");
+        msg
+    })
 }
 
 /// 停止 llama-server 子进程。
@@ -69,10 +62,7 @@ pub async fn start_server(
 ///
 /// 若当前未运行则返回 `Ok(())`（幂等）。
 #[tauri::command]
-pub async fn stop_server(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     tracing::info!(target: "ServerCmd", "收到停止服务请求");
     state.server.stop(&app).await.map_err(|e| {
         tracing::error!(target: "ServerCmd", error = %e, "停止服务失败");
@@ -87,10 +77,7 @@ pub async fn stop_server(
 /// 停止后通过轮询端口可用性确认释放（而非固定 sleep），
 /// 最大等待 10 秒。
 #[tauri::command]
-pub async fn restart_server(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn restart_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     tracing::info!(target: "ServerCmd", "收到重启服务请求");
     // 通过 start_mutex 串行化整个重启流程
     let _guard = state.server.start_mutex.lock().await;
@@ -98,33 +85,26 @@ pub async fn restart_server(
     let _ = state.server.stop(&app).await;
     // 轮询确认端口释放（最多 10 秒）
     let port = state.config.get().port;
-    let released = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        async {
-            for _ in 0..100 {
-                if crate::server::port::is_port_available(port).await {
-                    return true;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let released = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for _ in 0..100 {
+            if crate::server::port::is_port_available(port).await {
+                return true;
             }
-            false
-        },
-    )
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        false
+    })
     .await
     .unwrap_or(false);
     if !released {
         tracing::warn!(target: "ServerCmd", port = port, "端口未在 10s 内释放，强制继续");
     }
     let cfg = state.config.get();
-    state
-        .server
-        .start(app, cfg)
-        .await
-        .map_err(|e| {
-            let msg = crate::server::lifecycle::chinese_error(&e);
-            tracing::error!(target: "ServerCmd", error = %e, "重启服务失败");
-            msg
-        })
+    state.server.start(app, cfg).await.map_err(|e| {
+        let msg = crate::server::lifecycle::chinese_error(&e);
+        tracing::error!(target: "ServerCmd", error = %e, "重启服务失败");
+        msg
+    })
 }
 
 /// 获取当前服务状态、配置端口、实际绑定端口。
@@ -167,13 +147,10 @@ pub async fn force_close(app: AppHandle, state: State<'_, AppState>) -> Result<(
     // 停止服务（忽略错误，尽力而为）
     let _ = state.server.stop(&app).await;
     // 等待子进程完全退出（最多 5 秒）
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        state.server.stop(&app),
-    )
-    .await
-    .map_err(|_| "停止服务超时（5 秒）".to_string())?
-    .map_err(|e| e.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), state.server.stop(&app))
+        .await
+        .map_err(|_| "停止服务超时（5 秒）".to_string())?
+        .map_err(|e| e.to_string())?;
     // 退出应用
     app.exit(0);
     Ok(())
@@ -197,7 +174,11 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"status\":\"Running\""), "status 字段：{}", s);
         assert!(s.contains("\"port\":10897"), "port 字段：{}", s);
-        assert!(s.contains("\"active_port\":10898"), "active_port 字段：{}", s);
+        assert!(
+            s.contains("\"active_port\":10898"),
+            "active_port 字段：{}",
+            s
+        );
     }
 
     /// 验证 `ServerStatus` 序列化值与前端 JS 期望一致。
