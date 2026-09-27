@@ -1972,6 +1972,7 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   transition: color 0.2s var(--ease);
+  text-align: center;
 }
 .llama-download-status.success { color: var(--success); }
 .llama-download-status.error   { color: var(--danger); }
@@ -2225,12 +2226,15 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 .update-toast[hidden] { display: none; }
 .update-toast-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
   font-size: var(--fs-sm);
   color: var(--text-1);
+  position: relative;
 }
 .update-toast-close {
+  position: absolute;
+  right: 0;
   background: none;
   border: none;
   color: var(--text-3);
@@ -2242,6 +2246,10 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
   display: flex;
   align-items: center;
   justify-content: center;
+}
+#updateProgressLabel {
+  text-align: center;
+  width: 100%;
 }
 .update-progress-bar {
   width: 100%;
