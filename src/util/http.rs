@@ -14,8 +14,8 @@
 
 use std::time::Duration;
 
-use reqwest::{Client as AsyncClient, ClientBuilder as AsyncClientBuilder};
 use reqwest::blocking::{Client as SyncClient, ClientBuilder as SyncClientBuilder};
+use reqwest::{Client as AsyncClient, ClientBuilder as AsyncClientBuilder};
 
 /// 同步 HTTP 客户端（用于 blocking 上下文，如 spawn_blocking）。
 ///
@@ -33,9 +33,7 @@ impl HttpClient {
 
     /// 构建带自定义 User-Agent 的客户端。
     pub fn with_user_agent(ua: &str) -> anyhow::Result<Self> {
-        let client = Self::builder()?
-            .user_agent(ua)
-            .build()?;
+        let client = Self::builder()?.user_agent(ua).build()?;
         Ok(Self { client })
     }
 
@@ -86,7 +84,11 @@ impl HttpClient {
     }
 
     /// 发送 HEAD 请求并返回 Content-Length（若存在），支持自定义 Header。
-    pub fn head_with_headers(&self, url: &str, extra_headers: &[(&str, &str)]) -> anyhow::Result<Option<u64>> {
+    pub fn head_with_headers(
+        &self,
+        url: &str,
+        extra_headers: &[(&str, &str)],
+    ) -> anyhow::Result<Option<u64>> {
         let mut request = self.client.head(url);
         for (k, v) in extra_headers {
             request = request.header(*k, *v);
@@ -120,9 +122,7 @@ impl AsyncHttpClient {
 
     /// 构建带自定义 User-Agent 的异步客户端。
     pub fn with_user_agent(ua: &str) -> anyhow::Result<Self> {
-        let client = Self::builder()?
-            .user_agent(ua)
-            .build()?;
+        let client = Self::builder()?.user_agent(ua).build()?;
         Ok(Self { client })
     }
 

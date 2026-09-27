@@ -14,7 +14,14 @@
 /// 返回 `Some("http://host:port")` 或 `None`（无代理/读取失败）。
 pub fn read_system_proxy() -> Option<String> {
     // 1) 环境变量（所有平台通用，Clash 等也支持）
-    for key in &["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+    for key in &[
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ] {
         if let Ok(v) = std::env::var(key) {
             if !v.is_empty() {
                 tracing::debug!(target: "Proxy", source = "env", key = %key, value = %v, "使用环境变量代理");
@@ -28,7 +35,9 @@ pub fn read_system_proxy() -> Option<String> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let settings = match hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") {
+        let settings = match hkcu
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+        {
             Ok(s) => s,
             Err(e) => {
                 tracing::debug!(target: "Proxy", error = %e, "无法打开 Internet Settings 注册表项");
@@ -67,7 +76,9 @@ pub fn read_system_proxy() -> Option<String> {
         let mut result = String::new();
         for line in proxy_server.split(';') {
             let line = line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             if let Some((k, v)) = line.split_once('=') {
                 if k.eq_ignore_ascii_case("http") || k.eq_ignore_ascii_case("https") {
                     // Clash 通常输出 http= 形式；若为 https= 则走 HTTPS 代理
