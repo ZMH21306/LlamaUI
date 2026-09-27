@@ -2206,61 +2206,179 @@ h3.section-title::before { content: ''; width: 3px; height: 14px; background: va
 #downloadStatus { font-size: 12px; color: var(--text-2); margin-top: 4px; }
 .download-status { font-size: 12px; color: var(--text-2); margin-top: 4px; }
 
-/* 更新进度提示 */
+/* =========================================================
+   更新进度提示 —— 浮动面板（右下角，自动隐藏）
+   ========================================================= */
 .update-toast {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 24px;
+  right: 24px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 12px 16px;
-  min-width: 280px;
-  max-width: 400px;
-  box-shadow: var(--shadow-2);
+  border-radius: var(--r-lg);
+  padding: 14px 18px;
+  min-width: 300px;
+  max-width: 440px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.2);
   z-index: 10000;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
+  opacity: 1;
+  transform: translateY(0);
 }
-.update-toast[hidden] { display: none; }
+.update-toast[hidden] {
+  display: none;
+}
+.update-toast.hidden-fade {
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
+}
+
+/* 标题行 */
 .update-toast-header {
   display: flex;
-  justify-content: center;
   align-items: center;
+  gap: 10px;
   font-size: var(--fs-sm);
   color: var(--text-1);
+  font-weight: 600;
   position: relative;
+}
+.update-toast-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.update-toast-icon svg {
+  width: 14px;
+  height: 14px;
 }
 .update-toast-close {
   position: absolute;
-  right: 0;
+  right: -4px;
+  top: -4px;
   background: none;
   border: none;
   color: var(--text-3);
   cursor: pointer;
-  font-size: 18px;
-  padding: 0;
-  width: 20px;
-  height: 20px;
+  font-size: 16px;
+  padding: 2px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
+.update-toast-close:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
+/* 进度标签 */
 #updateProgressLabel {
-  text-align: center;
-  width: 100%;
+  flex: 1;
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+  font-weight: 500;
+  line-height: 1.4;
+  word-break: break-word;
 }
+
+/* 进度条轨道 */
 .update-progress-bar {
   width: 100%;
   height: 6px;
   background: var(--bg-3);
   border-radius: 3px;
   overflow: hidden;
+  position: relative;
 }
 .update-progress-fill {
   height: 100%;
+  width: 0%;
   background: var(--gradient-primary);
   border-radius: 3px;
   transition: width 0.18s linear;
+  position: relative;
+}
+.update-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.25) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: update-shimmer 1.6s ease-in-out infinite;
+}
+.update-progress-fill.indeterminate {
+  width: 30% !important;
+  animation: update-indeterminate 1.4s ease-in-out infinite;
+}
+.update-progress-fill.indeterminate::after {
+  display: none;
+}
+@keyframes update-shimmer {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(100%); }
+  100% { transform: translateX(100%); }
+}
+@keyframes update-indeterminate {
+  0%   { transform: translateX(-30%); }
+  100% { transform: translateX(133%); }
+}
+
+/* 底部状态行 */
+.update-toast-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.update-toast-speed {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.update-toast-eta {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 状态徽章 */
+.update-toast-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.update-toast-badge.success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.update-toast-badge.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.update-toast-badge.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.update-toast-badge.info {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
