@@ -1900,17 +1900,22 @@ function attachUIListeners() {
     };
     let unlisten = null;
     let stuckTimer = null;
+    let heartbeatTimer = null;
     // 最近一次进度事件时间：用于「长时间无进度」超时检测
     let lastProgressMs = Date.now();
+    // 最近一次后端进度数据：心跳定时器据此重绘，保证 UI 至少 1s 刷新一次
+    let lastProgressData = null;
     let isDownloading = true; // 防覆盖标志：cleanup 后为 false，阻止 progress 事件在完成后覆盖按钮文字
 
     function cleanup() {
       isDownloading = false;
       if (unlisten) { unlisten(); unlisten = null; }
       if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     }
     function renderProgress(p) {
       if (!isDownloading) return;
+      lastProgressData = p;
       renderProgressImpl(p);
       lastProgressMs = Date.now();
     }
@@ -1958,11 +1963,30 @@ function attachUIListeners() {
       // 按钮文字保持原始文本不变
       if (detail) detail.textContent = message;
     }
+    // 心跳定时器：每 1s 用「最近一次真实后端数据」重绘一次。
+    //
+    // 为什么要它：后端进度事件在高速下载时可能间隔 4~6s 才发一次，
+    // 导致 UI 看起来卡住。这里不做任何数据伪造——进度条宽度、大小、
+    // 速度都直接取自 lastProgressData（后端真实上报值），
+    // 只有「已用 Xs」是本地按真实经过时间计算的，
+    // 保证用户始终看到至少 1s 一次的真实更新。
+    //
+    // 关键：心跳与事件流共用 buildDownloadStatusText()，格式完全一致，
+    // 不会重现此前两个写入者格式不同导致的闪烁交替。
+    const HEARTBEAT_MS = 1000;
+    function startHeartbeat() {
+      if (heartbeatTimer) return;
+      heartbeatTimer = setInterval(() => {
+        if (!isDownloading || !detail) return;
+        detail.textContent = buildDownloadStatusText(lastProgressData);
+      }, HEARTBEAT_MS);
+    }
 
     els.downloadLlamaBtn.disabled = true;
     els.downloadLlamaBtn.classList.add('downloading');
     els.downloadLlamaBtn.classList.remove('download-complete', 'download-failed');
     renderIdle('准备下载...');
+    startHeartbeat();
     stuckTimer = setInterval(() => {
       if (els.downloadLlamaBtn.disabled && Date.now() - lastProgressMs > STUCK_TIMEOUT_MS) {
         cleanup();

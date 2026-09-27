@@ -316,13 +316,14 @@ fn curl_download(
             }
             downloaded += n as u64;
 
-            // 时间节流：每 500ms 至少上报一次，或每 100KB 累积跨越边界时上报，或下载完成时上报
+            // 时间节流：每 250ms 至少上报一次，或下载完成时上报。
+            // 注意：必须以时间为准做「或」判断。原实现用
+            // `boundary_cross && time_ok`，其中 boundary_cross 依赖
+            // `downloaded % 100_000` 恰好跨整数边界，命中率不稳定，
+            // 在高速下载时会出现 4~6s 才回调一次、UI 卡顿的问题。
             let now = std::time::Instant::now();
-            let time_ok = now.duration_since(last_progress_at).as_millis() as u64 >= 100;
-            let boundary_cross = downloaded % 100_000 < n as u64;
-            let should_emit = (boundary_cross && time_ok)
-                || downloaded == size
-                || now.duration_since(last_progress_at).as_millis() as u64 >= 500;
+            let elapsed_ms = now.duration_since(last_progress_at).as_millis() as u64;
+            let should_emit = elapsed_ms >= 250 || downloaded == size;
             if should_emit {
                 last_progress_at = now;
                 let raw_progress = if size > 0 {
@@ -589,6 +590,10 @@ fn curl_download_parallel(
     // 否则 `handles` 永远不会全部 finished，下载会无限卡住。
     let start = std::time::Instant::now();
     let mut last_emitted_progress: f64 = progress_start;
+    // 强制上报间隔：即使进度差不足 0.0005，也保证 UI 至少每 500ms 收到一次事件。
+    // 原实现只按 `进度差 >= 0.0005` 触发，在高速下载时两次回调可间隔数秒。
+    const CHUNK_EMIT_MIN_INTERVAL: std::time::Duration = Duration::from_millis(500);
+    let mut last_emit_at = std::time::Instant::now();
     let mut retry_round = 0u32;
     const MAX_RETRY_ROUNDS: u32 = 5;
 
@@ -605,8 +610,10 @@ fn curl_download_parallel(
             0.0
         };
         let global_progress = progress_start + raw_progress * (progress_end - progress_start);
-        if (global_progress - last_emitted_progress).abs() >= 0.0005 {
+        let time_due = last_emit_at.elapsed() >= CHUNK_EMIT_MIN_INTERVAL;
+        if (global_progress - last_emitted_progress).abs() >= 0.0005 || time_due {
             last_emitted_progress = global_progress;
+            last_emit_at = std::time::Instant::now();
             let elapsed = start.elapsed().as_secs_f64();
             let speed_mbps = if elapsed > 0.0 {
                 (current as f64 / elapsed) / 1_048_576.0
