@@ -135,7 +135,11 @@ impl HfDownloader {
 
         if !status.is_success() && status.as_u16() != 206 {
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("下载失败：HTTP {} {}", status.as_u16(), body));
+            return Err(anyhow::anyhow!(
+                "下载失败：HTTP {} {}",
+                status.as_u16(),
+                body
+            ));
         }
 
         let total = response

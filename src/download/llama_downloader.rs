@@ -52,7 +52,12 @@ fn current_arch() -> &'static str {
 }
 /// 用 reqwest 发送 HEAD 请求验证 URL 可用性（带 TLS 证书验证），并返回 Content-Length 大小
 fn curl_head(url: &str) -> anyhow::Result<u64> {
-    let response = shared_client().head(url).send()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(8))
+        .user_agent("LlamaUI/0.7.0")
+        .build()?;
+    let response = client.head(url).send()?;
     let status = response.status();
 
     // 尝试从响应头中提取文件大小（Content-Length）
@@ -402,8 +407,13 @@ fn curl_download_parallel(
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
     cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<u64> {
-    const MAX_CHUNKS: usize = 8;
-    const CHUNK_SIZE: u64 = 4 * 1024 * 1024; // 4MB per chunk
+    const MAX_CHUNKS: usize = 32;
+    // 分块大小从 4MB 降到 512KB：
+    // 本机到 GitHub CDN 的实际带宽很低（实测约 100KB/s），
+    // 原来 32MB/块 在 300s 超时内根本下不完，必然整体失败。
+    // 512KB/块 在 100KB/s 下约需 5s，即使单线程也能在超时内完成，
+    // 32 线程并行既能推进进度，单块失败的重试成本也极低。
+    const CHUNK_SIZE: u64 = 512 * 1024; // 512KB per chunk
 
     if total_size == 0 {
         return curl_download(
@@ -417,19 +427,32 @@ fn curl_download_parallel(
         );
     }
 
-    // 创建目标文件
+    // 创建目标文件（支持断点续传：重试时不截断，跳过已下载的分块）
     std::fs::create_dir_all(dest.parent().unwrap_or(Path::new(".")))?;
-    let _ = fs::remove_file(dest);
     let mut file = fs::OpenOptions::new()
         .create(true)
-        .truncate(true)
         .write(true)
+        .read(true)
         .open(dest)?;
 
     // 计算分块数量和范围
     let num_chunks = (total_size as f64 / CHUNK_SIZE as f64).ceil() as usize;
     let num_chunks = num_chunks.min(MAX_CHUNKS);
     let chunk_size = (total_size as f64 / num_chunks as f64).ceil() as u64;
+
+    // 读取已下载的分块，用于断点续传
+    let mut existing: Vec<Vec<u8>> = vec![Vec::new(); num_chunks];
+    for i in 0..num_chunks {
+        let start = i as u64 * chunk_size;
+        let end = (start + chunk_size).min(total_size) - 1;
+        let len = (end - start + 1) as usize;
+        let mut buf = vec![0u8; len];
+        if file.seek(std::io::SeekFrom::Start(start)).is_ok()
+            && file.read_exact(&mut buf).is_ok()
+        {
+            existing[i] = buf;
+        }
+    }
 
     tracing::info!(
         target: "LlamaDownloader",
@@ -458,8 +481,16 @@ fn curl_download_parallel(
         });
     }
 
-    // 并发下载各分块 + 实时进度上报
+    // 并发下载各分块 + 实时进度上报。
+    //
+    // 关键设计：每个分块独立设置较短超时 + 逐块重试。
+    // 本机到 GitHub CDN 带宽很低且极不稳定（实测 30~160KB/s，
+    // 大块 Range 请求经常 0 字节超时），若按「整块失败才重试」的
+    // 旧逻辑，32MB/块必然整体失败。改成 512KB/块后，单块在
+    // 60s 内即使只跑 100KB/s 也能下完；失败时只重试该小块，
+    // 已完成的分块不会浪费。
     let downloaded = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    let failed_offsets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut handles = Vec::new();
 
     for chunk_idx in 0..num_chunks {
@@ -469,44 +500,104 @@ fn curl_download_parallel(
             break;
         }
 
+        // 断点续传：已存在的分块直接计入进度，不再重新下载
+        if !existing[chunk_idx].is_empty() {
+            let d = existing[chunk_idx].len() as u64;
+            {
+                let mut cnt = downloaded.lock().unwrap();
+                *cnt += d;
+            }
+            continue;
+        }
+
         let url = url.to_string();
         let downloaded_clone = downloaded.clone();
+        let failed_offsets_clone = failed_offsets.clone();
 
         let handle = std::thread::spawn(move || {
-            let client = Client::builder()
-                .timeout(Duration::from_secs(300))
-                .user_agent("LlamaUI/0.7.0")
-                .build()
-                .expect("构建 reqwest Client 失败");
+            const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
+            const MAX_CHUNK_RETRIES: u32 = 3;
 
-            let mut resp = client
-                .get(&url)
-                .header("Range", format!("bytes={}-{}", range_start, range_end))
-                .send()
-                .map_err(|e| anyhow::anyhow!("Range 请求失败: {}", e))?;
+            let mut last_err: Option<anyhow::Error> = None;
+            for attempt in 1..=MAX_CHUNK_RETRIES {
+                let client = match Client::builder()
+                    .timeout(CHUNK_TIMEOUT)
+                    .connect_timeout(Duration::from_secs(10))
+                    .user_agent("LlamaUI/0.7.0")
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        last_err = Some(anyhow::anyhow!("构建 reqwest Client 失败: {}", e));
+                        break;
+                    }
+                };
 
-            if !resp.status().is_success() {
-                return Err(anyhow::anyhow!("HTTP {}", resp.status()));
+                let mut resp = match client
+                    .get(&url)
+                    .header("Range", format!("bytes={}-{}", range_start, range_end))
+                    .send()
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_err = Some(anyhow::anyhow!("Range 请求失败: {}", e));
+                        continue;
+                    }
+                };
+
+                if !resp.status().is_success() {
+                    last_err = Some(anyhow::anyhow!("HTTP {}", resp.status()));
+                    continue;
+                }
+
+                let mut chunk_data = Vec::new();
+                match resp.copy_to(&mut chunk_data) {
+                    Ok(_bytes) => {
+                        {
+                            let mut d = downloaded_clone.lock().unwrap();
+                            *d += chunk_data.len() as u64;
+                        }
+                        return Ok::<_, anyhow::Error>((range_start, chunk_data));
+                    }
+                    Err(e) => {
+                        last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
+                        continue;
+                    }
+                }
             }
 
-            let mut chunk_data = Vec::new();
-            resp.copy_to(&mut chunk_data)
-                .map_err(|e| anyhow::anyhow!("读取响应体失败: {}", e))?;
-
-            {
-                let mut d = downloaded_clone.lock().unwrap();
-                *d += chunk_data.len() as u64;
+            // 该分块重试耗尽，记录失败偏移以便上层重试
+            if let Some(e) = &last_err {
+                tracing::warn!(
+                    target: "LlamaDownloader",
+                    range_start,
+                    range_end,
+                    error = %e,
+                    "分块下载失败，已重试 {} 次",
+                    MAX_CHUNK_RETRIES
+                );
+                failed_offsets_clone.lock().unwrap().push(range_start);
             }
-
-            Ok::<_, anyhow::Error>((range_start, chunk_data))
+            Err(last_err.unwrap_or_else(|| anyhow::anyhow!("分块下载未知失败")))
         });
         handles.push(handle);
     }
 
-    // 等待所有分块下载完成，同时持续上报实时进度
+    // 等待所有分块下载完成，同时持续上报实时进度。
+    //
+    // 关键：分块可能因超时/失败而中断，必须在等待循环内**重试失败分块**，
+    // 否则 `handles` 永远不会全部 finished，下载会无限卡住。
     let start = std::time::Instant::now();
     let mut last_emitted_progress: f64 = progress_start;
-    while !handles.iter().all(|h| h.is_finished()) {
+    let mut retry_round = 0u32;
+    const MAX_RETRY_ROUNDS: u32 = 5;
+
+    loop {
+        let all_done = handles.iter().all(|h| h.is_finished());
+        if all_done {
+            break;
+        }
+
         let current = *downloaded.lock().unwrap();
         let raw_progress = if total_size > 0 {
             current as f64 / total_size as f64
@@ -522,19 +613,113 @@ fn curl_download_parallel(
             } else {
                 0.0
             };
+            let eta_secs = if speed_mbps > 0.0 {
+                Some(((total_size - current) as f64 / 1_048_576.0 / speed_mbps) as u64)
+            } else {
+                None
+            };
             if let Some(cb) = progress_callback {
                 cb(DownloadProgress {
                     stage: "downloading".into(),
                     progress: global_progress,
                     downloaded: current,
                     total: total_size,
-                    message: format!("下载中 {:.1}%", global_progress * 100.0),
+                    message: format!(
+                        "下载中 {:.1}% · {:.1}/{:.1} MB · {:.2} MB/s · {}",
+                        global_progress * 100.0,
+                        current as f64 / 1_048_576.0,
+                        total_size as f64 / 1_048_576.0,
+                        speed_mbps,
+                        match eta_secs {
+                            Some(s) => format!("约还需 {} 秒", s),
+                            None => "计算中...".to_string(),
+                        }
+                    ),
                     speed_mbps,
-                    eta_secs: None,
-                    detail: None,
+                    eta_secs,
+                    detail: Some(DownloadProgressDetail {
+                        step: format!("分块下载 ({} chunks)", num_chunks),
+                        step_progress: raw_progress,
+                        candidate_index: 1,
+                        candidate_count: 1,
+                        current_candidate: None,
+                        speed_mbps,
+                        eta_secs: eta_secs.map(|v| v as f64),
+                    }),
                 });
             }
         }
+
+        // 检测失败分块并重试
+        let failed = std::mem::take(&mut *failed_offsets.lock().unwrap());
+        if !failed.is_empty() && retry_round < MAX_RETRY_ROUNDS {
+            retry_round += 1;
+            for offset in failed {
+                let end = (offset + chunk_size).min(total_size) - 1;
+                let url = url.to_string();
+                let downloaded_clone = downloaded.clone();
+                let failed_offsets_clone = failed_offsets.clone();
+                handles.push(std::thread::spawn(move || {
+                    const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
+                    const MAX_CHUNK_RETRIES: u32 = 3;
+                    let mut last_err: Option<anyhow::Error> = None;
+                    for attempt in 1..=MAX_CHUNK_RETRIES {
+                        let client = match Client::builder()
+                            .timeout(CHUNK_TIMEOUT)
+                            .connect_timeout(Duration::from_secs(10))
+                            .user_agent("LlamaUI/0.7.0")
+                            .build()
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                last_err = Some(anyhow::anyhow!("构建 reqwest Client 失败: {}", e));
+                                break;
+                            }
+                        };
+                        let mut resp = match client
+                            .get(&url)
+                            .header("Range", format!("bytes={}-{}", offset, end))
+                            .send()
+                        {
+                            Ok(r) => r,
+                            Err(e) => {
+                                last_err = Some(anyhow::anyhow!("Range 请求失败: {}", e));
+                                continue;
+                            }
+                        };
+                        if !resp.status().is_success() {
+                            last_err = Some(anyhow::anyhow!("HTTP {}", resp.status()));
+                            continue;
+                        }
+                        let mut chunk_data = Vec::new();
+                        match resp.copy_to(&mut chunk_data) {
+                            Ok(_) => {
+                                {
+                                    let mut d = downloaded_clone.lock().unwrap();
+                                    *d += chunk_data.len() as u64;
+                                }
+                                return Ok::<_, anyhow::Error>((offset, chunk_data));
+                            }
+                            Err(e) => {
+                                last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
+                                continue;
+                            }
+                        }
+                    }
+                    if let Some(e) = &last_err {
+                        tracing::warn!(
+                            target: "LlamaDownloader",
+                            offset,
+                            error = %e,
+                            "重试分块仍失败，标记为失败"
+                        );
+                        failed_offsets_clone.lock().unwrap().push(offset);
+                    }
+                    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("分块下载未知失败")))
+                }));
+            }
+        }
+
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
@@ -559,14 +744,46 @@ fn curl_download_parallel(
         });
     }
 
-    // 收集所有分块结果
+    // 收集所有分块结果。
+    //
+    // 关键：不能用 `?` 立刻 bail——那会丢弃已成功下载的分块，
+    // 导致弱网下每次重试都从零开始。先把成功的分块落到磁盘，
+    // 再汇总失败分块，由上层决定重试还是报错。
     let mut chunks: Vec<(u64, Vec<u8>)> = Vec::new();
+    let mut chunk_errors: Vec<String> = Vec::new();
     for handle in handles {
-        let chunk = match handle.join() {
-            Ok(result) => result.map_err(|e| anyhow::anyhow!("下载线程失败: {:?}", e))?,
-            Err(e) => anyhow::bail!("下载线程 panic: {:?}", e),
-        };
-        chunks.push(chunk);
+        match handle.join() {
+            Ok(Ok(chunk)) => chunks.push(chunk),
+            Ok(Err(e)) => chunk_errors.push(format!("{:?}", e)),
+            Err(_) => chunk_errors.push("下载线程 panic".to_string()),
+        }
+    }
+
+    if !chunk_errors.is_empty() {
+        // 先把已成功的分块写入文件，避免浪费
+        chunks.sort_by_key(|(offset, _)| *offset);
+        for (offset, data) in &chunks {
+            file.seek(std::io::SeekFrom::Start(*offset))?;
+            file.write_all(data)?;
+        }
+        file.flush()?;
+        tracing::warn!(
+            target: "LlamaDownloader",
+            ok_chunks = chunks.len(),
+            failed = chunk_errors.len(),
+            "部分分块失败，保留已下载数据供续传"
+        );
+        return Err(anyhow::anyhow!(
+            "{}/{} 个分块下载失败：{}",
+            chunk_errors.len(),
+            num_chunks,
+            chunk_errors
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
     }
 
     // 按偏移量排序并写入文件
@@ -767,6 +984,10 @@ struct GitHubRelease {
     assets: Vec<GitHubAsset>,
     #[serde(default)]
     prerelease: bool,
+    /// 资产列表直接来自 GitHub API，名称/URL/size 均已确认真实，
+    /// 无需再做 HEAD 探测（HEAD 仅用于「猜测名称」的直连兜底策略）。
+    #[serde(skip)]
+    trusted_assets: bool,
 }
 
 /// GitHub Release 资产
@@ -1073,9 +1294,11 @@ fn smart_find_asset<'a>(
     }
 
     // 模糊匹配：按后端关键词匹配
+    // 注意：llama.cpp 资产命名里的 CUDA 小版本会持续演进（12.4 / 13.3 / 13.4 ...），
+    // 因此对 CUDA 采用「主版本族」匹配（cuda-12 / cuda-13），避免绑定到某个已过期的精确小版本。
     let backend_keywords: Vec<&str> = match backend {
-        GpuBackend::Cuda12_4 => vec!["cuda-12.4", "cuda"],
-        GpuBackend::Cuda13_3 => vec!["cuda-13.3", "cuda"],
+        GpuBackend::Cuda12_4 => vec!["cuda-12.4", "cuda-12", "cuda"],
+        GpuBackend::Cuda13_3 => vec!["cuda-13.4", "cuda-13.3", "cuda-13", "cuda"],
         GpuBackend::Vulkan => vec!["vulkan"],
         GpuBackend::Rocm => vec!["hip-radeon", "rocm"],
         GpuBackend::Metal => vec!["macos", "metal"],
@@ -1112,6 +1335,10 @@ fn smart_find_asset<'a>(
                 && name_lower.contains(keyword)
                 && (name_lower.starts_with("llama-") || name_lower.starts_with("cudart-llama-"))
             {
+                // 去重：多个关键词可能命中同一资产
+                if candidates.iter().any(|c| std::ptr::eq(*c, asset)) {
+                    continue;
+                }
                 candidates.push(asset);
                 tracing::debug!(
                     target: "LlamaDownloader",
@@ -1122,6 +1349,14 @@ fn smart_find_asset<'a>(
             }
         }
     }
+
+    // 优先选择「不含 CUDA 运行时打包」的普通 llama- 包：
+    // `cudart-llama-*.zip` 会额外捆绑 CUDA runtime（体积可达 400MB+），
+    // 而本机已装有 CUDA 运行时，无需重复下载。
+    candidates.sort_by_key(|a| {
+        let n = a.name.to_lowercase();
+        if n.starts_with("cudart-") { 1 } else { 0 }
+    });
 
     // 如果没有候选，尝试更宽松的匹配
     if candidates.is_empty() {
@@ -1146,6 +1381,27 @@ fn smart_find_asset<'a>(
         }
     }
 
+    // 资产来自 GitHub API：名称、URL、size 均已确认真实，直接选中，**无需 HEAD 探测**。
+    // 这避免了「API 已验证 → 再逐个 HEAD 复查」的重复等待。
+    if release.trusted_assets {
+        if let Some(asset) = candidates.first().copied() {
+            tracing::info!(
+                target: "LlamaDownloader",
+                name = %asset.name,
+                size = asset.size,
+                "✅ 资产列表来自 GitHub API，跳过 HEAD 探测直接选用"
+            );
+            if let Some(cb) = progress_callback {
+                cb(progress_simple(
+                    "finding_asset",
+                    stage_progress::FINDING_ASSET_END,
+                    format!("✅ 已匹配：{}", asset.name),
+                ));
+            }
+            return Some((asset, asset.size));
+        }
+    }
+
     // 验证每个候选 URL 的可用性（HEAD 请求）—— 并行执行以加速
     // 保存第一个候选以便最后回退
     let first_candidate = candidates.first().copied();
@@ -1160,47 +1416,43 @@ fn smart_find_asset<'a>(
         ));
     }
 
-    // 并行执行所有 HEAD 请求，避免串行等待
+    // 并行执行所有 HEAD 请求，但使用通道确保第一个成功的即刻返回
     let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START;
-    let urls: Vec<String> = candidates
-        .iter()
-        .map(|a| a.browser_download_url.clone())
-        .collect();
-    let results: Vec<(usize, anyhow::Result<u64>)> = std::thread::scope(|s| {
-        urls.iter()
-            .enumerate()
-            .map(|(i, url)| {
-                let url_owned = url.clone();
-                s.spawn(move || (i, curl_head(&url_owned)))
-                    .join()
-                    .unwrap_or((i, Err(anyhow::anyhow!("thread panicked"))))
-            })
-            .collect()
-    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
 
-    // 按原始顺序遍历结果，逐个通知前端
-    for (i, (_, result)) in results.iter().enumerate() {
+    // 启动所有验证线程
+    for (i, url) in urls.iter().enumerate() {
+        let tx = tx.clone();
+        let url_owned = url.clone();
+        std::thread::spawn(move || {
+            let result = curl_head(&url_owned);
+            if tx.send((i, result)).is_ok() {
+                return;
+            }
+        });
+    }
+
+    // 立即检查通道，第一个成功的结果就返回
+    while let Ok((i, result)) = rx.recv() {
+        let candidate = &candidates[i];
         let candidate_index = (i + 1) as u32;
-        let asset = &candidates[i];
-        let candidate_name = &asset.name;
-
-        let verify_progress = stage_progress::FINDING_ASSET_START
-            + (candidate_index as f64 / total_candidates as f64) * asset_range;
+        let candidate_name = &candidate.name;
 
         match result {
             Ok(content_length) => {
                 tracing::info!(
                     target: "LlamaDownloader",
                     name = %candidate_name,
-                    url = %asset.browser_download_url,
+                    url = %candidate.browser_download_url,
                     "✅ URL 可用，选择此资产"
                 );
+
                 // 通知前端：验证成功
-                let found_progress = stage_progress::FINDING_ASSET_END;
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",
-                        found_progress,
+                        stage_progress::FINDING_ASSET_END,
                         candidate_index as u64,
                         total_candidates as u64,
                         format!(
@@ -1209,7 +1461,7 @@ fn smart_find_asset<'a>(
                         ),
                         DownloadProgressDetail {
                             step: format!("✅ 选中：{}", candidate_name),
-                            step_progress: found_progress,
+                            step_progress: stage_progress::FINDING_ASSET_END,
                             candidate_index,
                             candidate_count: total_candidates,
                             current_candidate: Some(candidate_name.clone()),
@@ -1218,20 +1470,22 @@ fn smart_find_asset<'a>(
                         },
                     ));
                 }
-                return Some((asset, *content_length));
+                return Some((candidate, content_length));
             }
             Err(e) => {
                 tracing::debug!(
                     target: "LlamaDownloader",
-                    url = %asset.browser_download_url,
+                    url = %candidate.browser_download_url,
                     error = %e,
                     "❌ URL 不可用，尝试下一个"
                 );
+
                 // 通知前端：验证失败
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",
-                        verify_progress,
+                        stage_progress::FINDING_ASSET_START
+                            + (candidate_index as f64 / total_candidates as f64) * asset_range,
                         candidate_index as u64,
                         total_candidates as u64,
                         format!(
@@ -1284,26 +1538,104 @@ fn smart_find_asset<'a>(
     None
 }
 
-/// 直连策略获取最新版本（不使用 GitHub API，避免速率限制）
+/// 直连策略获取最新版本。
+///
+/// 优先走 GitHub API（单次请求即可拿到**真实**的 tag、资产名与 size，
+/// 通常 < 1s），避免「猜名字 + 逐个 HEAD 探测」的长串行等待；
+/// API 不可用时再回退到直连探测策略。
 fn fetch_llama_latest_release_with_retry(
     _max_retries: u32,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
 ) -> anyhow::Result<GitHubRelease> {
-    match try_fetch_with_client_direct(progress_callback) {
-        Ok(release) => {
-            if release.prerelease {
-                tracing::info!(
-                    target: "LlamaDownloader",
-                    "获取到的版本是预发布版（prerelease），可能不稳定"
-                );
-            }
-            if !release.tag_name.is_empty() {
-                return Ok(release);
-            }
-            Err(anyhow::anyhow!("返回的 tag 名称为空"))
+    // 策略 1：GitHub API（最快最准）
+    match fetch_latest_release_via_api() {
+        Ok(release) => return Ok(release),
+        Err(e) => {
+            tracing::warn!(
+                target: "LlamaDownloader",
+                error = %e,
+                "GitHub API 获取失败，回退到直连探测策略"
+            );
         }
-        Err(e) => Err(e),
     }
+
+    // 策略 2：直连探测（API 不可用时的兜底）
+    try_fetch_with_client_direct(progress_callback)
+}
+
+/// 通过 GitHub API 获取最新可用构建。
+///
+/// llama.cpp 的 stable release（如 v0.5.0）通常只含一个 `nightly-tag.txt`，
+/// 真正的二进制在其指向的 build tag（形如 b11200）下。
+///
+/// 关键取舍：GitHub release API 的响应体很大（每个 release 约 67KB，
+/// 因为还包含完整的 changelog markdown），而弱网下读取响应体的速度很慢
+/// （实测约 10KB/s）。因此这里用 `per_page=1` 只取最新一条，
+/// 省掉大量无用传输；实测 67KB 即可拿到含 35 个资产的完整构建。
+///
+/// 同时刻意**不**去下载 `nightly-tag.txt`：它属于 `releases/download/` 路径，
+/// 会 302 跳转到对象存储 CDN，在部分网络环境下连接会长时间挂起。
+fn fetch_latest_release_via_api() -> anyhow::Result<GitHubRelease> {
+    let client = Client::builder()
+        // 整体超时必须覆盖「响应体读取」，弱网下 67KB 可能需要数秒
+        .timeout(Duration::from_secs(45))
+        .connect_timeout(Duration::from_secs(8))
+        .user_agent("LlamaUI/0.7.0")
+        .build()?;
+
+    // 优先只取 1 条；若最新一条恰好是不含二进制的 stable tag，再放宽到 3 条
+    let mut last_err = None;
+    for per_page in [1u32, 3] {
+        let url = format!(
+            "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page={}",
+            per_page
+        );
+
+        // reqwest 未启用 `json` feature，这里用 serde_json 手动反序列化，
+        // 避免为此新增依赖特性导致全量重编译。
+        let body = match client
+            .get(&url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.text())
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    target: "LlamaDownloader",
+                    per_page = per_page,
+                    error = %e,
+                    "GitHub API 请求失败"
+                );
+                last_err = Some(anyhow::Error::from(e));
+                continue;
+            }
+        };
+
+        let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
+            .map_err(|e| anyhow::anyhow!("解析 GitHub API 响应失败: {}", e))?;
+
+        // 选出第一个真正带二进制的 release（跳过只含 nightly-tag.txt 的 stable tag）
+        if let Some(mut rel) = releases.into_iter().find(|r| {
+            r.assets
+                .iter()
+                .any(|a| a.name.to_lowercase().starts_with("llama-"))
+        }) {
+            rel.trusted_assets = true;
+            tracing::info!(
+                target: "LlamaDownloader",
+                tag = %rel.tag_name,
+                assets = rel.assets.len(),
+                bytes = body.len(),
+                "通过 GitHub API 获取到最新构建（资产已验证，无需 HEAD 探测）"
+            );
+            return Ok(rel);
+        }
+    }
+
+    Err(last_err
+        .unwrap_or_else(|| anyhow::anyhow!("GitHub API 未返回任何含二进制的 release")))
 }
 
 /// 获取最新版本（纯直连策略：不使用 GitHub API，避免速率限制）
@@ -1328,6 +1660,7 @@ fn try_fetch_with_client_direct(
                 tag_name: valid_tag.clone(),
                 assets: build_virtual_assets(&valid_tag, &os, &arch),
                 prerelease: false,
+                trusted_assets: false,
             });
         }
     }
@@ -1337,7 +1670,7 @@ fn try_fetch_with_client_direct(
         tracing::warn!(
             target: "LlamaDownloader",
             nightly_tag = %nightly_tag,
-            "API 不可用，回退到 nightly-tag.txt 方式"
+            "使用 nightly-tag.txt 直连方式"
         );
         let os = current_os();
         let arch = current_arch();
@@ -1348,12 +1681,13 @@ fn try_fetch_with_client_direct(
                 tag_name: valid_tag.clone(),
                 assets: build_virtual_assets(&valid_tag, &os, &arch),
                 prerelease: true,
+                trusted_assets: false,
             });
         }
     }
 
-    // 3) 硬编码已知稳定版本（回退）
-    let tag = "b10964".to_string();
+    // 3) 硬编码已知可用版本（最后兜底）
+    let tag = "b11146".to_string();
     let tag_owned = tag.clone();
     tracing::warn!(target: "LlamaDownloader", tag = %tag_owned, "所有策略失败，回退到硬编码版本");
     let os = current_os();
@@ -1365,6 +1699,7 @@ fn try_fetch_with_client_direct(
             tag_name: valid_tag.clone(),
             assets: build_virtual_assets(&valid_tag, &os, &arch),
             prerelease: false,
+            trusted_assets: false,
         });
     }
 
@@ -1785,7 +2120,12 @@ fn compute_sha256_fast(
 
 /// 从 GitHub release 页面直接下载 nightly-tag.txt（不使用 API）
 fn fetch_nightly_tag_direct() -> Option<String> {
-    let stable_tags = ["v0.4.2", "v0.4.1", "v0.4.0"];
+    // 注意：这里必须是 **llama.cpp 的 stable release tag**（vX.Y.Z），
+    // 不能使用应用自身的版本号。stable release 下挂着 nightly-tag.txt，
+    // 指向真正含二进制的 build tag。
+    let stable_tags = [
+        "v0.5.0", "v0.4.5", "v0.4.4", "v0.4.3", "v0.4.2", "v0.4.1", "v0.4.0",
+    ];
     for stable_tag in &stable_tags {
         let url = format!(
             "https://github.com/ggml-org/llama.cpp/releases/download/{}/nightly-tag.txt",
@@ -1824,106 +2164,149 @@ fn try_validate_asset_urls(
         target: "LlamaDownloader",
         tag = %tag,
         candidates_count = candidates.len(),
-        "使用直连验证策略验证候选 URL"
+        "使用直连验证策略验证候选 URL（并行）"
     );
 
+    let total = candidates.len();
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "finding_asset".to_string(),
+            progress: stage_progress::FINDING_ASSET_START,
+            downloaded: 0,
+            total: total as u64,
+            message: format!("并行验证 {} 个候选安装包...", total),
+            speed_mbps: 0.0,
+            eta_secs: None,
+            detail: Some(DownloadProgressDetail {
+                step: format!("并行验证 {} 个候选", total),
+                step_progress: 0.0,
+                candidate_index: 0,
+                candidate_count: total as u32,
+                current_candidate: None,
+                speed_mbps: 0.0,
+                eta_secs: None,
+            }),
+        });
+    }
+
+    // 并行验证所有候选：一旦有任意一个可用即刻返回
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, String, anyhow::Result<u64>)>();
     for (i, asset_name) in candidates.iter().enumerate() {
         let asset_url = format!(
             "https://github.com/ggml-org/llama.cpp/releases/download/{}/{}",
             tag, asset_name
         );
+        let tx = tx.clone();
+        let name = asset_name.clone();
+        std::thread::spawn(move || {
+            // 短超时：HEAD 只需快速判定可用性
+            let client = match Client::builder()
+                .timeout(Duration::from_secs(6))
+                .connect_timeout(Duration::from_secs(4))
+                .user_agent("LlamaUI/0.7.0")
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send((i, name, Err(anyhow::Error::from(e))));
+                    return;
+                }
+            };
+            let res = client
+                .head(&asset_url)
+                .send()
+                .map_err(anyhow::Error::from)
+                .and_then(|resp| {
+                    if !resp.status().is_success() {
+                        anyhow::bail!("HTTP {} (不可用)", resp.status().as_u16());
+                    }
+                    let cl = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    Ok(cl)
+                });
+            let _ = tx.send((i, name, res));
+        });
+    }
+    drop(tx);
 
-        // 通知前端：正在验证候选
-        if let Some(cb) = progress_callback {
-            cb(DownloadProgress {
-                stage: "finding_asset".to_string(),
-                progress: stage_progress::FINDING_ASSET_START
-                    + (i as f64 / candidates.len() as f64)
-                        * (stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START),
-                downloaded: 0,
-                total: candidates.len() as u64,
-                message: format!("验证候选 {}/{}...", i + 1, candidates.len()),
-                speed_mbps: 0.0,
-                eta_secs: None,
-                detail: Some(DownloadProgressDetail {
-                    step: format!("验证候选：{}", asset_name),
-                    step_progress: (i + 1) as f64 / candidates.len() as f64,
-                    candidate_index: (i + 1) as u32,
-                    candidate_count: candidates.len() as u32,
-                    current_candidate: Some(asset_name.clone()),
-                    speed_mbps: 0.0,
-                    eta_secs: None,
-                }),
-            });
-        }
-
-        tracing::debug!(
-            target: "LlamaDownloader",
-            url = %asset_url,
-            asset_name = %asset_name,
-            "正在验证候选 URL..."
-        );
-
-        let req = shared_client().head(&asset_url);
-        let resp = match req.timeout(std::time::Duration::from_secs(10)).send() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(target: "LlamaDownloader", error = %e, "HEAD 请求失败");
-                continue;
+    let mut failed = 0u32;
+    while let Ok((i, asset_name, res)) = rx.recv() {
+        match res {
+            Ok(content_length) => {
+                tracing::info!(
+                    target: "LlamaDownloader",
+                    tag = %tag,
+                    asset_name = %asset_name,
+                    content_length = content_length,
+                    "✅ URL 验证通过，选中此候选"
+                );
+                if let Some(cb) = progress_callback {
+                    cb(DownloadProgress {
+                        stage: "finding_asset".to_string(),
+                        progress: stage_progress::FINDING_ASSET_END,
+                        downloaded: 0,
+                        total: total as u64,
+                        message: format!("✅ 选中：{}", asset_name),
+                        speed_mbps: 0.0,
+                        eta_secs: None,
+                        detail: Some(DownloadProgressDetail {
+                            step: format!("✅ 选中：{}", asset_name),
+                            step_progress: 1.0,
+                            candidate_index: (i + 1) as u32,
+                            candidate_count: total as u32,
+                            current_candidate: Some(asset_name.clone()),
+                            speed_mbps: 0.0,
+                            eta_secs: None,
+                        }),
+                    });
+                }
+                return Some((tag.to_string(), asset_name, content_length));
             }
-        };
-
-        if !resp.status().is_success() {
-            tracing::debug!(
-                target: "LlamaDownloader",
-                status = %resp.status(),
-                "HEAD 返回非成功状态码"
-            );
-            continue;
+            Err(e) => {
+                failed += 1;
+                tracing::debug!(
+                    target: "LlamaDownloader",
+                    asset_name = %asset_name,
+                    error = %e,
+                    "候选 URL 不可用"
+                );
+                if let Some(cb) = progress_callback {
+                    let p = stage_progress::FINDING_ASSET_START
+                        + (failed as f64 / total as f64)
+                            * (stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START);
+                    cb(DownloadProgress {
+                        stage: "finding_asset".to_string(),
+                        progress: p,
+                        downloaded: 0,
+                        total: total as u64,
+                        message: format!("❌ {}/{} 不可用", failed, total),
+                        speed_mbps: 0.0,
+                        eta_secs: None,
+                        detail: Some(DownloadProgressDetail {
+                            step: format!("❌ {} 不可用", asset_name),
+                            step_progress: failed as f64 / total as f64,
+                            candidate_index: (i + 1) as u32,
+                            candidate_count: total as u32,
+                            current_candidate: Some(asset_name.clone()),
+                            speed_mbps: 0.0,
+                            eta_secs: None,
+                        }),
+                    });
+                }
+            }
         }
-
-        let content_length = resp
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-
-        tracing::info!(
-            target: "LlamaDownloader",
-            tag = %tag,
-            asset_name = %asset_name,
-            asset_url = %asset_url,
-            content_length = content_length,
-            "✅ URL 验证通过，选中此候选"
-        );
-
-        // 通知前端：验证成功
-        if let Some(cb) = progress_callback {
-            cb(DownloadProgress {
-                stage: "finding_asset".to_string(),
-                progress: stage_progress::FINDING_ASSET_END,
-                downloaded: 0,
-                total: 1,
-                message: format!("✅ 候选 {}/{} 可用，选中：{}", 1, 1, asset_name),
-                speed_mbps: 0.0,
-                eta_secs: None,
-                detail: Some(DownloadProgressDetail {
-                    step: format!("✅ 选中：{}", asset_name),
-                    step_progress: 1.0,
-                    candidate_index: 1,
-                    candidate_count: 1,
-                    current_candidate: Some(asset_name.clone()),
-                    speed_mbps: 0.0,
-                    eta_secs: None,
-                }),
-            });
-        }
-
-        return Some((tag.to_string(), asset_name.clone(), content_length));
     }
 
-    tracing::warn!(target: "LlamaDownloader", "所有候选 URL 验证失败");
+    tracing::warn!(
+        target: "LlamaDownloader",
+        tag = %tag,
+        failed = failed,
+        "所有候选 URL 验证失败"
+    );
     None
 }
 
@@ -2000,6 +2383,81 @@ fn build_official_candidate_names(tag: &str, os: &str, arch: &str) -> Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 真实网络回归测试（默认忽略，用 `cargo test -- --ignored` 手动跑）。
+    ///
+    /// 覆盖 DEFECT：llama.cpp 的 stable release 只含 `nightly-tag.txt`，
+    /// 二进制在其指向的 build tag 下；且「匹配资产」阶段必须快速返回。
+    #[test]
+    #[ignore = "需要访问 GitHub 网络"]
+    fn test_api_release_lookup_is_fast_and_selects_real_asset() {
+        let start = std::time::Instant::now();
+        let release =
+            fetch_latest_release_via_api().expect("应能通过 GitHub API 获取到最新构建");
+        let elapsed = start.elapsed();
+
+        assert!(!release.tag_name.is_empty(), "tag 不应为空");
+        assert!(release.trusted_assets, "API 资产应标记为可信");
+        assert!(!release.assets.is_empty(), "资产列表不应为空");
+        assert!(
+            release.assets.iter().all(|a| a.size > 0),
+            "API 资产应带有真实 size"
+        );
+
+        // 该阶段曾经稳定耗时 60s+，这里锁定性能回归。
+        // 注意：本机到 GitHub 的响应体带宽很低（实测约 10KB/s），
+        // per_page=1 的 67KB 响应就需 ~7s，因此阈值取 30s。
+        assert!(
+            elapsed < std::time::Duration::from_secs(30),
+            "版本获取耗时过长: {:?}",
+            elapsed
+        );
+
+        // 资产匹配不应产生 HEAD 请求，直接命中
+        let backend = detect_gpu_backend();
+        let picked = smart_find_asset(&release, backend, None).expect("应匹配到资产");
+        assert!(picked.1 > 0, "选中的资产应带真实大小");
+        assert!(
+            !picked.0.name.starts_with("cudart-"),
+            "不应优先选择捆绑 CUDA runtime 的超大包: {}",
+            picked.0.name
+        );
+        println!(
+            "tag={} backend={} picked={} ({:.1} MB) in {:?}",
+            release.tag_name,
+            backend.as_str(),
+            picked.0.name,
+            picked.1 as f64 / 1048576.0,
+            elapsed
+        );
+    }
+
+    /// 资产匹配去重：多个后端关键词命中同一资产时不应重复入列。
+    #[test]
+    fn test_trusted_assets_skip_head_probe() {
+        let release = GitHubRelease {
+            tag_name: "b1".to_string(),
+            assets: vec![
+                GitHubAsset {
+                    name: "llama-b1-bin-win-cuda-13.4-x64.zip".to_string(),
+                    browser_download_url: "https://example.com/a.zip".to_string(),
+                    size: 12345,
+                },
+                GitHubAsset {
+                    name: "cudart-llama-bin-win-cuda-13.4-x64.zip".to_string(),
+                    browser_download_url: "https://example.com/b.zip".to_string(),
+                    size: 99999,
+                },
+            ],
+            prerelease: true,
+            trusted_assets: true,
+        };
+
+        let picked = smart_find_asset(&release, GpuBackend::Cuda13_3, None).expect("应匹配到资产");
+        // 应选普通 llama- 包（更小），而不是 cudart 打包版本
+        assert_eq!(picked.0.name, "llama-b1-bin-win-cuda-13.4-x64.zip");
+        assert_eq!(picked.1, 12345);
+    }
 
     #[test]
     fn test_gpu_backend_from_str() {
