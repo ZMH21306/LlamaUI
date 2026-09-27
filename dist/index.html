@@ -13,11 +13,24 @@
   <!-- 更新进度提示 -->
   <div class="update-toast" id="updateToast" hidden>
     <div class="update-toast-header">
+      <div class="update-toast-icon" id="updateToastIcon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 0 1-15.36 6.36"></path>
+          <path d="M3 12a9 9 0 0 1 15.36-6.36"></path>
+          <polyline points="21 3 21 9 15 9"></polyline>
+          <polyline points="3 21 3 15 9 15 9"></polyline>
+        </svg>
+      </div>
       <span id="updateProgressLabel">检查更新中...</span>
-      <button class="update-toast-close" onclick="document.getElementById('updateToast').hidden = true">×</button>
+      <span class="update-toast-badge info" id="updateBadge">检查中</span>
+      <button class="update-toast-close" id="updateToastClose" aria-label="关闭更新提示">&times;</button>
     </div>
     <div class="update-progress-bar">
-      <div class="update-progress-fill" id="updateProgressBar" style="width: 0%"></div>
+      <div class="update-progress-fill indeterminate" id="updateProgressBar" style="width: 0%"></div>
+    </div>
+    <div class="update-toast-footer" id="updateToastFooter" hidden>
+      <span class="update-toast-speed" id="updateSpeed">0 MB/s</span>
+      <span class="update-toast-eta" id="updateEta">计算中...</span>
     </div>
   </div>
 
