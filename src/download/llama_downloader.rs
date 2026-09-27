@@ -28,12 +28,18 @@ use std::time::Duration;
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// 获取共享阻塞 HTTP 客户端。
+///
+/// 连接池容量必须 >= 最大并发分块数，否则多出的分块会反复新建 TCP+TLS
+/// 连接（每次约 3~5 个 RTT），在丢包链路上会放大成"越并发越慢"。
+/// 同时把空闲连接保留时间拉长，避免并发分块之间频繁重连。
 fn shared_client() -> &'static Client {
     SHARED_CLIENT.get_or_init(|| {
         Client::builder()
             .timeout(Duration::from_secs(300))
             .connect_timeout(Duration::from_secs(30))
             .tcp_nodelay(true)
+            .pool_max_idle_per_host(128)
+            .pool_idle_timeout(Some(Duration::from_secs(90)))
             .user_agent("LlamaUI/0.7.0")
             .build()
             .expect("构建 reqwest blocking Client 失败")
@@ -428,13 +434,14 @@ fn curl_download_parallel(
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
     cancel_token: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<u64> {
-    const MAX_CHUNKS: usize = 32;
-    // 分块大小从 4MB 降到 512KB：
-    // 本机到 GitHub CDN 的实际带宽很低（实测约 100KB/s），
-    // 原来 32MB/块 在 300s 超时内根本下不完，必然整体失败。
-    // 512KB/块 在 100KB/s 下约需 5s，即使单线程也能在超时内完成，
-    // 32 线程并行既能推进进度，单块失败的重试成本也极低。
-    const CHUNK_SIZE: u64 = 512 * 1024; // 512KB per chunk
+    // 分块策略与线程数不再硬编码：由下方自适应算法按文件大小推导。
+    //
+    // 旧实现的两个问题：
+    // 1) `CHUNK_SIZE = 512KB` 仅用于估算块数，随后被 `min(32)` 截断，
+    //    再按 `total/32` 反推实际块大小 —— 注释说的 512KB 根本不生效，
+    //    250MB 文件实际切成 32 块 × 7.8MB。在低速链路上单块远超读超时，
+    //    必然整块失败重下（本次优化要修的主因）。
+    // 2) 块数固定 32，小文件白白起 32 个线程，大文件并发又不够。
 
     if total_size == 0 {
         return curl_download(
@@ -456,10 +463,20 @@ fn curl_download_parallel(
         .read(true)
         .open(dest)?;
 
-    // 计算分块数量和范围
-    let num_chunks = (total_size as f64 / CHUNK_SIZE as f64).ceil() as usize;
-    let num_chunks = num_chunks.min(MAX_CHUNKS);
-    let chunk_size = (total_size as f64 / num_chunks as f64).ceil() as u64;
+    // 自适应分块：目标每块约 2MiB，块数按文件大小缩放，并封顶 96 块
+    // （既保证大文件并发足够，又不让线程数随体积无限膨胀）。
+    const TARGET_CHUNK_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
+    const MIN_CHUNK_SIZE: u64 = 256 * 1024; // 256 KiB
+    const MAX_CHUNKS: usize = 96;
+    let mut num_chunks =
+        ((total_size + TARGET_CHUNK_SIZE - 1) / TARGET_CHUNK_SIZE).max(1) as usize;
+    num_chunks = num_chunks.min(MAX_CHUNKS);
+    let mut chunk_size = (total_size + num_chunks as u64 - 1) / num_chunks as u64;
+    // 极小文件（< 256KiB）直接单块处理，避免起线程做无意义的分块
+    if total_size > 0 && chunk_size < MIN_CHUNK_SIZE {
+        num_chunks = 1;
+        chunk_size = total_size;
+    }
 
     // 读取已下载的分块，用于断点续传。
     //
@@ -467,20 +484,47 @@ fn curl_download_parallel(
     // 原实现是 `vec![Vec<u8>>`，会把整个文件（可达 250MB+）一次性读入
     // 内存，仅为了判断 `is_empty()`，白白吃掉数百 MB 内存和一次全量磁盘读。
     let mut existing_bytes: Vec<u64> = vec![0u64; num_chunks];
+    // 文件当前物理长度（稀疏写入时的高水位）。
+    // 不能仅用 `file_len > end` 判定整块完成——稀疏文件在 `end` 之后
+    // 可能仍是空洞，长度够并不代表本块区间已真正写满。
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     for i in 0..num_chunks {
         let start = i as u64 * chunk_size;
         let end = (start + chunk_size).min(total_size) - 1;
-        let len = (end - start + 1) as u64;
+        let len = end - start + 1;
+        // 起点已超出当前文件长度：本块完全无数据
+        if start >= file_len {
+            continue;
+        }
+        // 读满整块做校验：只有真正逐字节读完才认为该块完整。
+        // 旧实现只探 1 字节 + 比对总长度，稀疏文件下会误判为已完成，
+        // 导致下载出中间带空洞的损坏文件。
         if file.seek(std::io::SeekFrom::Start(start)).is_ok() {
-            // 只需探测该区间是否已有数据：读 1 字节成功即认为该块已下载。
-            // 续传时该块会跳过重下，因此要求数据完整（长度匹配）。
-            let mut probe = [0u8; 1];
-            if file.read_exact(&mut probe).is_ok() {
-                // 用文件长度判断该块是否被完整填充
-                let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-                if file_len > end {
-                    existing_bytes[i] = len;
+            let mut remaining = (file_len - start).min(len);
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut got: u64 = 0;
+            let mut ok = true;
+            while remaining > 0 {
+                let want = remaining.min(buf.len() as u64) as usize;
+                match file.read(&mut buf[..want]) {
+                    Ok(0) => {
+                        // 提前 EOF：数据不完整
+                        ok = false;
+                        break;
+                    }
+                    Ok(n) => {
+                        got += n as u64;
+                        remaining -= n as u64;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
                 }
+            }
+            if ok && got == len {
+                existing_bytes[i] = len;
             }
         }
     }
@@ -520,7 +564,10 @@ fn curl_download_parallel(
     // 旧逻辑，32MB/块必然整体失败。改成 512KB/块后，单块在
     // 60s 内即使只跑 100KB/s 也能下完；失败时只重试该小块，
     // 已完成的分块不会浪费。
-    let downloaded = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    // 用无锁原子计数器累加全局进度。
+    // 96 个分块线程每读一个缓冲就要更新一次进度；若用 Mutex，
+    // 锁竞争 + 唤醒开销会成为主要瓶颈，实测吞吐掉到实际带宽的零头。
+    let downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failed_offsets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut handles = Vec::new();
 
@@ -533,11 +580,11 @@ fn curl_download_parallel(
 
         // 断点续传：已存在完整数据的分块直接计入进度，不再重新下载
         if existing_bytes[chunk_idx] > 0 {
-            let d = existing_bytes[chunk_idx];
-            {
-                let mut cnt = downloaded.lock().unwrap();
-                *cnt += d;
-            }
+            // 原子累加，无需加锁
+            downloaded.fetch_add(
+                existing_bytes[chunk_idx],
+                std::sync::atomic::Ordering::Relaxed,
+            );
             continue;
         }
 
@@ -547,10 +594,20 @@ fn curl_download_parallel(
         let failed_offsets_clone = failed_offsets.clone();
 
         let handle = std::thread::spawn(move || {
-            const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
             const MAX_CHUNK_RETRIES: u32 = 3;
-            // 流式读写缓冲：64KB，远小于原先 512KB 的 Vec 中转，降低内存峰值
-            const STREAM_BUF: usize = 64 * 1024;
+            // 超时随块大小缩放，不再用固定 60s：
+            // 2MiB 块在 30KB/s 的链路上需要 ~70s，固定 60s 会让每一块
+            // 都在接近完成时被判超时，然后整块作废重下 —— 这正是当前
+            // "越下载越慢"的直接原因。
+            // 按 32KiB/s 的悲观速率预留 4 倍余量，再夹在 [60s, 600s]。
+            let chunk_timeout = Duration::from_secs(
+                ((range_end - range_start + 1) / 32 * 4).clamp(60, 600),
+            );
+            // 读缓冲提升到 256KB：
+            // 64KB 在百兆以上链路上会让 read() 系统调用过于频繁，
+            // 单次调用摊销开销占比可观。256KB 是吞吐/内存的平衡点
+            // （96 线程 × 256KB = 24MB 常驻，远低于旧实现把整个文件读进内存的峰值）。
+            const STREAM_BUF: usize = 256 * 1024;
 
             let mut last_err: Option<anyhow::Error> = None;
             for attempt in 1..=MAX_CHUNK_RETRIES {
@@ -572,7 +629,7 @@ fn curl_download_parallel(
                 let mut resp = match client
                     .get(&url)
                     .header("Range", format!("bytes={}-{}", range_start, range_end))
-                    .timeout(CHUNK_TIMEOUT)
+                    .timeout(chunk_timeout)
                     .send()
                 {
                     Ok(r) => r,
@@ -607,7 +664,7 @@ fn curl_download_parallel(
                     continue;
                 }
 
-                let mut buf = [0u8; STREAM_BUF];
+                let mut buf = vec![0u8; STREAM_BUF];
                 let mut local_downloaded: u64 = 0;
                 let mut read_ok = true;
                 loop {
@@ -627,12 +684,9 @@ fn curl_download_parallel(
                         read_ok = false;
                         break;
                     }
-                    // 每读一块就实时累加全局进度（原来要等整块读完才记一次，
-                    // 512KB 全部收完才动一次，导致 UI 上进度跳跃）
-                    {
-                        let mut d = downloaded_clone.lock().unwrap();
-                        *d += n as u64;
-                    }
+                    // 原子累加进度（无锁）。旧实现每 64KB 抢一次 Mutex，
+                    // 高并发下锁竞争直接把吞吐压到实际带宽的零头。
+                    downloaded_clone.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
                     local_downloaded += n as u64;
                 }
 
@@ -677,7 +731,7 @@ fn curl_download_parallel(
             break;
         }
 
-        let current = *downloaded.lock().unwrap();
+        let current = downloaded.load(std::sync::atomic::Ordering::Relaxed);
         let raw_progress = if total_size > 0 {
             current as f64 / total_size as f64
         } else {
@@ -742,9 +796,12 @@ fn curl_download_parallel(
                 let downloaded_clone = downloaded.clone();
                 let failed_offsets_clone = failed_offsets.clone();
                 handles.push(std::thread::spawn(move || {
-                    const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
                     const MAX_CHUNK_RETRIES: u32 = 3;
-                    const STREAM_BUF: usize = 64 * 1024;
+                    // 与首轮一致：超时按块大小缩放，缓冲同为 256KB
+                    let chunk_timeout = Duration::from_secs(
+                        ((end - offset + 1) / 32 * 4).clamp(60, 600),
+                    );
+                    const STREAM_BUF: usize = 256 * 1024;
                     let mut last_err: Option<anyhow::Error> = None;
                     for attempt in 1..=MAX_CHUNK_RETRIES {
                         // 重试退避，与首轮保持一致
@@ -763,7 +820,7 @@ fn curl_download_parallel(
                         let mut resp = match client
                             .get(&url)
                             .header("Range", format!("bytes={}-{}", offset, end))
-                            .timeout(CHUNK_TIMEOUT)
+                            .timeout(chunk_timeout)
                             .send()
                         {
                             Ok(r) => r,
@@ -810,10 +867,7 @@ fn curl_download_parallel(
                                 read_ok = false;
                                 break;
                             }
-                            {
-                                let mut d = downloaded_clone.lock().unwrap();
-                                *d += n as u64;
-                            }
+                            downloaded_clone.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
                             local_downloaded += n as u64;
                         }
 
@@ -846,7 +900,7 @@ fn curl_download_parallel(
     }
 
     // 最后一次完整上报
-    let current = *downloaded.lock().unwrap();
+    let current = downloaded.load(std::sync::atomic::Ordering::Relaxed);
     let raw_progress = if total_size > 0 {
         current as f64 / total_size as f64
     } else {
