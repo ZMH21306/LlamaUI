@@ -14,11 +14,11 @@
 //! - 支持增量扫描（仅扫描新增/删除的模型文件）
 //! - 模型元数据缓存到磁盘，避免重复扫描
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 /// 模型信息。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,16 +158,19 @@ impl ModelManager {
     /// 获取所有目录中的所有模型。
     pub fn all_models(&self) -> Vec<ModelInfo> {
         let cats = self.catalogs.lock();
-        cats.iter()
-            .flat_map(|c| c.models.clone())
-            .collect()
+        cats.iter().flat_map(|c| c.models.clone()).collect()
     }
 
     /// 按标签过滤所有模型。
     pub fn filter_models_by_tag(&self, tag: &str) -> Vec<ModelInfo> {
         let cats = self.catalogs.lock();
         cats.iter()
-            .flat_map(|c| c.filter_by_tag(tag).into_iter().cloned().collect::<Vec<_>>())
+            .flat_map(|c| {
+                c.filter_by_tag(tag)
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 
