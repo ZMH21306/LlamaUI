@@ -62,7 +62,12 @@ pub enum DownloadState {
     /// 已取消
     Cancelled,
     /// 下载完成
-    Completed { path: String, file_size: u64, sha256: String, elapsed_ms: u64 },
+    Completed {
+        path: String,
+        file_size: u64,
+        sha256: String,
+        elapsed_ms: u64,
+    },
     /// 下载失败
     Failed { error: String },
 }
@@ -83,7 +88,7 @@ pub enum UpdateState {
     /// 空闲（未进行任何更新操作）。
     Idle,
     /// 正在检查更新。
-    Checking,
+    Checking { current_version: String },
     /// 检查完成，有新版本。
     Available {
         latest_version: String,
@@ -91,13 +96,18 @@ pub enum UpdateState {
         release_notes: String,
         download_url: String,
         file_size: u64,
+        sha256: Option<String>,
     },
     /// 检查完成，已是最新。
     UpToDate { current_version: String },
     /// 检查失败。
-    CheckFailed { error: String },
+    CheckFailed { error: String, current_version: String },
     /// 开始下载更新。
-    DownloadStarted { total_bytes: u64 },
+    DownloadStarted { 
+        total_bytes: u64, 
+        version: String,
+        message: String,
+    },
     /// 下载进行中。
     DownloadProgress {
         progress: f64,
@@ -105,15 +115,27 @@ pub enum UpdateState {
         total: u64,
         speed_mbps: f64,
         eta_secs: Option<u64>,
+        message: String,
     },
     /// 下载完成，准备安装。
-    DownloadCompleted { download_path: String, file_size: u64 },
+    DownloadCompleted {
+        download_path: String,
+        file_size: u64,
+        version: String,
+    },
     /// 安装中。
-    Installing { progress: f64, message: String },
+    Installing { progress: f64, message: String, version: String },
     /// 安装完成（需要重启）。
-    Completed { new_version: String },
+    Completed { 
+        new_version: String,
+        elapsed_ms: u64,
+    },
     /// 下载/安装失败。
-    Failed { error: String },
+    Failed { 
+        error: String, 
+        version: String,
+        stage: String,
+    },
     /// 已取消。
     Cancelled,
 }
@@ -128,6 +150,10 @@ pub struct UpdateDownloadProgress {
     pub speed_mbps: f64,
     pub eta_secs: Option<u64>,
     pub message: String,
+    /// 当前版本
+    pub version: Option<String>,
+    /// 当前阶段（如: "verifying", "extracting" 等）
+    pub step: Option<String>,
 }
 
 /// 单行日志。
@@ -188,7 +214,7 @@ pub struct StepStatus {
 mod tests {
     use super::*;
 
-        #[test]
+    #[test]
     fn event_names_are_stable() {
         // 前端 dist/main.js 通过这些字符串 listen。
         // 改动需同步前端，否则前端收不到事件。
