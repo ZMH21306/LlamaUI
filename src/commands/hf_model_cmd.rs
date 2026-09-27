@@ -1,4 +1,4 @@
-﻿//! HF Model Store Commands
+//! HF Model Store Commands
 
 use std::collections::HashMap;
 use std::fs;
@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::download::hf_downloader::HfDownloader;
+use crate::net::NetClient;
+use futures::stream::{self, StreamExt};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-use futures::stream::{self, StreamExt};
-use crate::download::hf_downloader::HfDownloader;
-use crate::net::NetClient;
 use zeroize::Zeroizing;
 
 /// HF API 响应中的文件缓存条目
@@ -55,7 +55,6 @@ pub struct HfModelFile {
     pub size: u64,
     pub r#type: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfDownloadResult {
@@ -129,19 +128,30 @@ async fn hf_get_async(path: &str, token: Option<&str>) -> Result<(String, u16), 
         Ok(response) => {
             let status = response.status();
             let status_code = status.as_u16();
-            let body = response.text().await
+            let body = response
+                .text()
+                .await
                 .map_err(|e| format!("读取响应失败：{}", e))?;
             Ok((body, status_code))
         }
         Err(e) => {
             let msg = e.to_string();
             // NetError 包含准确的状态码信息，尝试提取
-            let status = if msg.contains("HTTP 401") { 401 }
-                else if msg.contains("HTTP 403") { 403 }
-                else if msg.contains("HTTP 429") { 429 }
-                else if msg.contains("HTTP 404") { 404 }
-                else if msg.contains("HTTP 5") { 500 } // 5xx 统一归为 500
-                else { 0 };
+            let status = if msg.contains("HTTP 401") {
+                401
+            } else if msg.contains("HTTP 403") {
+                403
+            } else if msg.contains("HTTP 429") {
+                429
+            } else if msg.contains("HTTP 404") {
+                404
+            } else if msg.contains("HTTP 5") {
+                500
+            }
+            // 5xx 统一归为 500
+            else {
+                0
+            };
             Ok((msg, status))
         }
     }
@@ -149,17 +159,13 @@ async fn hf_get_async(path: &str, token: Option<&str>) -> Result<(String, u16), 
 
 /// 对单个文件发送 HEAD 请求获取 Content-Length（使用 NetClient）。
 async fn hf_head_size_async(url: &str, token: Option<&str>) -> Option<u64> {
-    let client = match NetClient::builder()
-        .user_agent("LlamaUI/0.7.0")
-        .build()
-    {
+    let client = match NetClient::builder().user_agent("LlamaUI/0.7.0").build() {
         Ok(c) => c,
         Err(_) => return None,
     };
 
-    let mut headers: Vec<(String, String)> = vec![
-        ("User-Agent".to_string(), "LlamaUI/0.7.0".to_string()),
-    ];
+    let mut headers: Vec<(String, String)> =
+        vec![("User-Agent".to_string(), "LlamaUI/0.7.0".to_string())];
     if let Some(t) = token {
         headers.push(("Authorization".to_string(), format!("Bearer {}", t)));
     }
@@ -168,18 +174,8 @@ async fn hf_head_size_async(url: &str, token: Option<&str>) -> Option<u64> {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    match client.send_get(url, &header_refs).await {
-        Ok(response) => {
-            if response.status().is_success() {
-                response
-                    .headers()
-                    .get(reqwest::header::CONTENT_LENGTH)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-            } else {
-                None
-            }
-        }
+    match client.head_with_headers(url, &header_refs).await {
+        Ok(size_opt) => size_opt,
         Err(_) => None,
     }
 }
@@ -207,7 +203,8 @@ pub async fn download_hf_model(
         ));
     }
     if !parts.iter().all(|p| {
-        p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
     }) {
         return Err(format!(
             "非法的 model_id：仅允许字母/数字/_-./（实际：{}）",
@@ -226,7 +223,12 @@ pub async fn download_hf_model(
         .unwrap_or_else(|| state.download_dir.lock().clone());
     fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
     // P0-1: Token 通过 Authorization header 传递，不放入 URL 中
-    let token = state.hf_token.lock().clone().as_ref().map(|t| t.to_string());
+    let token = state
+        .hf_token
+        .lock()
+        .clone()
+        .as_ref()
+        .map(|t| t.to_string());
     let download_url = format!("{}/{}/resolve/main/{}", HF_RESOLVE_BASE, model_id, filename);
     let out_path = dir.join(&safe_filename);
     let _out_path_str = out_path.to_string_lossy().to_string();
@@ -234,7 +236,10 @@ pub async fn download_hf_model(
     // P2-4：注册取消通道。前端可调用 `cancel_hf_download(download_id)` 触发取消
     let download_id = format!("{}::{}", model_id, safe_filename);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    state.download_cancels.lock().insert(download_id.clone(), cancel_tx);
+    state
+        .download_cancels
+        .lock()
+        .insert(download_id.clone(), cancel_tx);
 
     let download_id_for_emit = download_id.clone();
 
@@ -273,34 +278,40 @@ pub async fn download_hf_model(
     let downloader = match HfDownloader::new(token.clone()) {
         Ok(d) => d,
         Err(e) => {
-            let _ = app.emit("hf-download-progress", HfDownloadProgress {
-                stage: "error".to_string(),
-                progress: 0.0,
-                downloaded: 0,
-                total: expected_size.unwrap_or(0),
-                speed: None,
-                eta: None,
-                model_id: model_id.clone(),
-                filename: filename.clone(),
-                message: format!("初始化下载器失败：{}", e),
-                download_id: download_id.clone(),
-            });
+            let _ = app.emit(
+                "hf-download-progress",
+                HfDownloadProgress {
+                    stage: "error".to_string(),
+                    progress: 0.0,
+                    downloaded: 0,
+                    total: expected_size.unwrap_or(0),
+                    speed: None,
+                    eta: None,
+                    model_id: model_id.clone(),
+                    filename: filename.clone(),
+                    message: format!("初始化下载器失败：{}", e),
+                    download_id: download_id.clone(),
+                },
+            );
             return Err(format!("初始化下载器失败：{}", e));
         }
     };
 
-    let _ = app.emit("hf-download-progress", HfDownloadProgress {
-        stage: "connecting".to_string(),
-        progress: 0.0,
-        downloaded: 0,
-        total: expected_size.unwrap_or(0),
-                speed: None,
-        eta: None,
-        model_id: model_id.clone(),
-        filename: filename.clone(),
-        message: format!("正在连接 HuggingFace：{}", filename),
-        download_id: download_id.clone(),
-    });
+    let _ = app.emit(
+        "hf-download-progress",
+        HfDownloadProgress {
+            stage: "connecting".to_string(),
+            progress: 0.0,
+            downloaded: 0,
+            total: expected_size.unwrap_or(0),
+            speed: None,
+            eta: None,
+            model_id: model_id.clone(),
+            filename: filename.clone(),
+            message: format!("正在连接 HuggingFace：{}", filename),
+            download_id: download_id.clone(),
+        },
+    );
 
     let result = downloader
         .download(
@@ -366,7 +377,7 @@ pub async fn search_hf_models(
     if let Some(c) = &cursor {
         url.push_str(&format!("&cursor={}", urlencoding::encode(c)));
     }
-        let (body, status) = hf_get_async(&url, token.as_deref())
+    let (body, status) = hf_get_async(&url, token.as_deref())
         .await
         .map_err(|e| format!("网络错误：{}", e))?;
     if status == 0 {
@@ -397,8 +408,11 @@ pub async fn search_hf_models(
         };
         let siblings = v["siblings"].as_array();
         let has_gguf = siblings.map_or(false, |arr| {
-            arr.iter()
-                .any(|s| s["rfilename"].as_str().map_or(false, |f| f.ends_with(".gguf")))
+            arr.iter().any(|s| {
+                s["rfilename"]
+                    .as_str()
+                    .map_or(false, |f| f.ends_with(".gguf"))
+            })
         });
         let tags = v["tags"].as_array();
         let has_gguf_tag = tags.map_or(false, |arr| {
@@ -453,7 +467,7 @@ pub async fn get_hf_model_files(
         .map(|s| urlencoding::encode(s))
         .collect::<Vec<_>>()
         .join("/");
-        let (body, status) = hf_get_async(&format!("/models/{}", &encoded_id), token.as_deref())
+    let (body, status) = hf_get_async(&format!("/models/{}", &encoded_id), token.as_deref())
         .await
         .map_err(|e| format!("网络错误：{}", e))?;
     if status == 0 {
@@ -505,10 +519,7 @@ pub async fn get_hf_model_files(
         .map(|(i, f)| {
             (
                 i,
-                format!(
-                    "https://huggingface.co/{}/resolve/main/{}",
-                    modelId, f.path
-                ),
+                format!("https://huggingface.co/{}/resolve/main/{}", modelId, f.path),
             )
         })
         .collect();
@@ -552,14 +563,23 @@ pub fn set_hf_token(state: State<'_, HfState>, token: Option<String>) {
 
 #[tauri::command]
 pub fn get_hf_token(state: State<'_, HfState>) -> Option<String> {
-    state.hf_token.lock().clone().as_ref().map(|t| t.to_string())
+    state
+        .hf_token
+        .lock()
+        .clone()
+        .as_ref()
+        .map(|t| t.to_string())
 }
 
 #[tauri::command]
-pub fn set_hf_download_dir(state: State<'_, HfState>, dir: String) { *state.download_dir.lock() = PathBuf::from(dir); }
+pub fn set_hf_download_dir(state: State<'_, HfState>, dir: String) {
+    *state.download_dir.lock() = PathBuf::from(dir);
+}
 
 #[tauri::command]
-pub fn get_hf_download_dir(state: State<'_, HfState>) -> String { state.download_dir.lock().to_string_lossy().to_string() }
+pub fn get_hf_download_dir(state: State<'_, HfState>) -> String {
+    state.download_dir.lock().to_string_lossy().to_string()
+}
 
 #[tauri::command]
 pub async fn cancel_hf_download(
@@ -616,8 +636,12 @@ pub async fn precreate_hf_store_window(
             .resizable(true)
             .center()
             .visible(false); // 关键修复：创建时即隐藏，避免闪现
-        let builder = builder.parent(&main_window).map_err(|e| format!("设置父窗口失败：{}", e))?;
-        let _window = builder.build().map_err(|e| format!("创建窗口失败：{}", e))?;
+        let builder = builder
+            .parent(&main_window)
+            .map_err(|e| format!("设置父窗口失败：{}", e))?;
+        let _window = builder
+            .build()
+            .map_err(|e| format!("创建窗口失败：{}", e))?;
         Ok(()) as Result<(), String>
     }
     .await;
@@ -633,7 +657,9 @@ pub async fn open_hf_store_window(
     // 幂等保护：若窗口已存在则直接显示并聚焦，避免重复创建导致多开。
     if let Some(window) = app.get_webview_window("hf-store") {
         window.show().map_err(|e| format!("显示窗口失败：{}", e))?;
-        window.set_focus().map_err(|e| format!("聚焦窗口失败：{}", e))?;
+        window
+            .set_focus()
+            .map_err(|e| format!("聚焦窗口失败：{}", e))?;
         return Ok(());
     }
     // 防重入锁：如果另一个创建流程正在进行，直接返回，避免竞态导致弹两个窗口。
@@ -656,8 +682,12 @@ pub async fn open_hf_store_window(
             .min_inner_size(760.0, 560.0)
             .resizable(true)
             .center();
-        let builder = builder.parent(&main_window).map_err(|e| format!("设置父窗口失败：{}", e))?;
-        let window = builder.build().map_err(|e| format!("创建窗口失败：{}", e))?;
+        let builder = builder
+            .parent(&main_window)
+            .map_err(|e| format!("设置父窗口失败：{}", e))?;
+        let window = builder
+            .build()
+            .map_err(|e| format!("创建窗口失败：{}", e))?;
         window.show().map_err(|e| format!("显示窗口失败：{}", e))?;
         Ok(()) as Result<(), String>
     }
@@ -725,7 +755,7 @@ mod tests {
         assert!(validate_model_id("org#fragment/name").is_err());
         assert!(validate_model_id("org&extra=name").is_err());
         assert!(validate_model_id("org:name").is_err()); // 单段包含非法字符
-        // 多段（不止两段）
+                                                         // 多段（不止两段）
         assert!(validate_model_id("a/b/c").is_err());
         // 单段
         assert!(validate_model_id("only-one-segment").is_err());
@@ -750,7 +780,10 @@ mod tests {
     fn sanitize_blocks_path_traversal_payload() {
         let malicious_filename = "../../etc/passwd";
         let result = crate::util::path::sanitize_filename(malicious_filename);
-        assert!(result.is_err(), "路径遍历 payload 必须被 sanitize_filename 拒绝");
+        assert!(
+            result.is_err(),
+            "路径遍历 payload 必须被 sanitize_filename 拒绝"
+        );
     }
 
     /// P0-1 回归：合法 GGUF 文件名通过。
@@ -766,4 +799,3 @@ mod tests {
         crate::util::path::sanitize_filename(name)
     }
 }
-
