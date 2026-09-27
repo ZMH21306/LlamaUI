@@ -27,12 +27,17 @@ impl Default for RetryPolicy {
 impl RetryPolicy {
     /// 构造重试策略。
     pub fn new(max_attempts: u32) -> Self {
-        Self { max_attempts, ..Self::default() }
+        Self {
+            max_attempts,
+            ..Self::default()
+        }
     }
 
     /// 计算第 `attempt` 次重试的延迟（指数退避 + jitter）。
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let exp = self.base_delay.saturating_mul(1u32.saturating_add(attempt - 1));
+        let exp = self
+            .base_delay
+            .saturating_mul(1u32.saturating_add(attempt - 1));
         let delay = exp.min(self.max_delay);
         if self.jitter > 0.0 {
             let span = delay.as_millis() as f64 * self.jitter;

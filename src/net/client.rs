@@ -2,8 +2,8 @@
 //!
 //! 替代散落的 `reqwest::Client` 直接调用，统一注入代理、超时、重试与错误映射。
 
-use crate::util::proxy;
 use crate::net::retry::RetryPolicy;
+use crate::util::proxy;
 use reqwest::{Client as AsyncClient, ClientBuilder as AsyncClientBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
@@ -60,12 +60,20 @@ impl NetClient {
         Ok(body)
     }
 
-    pub async fn get_json<T: DeserializeOwned>(&self, url: &str, headers: &[(&str, &str)]) -> Result<T, NetError> {
+    pub async fn get_json<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<T, NetError> {
         let body = self.get(url, headers).await?;
         Ok(serde_json::from_str(&body)?)
     }
 
-    pub async fn send_get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, NetError> {
+    pub async fn send_get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Response, NetError> {
         let mut builder = self.client.get(url);
         for (k, v) in headers {
             builder = builder.header(*k, *v);
@@ -73,7 +81,43 @@ impl NetClient {
         self.execute(builder).await
     }
 
-        async fn execute(&self, request: reqwest::RequestBuilder) -> Result<Response, NetError> {
+    /// 发送 HEAD 请求获取响应（不包含响应体），返回 Content-Length（若存在）。
+    pub async fn head(&self, url: &str) -> Result<Option<u64>, NetError> {
+        let response = self.send_head(url, &[]).await?;
+        Ok(response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok()))
+    }
+
+    /// 发送 HEAD 请求获取响应（不包含响应体），支持自定义 Header，返回 Content-Length（若存在）。
+    pub async fn head_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Option<u64>, NetError> {
+        let response = self.send_head(url, headers).await?;
+        Ok(response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok()))
+    }
+
+    async fn send_head(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Response, NetError> {
+        let mut builder = self.client.head(url);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        self.execute(builder).await
+    }
+
+    async fn execute(&self, request: reqwest::RequestBuilder) -> Result<Response, NetError> {
         let mut last_err = String::new();
         for attempt in 0..self.retry.max_attempts.max(1) {
             let result = request.try_clone().map(|b| b.build());
@@ -114,7 +158,8 @@ impl NetClient {
             }
         }
         Err(NetError::RetryExhausted(last_err))
-    }}
+    }
+}
 
 /// 构建器。
 #[derive(Default)]
@@ -149,7 +194,10 @@ impl NetClientBuilder {
     pub fn build(self) -> Result<NetClient, NetError> {
         let mut builder = AsyncClientBuilder::new()
             .timeout(self.timeout.unwrap_or_else(|| Duration::from_secs(60)))
-            .connect_timeout(self.connect_timeout.unwrap_or_else(|| Duration::from_secs(15)))
+            .connect_timeout(
+                self.connect_timeout
+                    .unwrap_or_else(|| Duration::from_secs(15)),
+            )
             .pool_max_idle_per_host(32);
 
         if let Some(proxy_url) = proxy::read_system_proxy() {
@@ -180,17 +228,13 @@ mod tests {
 
     #[test]
     fn net_client_with_user_agent() {
-        let client = NetClient::builder()
-            .user_agent("TestAgent/1.0")
-            .build();
+        let client = NetClient::builder().user_agent("TestAgent/1.0").build();
         assert!(client.is_ok());
     }
 
-            #[test]
+    #[test]
     fn net_client_with_retry() {
-        let client = NetClient::builder()
-            .retry(RetryPolicy::new(5))
-            .build();
+        let client = NetClient::builder().retry(RetryPolicy::new(5)).build();
         assert!(client.is_ok());
         assert_eq!(client.unwrap().retry.max_attempts, 5);
     }
