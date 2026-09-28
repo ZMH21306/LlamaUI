@@ -4,6 +4,8 @@
 //! 支持 GPU 后端自动选择、SHA256 校验、解压和进度回调。
 //! 使用 reqwest 库（带 TLS 证书验证）发起所有 HTTP 请求。
 
+use crate::download::mirror;
+pub use crate::download::platform::GpuBackend;
 use crate::util::process::silent_command;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -424,7 +426,73 @@ fn curl_download(
     ))
 }
 
+/// 带宽探测：用一次极小的 Range 请求测量实际可达速率（bytes/s）。
+///
+/// 目的：分块数与分块大小是「吞吐」与「单块超时」之间的折中，必须
+/// 依赖真实链路速率才能选对：
+/// - 高速链路（>5MB/s）：可以放心切小块、多并发，压榨带宽上限。
+/// - 低速链路（<64KB/s）：多并发只会互相抢带宽并放大重试风暴，
+///   必须切大块、少并发，否则每块都因超时作废重下（历史 bug 根因）。
+///
+/// 实现：请求头 1MiB（最多），但只读取 64KiB 后立刻中断，
+/// 因此耗时恒定在百毫秒级，不会为探测付出可观的流量成本。
+/// 探测失败（不支持 Range / 网络异常）时返回 None，调用方沿用默认策略。
+fn probe_bandwidth(url: &str) -> Option<u64> {
+    const PROBE_BYTES: u64 = 1024 * 1024; // 最多请求 1MiB
+    const READ_CAP: usize = 64 * 1024; // 实际只读 64KiB
+
+    let started = std::time::Instant::now();
+    let mut resp = shared_client()
+        .get(url)
+        .header("Range", format!("bytes=0-{}", PROBE_BYTES - 1))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .ok()?;
+
+    // 只接受 206/200：其余状态码说明该源不支持 Range，探测无意义
+    let status = resp.status().as_u16();
+    if status != 206 && status != 200 {
+        return None;
+    }
+
+    let mut buf = vec![0u8; READ_CAP];
+    let mut got: usize = 0;
+    while got < READ_CAP {
+        match resp.read(&mut buf[..READ_CAP - got]) {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    if got < 8 * 1024 {
+        // 样本过小，测量噪声会大于信号
+        return None;
+    }
+
+    let elapsed = started.elapsed().as_secs_f64();
+    if elapsed <= 0.0 {
+        return None;
+    }
+    let bps = (got as f64 / elapsed) as u64;
+
+    tracing::info!(
+        target: "LlamaDownloader",
+        url = %url,
+        sample_bytes = got,
+        elapsed_ms = (elapsed * 1000.0) as u64,
+        bandwidth_kib_s = bps / 1024,
+        "带宽探测完成"
+    );
+    Some(bps)
+}
+
 /// 多线程分块下载，利用 Range 请求并行下载提升速度
+///
+/// 镜像降级：若传入 `mirror_config`，则在每一次分块网络请求（包括探测与重试）中，
+///   - 先尝试镜像 URL（jsDelivr/gitmirror）；
+///   - 失败后立刻切回官方 GitHub 源；
+///   - 所有线程均会共享同一次镜像降级决策，避免出现一半走镜像一半走官方的脏数据。
 fn curl_download_parallel(
     url: &str,
     dest: &Path,
@@ -433,6 +501,7 @@ fn curl_download_parallel(
     progress_end: f64,
     progress_callback: Option<&dyn Fn(DownloadProgress)>,
     cancel_token: Option<&std::sync::atomic::AtomicBool>,
+    #[allow(unused_variables)] mirror_config: Option<&mirror::MirrorConfig>,
 ) -> anyhow::Result<u64> {
     // 分块策略与线程数不再硬编码：由下方自适应算法按文件大小推导。
     //
@@ -463,13 +532,28 @@ fn curl_download_parallel(
         .read(true)
         .open(dest)?;
 
+    // 探测真实带宽，用于动态选择分块大小与并发数。
+    // 探测失败（源不支持 Range / 网络异常）时回落到纯体积驱动的默认值。
+    let measured_bps = probe_bandwidth(url);
+
     // 自适应分块：目标每块约 2MiB，块数按文件大小缩放，并封顶 96 块
     // （既保证大文件并发足够，又不让线程数随体积无限膨胀）。
     const TARGET_CHUNK_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
     const MIN_CHUNK_SIZE: u64 = 256 * 1024; // 256 KiB
     const MAX_CHUNKS: usize = 96;
-    let mut num_chunks =
-        ((total_size + TARGET_CHUNK_SIZE - 1) / TARGET_CHUNK_SIZE).max(1) as usize;
+
+    // 依据实测带宽修正「每块目标大小」：
+    // - 慢链路（< 256KiB/s）：切到 4MiB 大块，把并发降到极低。
+    //   低速链路上并发越高，单块越容易在超时前传不完而整块作废，
+    //   实测 30KiB/s 时 2MiB 块需 ~70s，逼近超时下限必然反复重下。
+    // - 快链路（> 4MiB/s）：切到 1MiB 小块并允许更高并发，压榨带宽。
+    let target_chunk_size = match measured_bps {
+        Some(bps) if bps < 256 * 1024 => 4 * 1024 * 1024,
+        Some(bps) if bps > 4 * 1024 * 1024 => 1 * 1024 * 1024,
+        _ => TARGET_CHUNK_SIZE,
+    };
+
+    let mut num_chunks = ((total_size + target_chunk_size - 1) / target_chunk_size).max(1) as usize;
     num_chunks = num_chunks.min(MAX_CHUNKS);
     let mut chunk_size = (total_size + num_chunks as u64 - 1) / num_chunks as u64;
     // 极小文件（< 256KiB）直接单块处理，避免起线程做无意义的分块
@@ -477,6 +561,14 @@ fn curl_download_parallel(
         num_chunks = 1;
         chunk_size = total_size;
     }
+
+    tracing::info!(
+        target: "LlamaDownloader",
+        measured_kib_s = measured_bps.map(|b| b / 1024),
+        num_chunks,
+        chunk_size,
+        "分块策略确定"
+    );
 
     // 读取已下载的分块，用于断点续传。
     //
@@ -1080,42 +1172,6 @@ pub struct DownloadResult {
     pub sha256: String,
     pub elapsed_ms: u64,
     pub error: Option<String>,
-}
-
-/// GPU 后端类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GpuBackend {
-    Cpu,
-    Cuda12_4,
-    Cuda13_3,
-    Rocm,
-    Vulkan,
-    Metal,
-}
-
-impl GpuBackend {
-    /// 从字符串解析 GPU 后端
-    pub fn parse_backend(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "cuda" | "cuda12" | "cuda12_4" | "cuda-12.4" => GpuBackend::Cuda12_4,
-            "cuda13" | "cuda13_3" | "cuda-13.3" => GpuBackend::Cuda13_3,
-            "rocm" => GpuBackend::Rocm,
-            "vulkan" => GpuBackend::Vulkan,
-            "metal" => GpuBackend::Metal,
-            _ => GpuBackend::Cpu,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            GpuBackend::Cpu => "cpu",
-            GpuBackend::Cuda12_4 => "cuda-12.4",
-            GpuBackend::Cuda13_3 => "cuda-13.3",
-            GpuBackend::Rocm => "rocm",
-            GpuBackend::Vulkan => "vulkan",
-            GpuBackend::Metal => "metal",
-        }
-    }
 }
 
 /// GitHub Release API 响应
@@ -2006,6 +2062,7 @@ pub fn download_and_install(
                 stage_progress::DOWNLOAD_END,
                 progress_callback,
                 cancel_token,
+                Some(&mirror::MirrorConfig::get()),
             ) {
                 Ok(size) => break size,
                 Err(e) => {
