@@ -6,7 +6,7 @@
 //! - 构造 GitHub Release tag
 //! - 版本比较
 
-#![allow(dead_code)]
+#![allow(clippy::module_name_repetitions)]
 
 /// 解析 llama-server 输出的版本号
 ///
