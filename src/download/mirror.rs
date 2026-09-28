@@ -9,7 +9,7 @@
 //! - `LLAMAUI_MIRROR`：启用镜像模式 (true/false)
 //! - `LLAMAUI_CUSTOM_MIRROR`：自定义镜像前缀
 
-#![allow(dead_code)]
+#![allow(clippy::module_name_repetitions)]
 
 use std::env;
 use std::sync::atomic::AtomicUsize;
