@@ -1,0 +1,28 @@
+# 统一换行符：仓库内统一使用 LF，检出时 Windows 自动转 CRLF
+* text=auto eol=lf
+
+# Windows 批处理脚本必须使用 CRLF，否则 cmd.exe 无法正确解析
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件不做换行符转换
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.exe binary
+*.dll binary
+*.lib binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# Cargo.lock 与前端锁文件禁止合并冲突
+Cargo.lock -merge linguist-generated=true

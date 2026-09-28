@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+      - '**.png'
+      - '**.ico'
+  pull_request:
+    branches: [main, dev]
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+      - '**.png'
+      - '**.ico'
+
+permissions:
+  contents: read
+
+jobs:
+  # ─── 静态检查 ─────────────────────────────────────────────────────────
+  lint:
+    name: Clippy & fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ─── 编译检查 ─────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Check library
+        run: cargo check --lib --target ${{ matrix.target }}
+
+      - name: Check binary
+        run: cargo check --bin llama-ui --target ${{ matrix.target }}
+
+      - name: Check all targets
+        run: cargo check --all-targets --target ${{ matrix.target }}
+
+  # ─── 运行测试 ─────────────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Run lib tests
+        run: cargo test --lib --target ${{ matrix.target }}
+
+      - name: Run all tests
+        run: cargo test --all --target ${{ matrix.target }}
+
+  # ─── 安全审计 ─────────────────────────────────────────────────────────
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit
+
+  # ─── 依赖检查 ─────────────────────────────────────────────────────────
+  lockfile:
+    name: Cargo.lock check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify lockfile is committed
+        run: |
+          if git diff --exit-code -- Cargo.lock; then
+            echo "✅ Cargo.lock 已提交"
+          else
+            echo "⚠️  Cargo.lock 有未提交的变更"
+            exit 1
+          fi
