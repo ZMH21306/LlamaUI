@@ -31,6 +31,17 @@
 )]
 #![allow(dead_code)]
 
+/// # 文档
+///
+/// 本 crate 暴露以下公开模块：
+/// - `config`：应用配置管理
+/// - `download`：llama-server 和 HF 模型下载
+/// - `errors`：统一错误类型
+/// - `events`：事件类型（服务端状态机、日志、进度）
+/// - `server`：llama-server 进程管理
+/// - `commands`：Tauri command 入口
+/// - `util`：通用工具（path / time / http / process）
+
 mod commands;
 mod config;
 mod detect;
