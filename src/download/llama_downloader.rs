@@ -829,10 +829,31 @@ fn curl_download_parallel(
                                 continue;
                             }
                         };
-                        if !resp.status().is_success() {
-                            last_err = Some(anyhow::anyhow!("HTTP {}", resp.status()));
+                        if resp.status().as_u16() != 206 {
+                        // 服务器忽略 Range 头返回 200/其他状态码，会导致分块互相覆盖、文件损坏。
+                        // 记录错误并进入下一次重试，避免静默损坏。
+                        let status = resp.status();
+                        let cr = resp.headers().get("Content-Range").cloned();
+                        last_err = Some(anyhow::anyhow!(
+                            "期望 206 Partial Content，实际 {}，Content-Range: {:?}",
+                            status,
+                            cr
+                        ));
+                        continue;
+                    }
+                    // 验证 Content-Range 与请求一致，防止透明代理/边缘节点返回错误区间
+                    if let Some(cr) = resp.headers().get("Content-Range") {
+                        let cr_str = cr.to_str().unwrap_or("");
+                        // 格式: "bytes start-end/total"
+                        if !cr_str.starts_with("bytes ") || !cr_str.contains(&format!("{}-{}", offset, end)) {
+                            last_err = Some(anyhow::anyhow!(
+                                "Content-Range 不匹配：期望 bytes {}-{}，实际 {}",
+                                offset, end, cr_str
+                            ));
                             continue;
                         }
+                    }
+                    let expected_len = end - offset + 1;
 
                         // 与首轮一致：流式读取并直接写入文件偏移
                         let mut file = match fs::OpenOptions::new().write(true).open(&dest_path) {
@@ -847,15 +868,13 @@ fn curl_download_parallel(
                             continue;
                         }
 
-                        let mut buf = [0u8; STREAM_BUF];
+                        let mut buf = vec![0u8; STREAM_BUF];
                         let mut local_downloaded: u64 = 0;
-                        let mut read_ok = true;
                         loop {
                             let n = match resp.read(&mut buf) {
                                 Ok(n) => n,
                                 Err(e) => {
                                     last_err = Some(anyhow::anyhow!("读取响应体失败: {}", e));
-                                    read_ok = false;
                                     break;
                                 }
                             };
@@ -864,16 +883,27 @@ fn curl_download_parallel(
                             }
                             if let Err(e) = file.write_all(&buf[..n]) {
                                 last_err = Some(anyhow::anyhow!("写入文件失败: {}", e));
-                                read_ok = false;
                                 break;
                             }
                             downloaded_clone.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
                             local_downloaded += n as u64;
                         }
 
-                        if read_ok {
+                        // 必须收齐预期字节数，否则视为不完整
+                        if local_downloaded != expected_len && last_err.is_none() {
+                            last_err = Some(anyhow::anyhow!(
+                                "分块不完整：期望 {} 字节，实际 {} 字节",
+                                expected_len,
+                                local_downloaded
+                            ));
+                        }
+                        if last_err.is_none() {
                             return Ok::<_, anyhow::Error>((offset, local_downloaded));
                         }
+                        // 进度回退：本次已计入 downloaded 的字节要扣回去，
+                        // 否则失败重试会让全局进度虚高，甚至超过 total_size。
+                        downloaded_clone
+                            .fetch_sub(local_downloaded, std::sync::atomic::Ordering::Relaxed);
                     }
                     if let Some(e) = &last_err {
                         tracing::warn!(
