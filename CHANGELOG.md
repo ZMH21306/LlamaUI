@@ -2,7 +2,20 @@
 
 本文件记录 LlamaUI 项目的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.7.0] - 2026-08-27
+## [0.7.1] - 2026-09-28
+
+### 架构重构
+- **模块化重构**：彻底清理空壳模块（`core/`、`strategies/`、`utils/`），将下载逻辑统一收归 `llama_downloader.rs` 编排层；`download/mod.rs` 精简为清晰的模块声明与依赖方向图
+- **统一 GPU 后端定义**：消除 `llama_downloader.rs` 与 `platform.rs` 之间重复的 `GpuBackend` 枚举，由 `platform.rs` 作为唯一权威来源，新增 `parse_backend`（宽容解析）、`requires_vendor_runtime`、严格 `FromStr` 等方法
+- **统一 `GpuBackend` 变体名**：`Cuda` → `Cuda12_4`/`Cuda13_3`，与 llama.cpp Release 资产名严格对齐，避免线上下载 404
+- **清理 `#![allow(dead_code)]`**：移除 `platform.rs`、`mirror.rs`、`retry.rs`、`version.rs` 的 blanket dead_code 豁免，仅保留 `clippy::module_name_repetitions`
+- **清理仓库根目录垃圾文件**：删除 `build.log`、`run.vbs`、`run_hidden.ps1`、`run_stderr.log`、`run_stdout.log`、`rustc_error.log`、`hf-store-new.js`、`hf-store-part2.js` 等开发调试产物
+- **新增 `.gitattributes`**：统一仓库换行符策略（LF），确保 Windows 脚本（`.ps1`/`.bat`）使用 CRLF，二进制文件不受影响
+- **新增 `CODE_OF_CONDUCT.md`**：参考 Contributor Covenant v2.1 的行为准则，完善开源社区治理
+
+### 依赖与配置
+- `Cargo.toml` 保留 `dead_code = "warn"` lint 规则，所有模块按需选择性豁免
+- `rust-toolchain.toml` 保留 `stable` channel 和完整工具链组件
 
 ### 改进
 - 清理仓库中的开发垃圾与调试产物，统一 `.gitignore` 规范；删除 Blender MCP 工具脚本（`test_blender_mcp.js` / `test_get_scene.js` / `create_camera_animation.js`）与 `build.log` 等无关文件
@@ -29,18 +42,16 @@
 
 ## [0.6.0] - 2026-08-14
 
+### 新增
+- 引入 CONTRIBUTING.md、SECURITY.md 等开源协作文档
+- 整理项目目录，移除冗余内部脚本
+
 ### 依赖与安全
 - 升级 `time` 至 0.3.53（修复 RUSTSEC-2026-0009 栈溢出 DoS）
 - 升级 `ring` 至 0.17.14（修复 RUSTSEC-2025-0009 AES panic）
 - 升级 `rustls` 至 0.23.43（修复 RUSTSEC-2024-0336 `complete_io` 死循环）
 - `event-listener` 锁定 5.4.2（修复 RUSTSEC-2026-0221 Send/Sync unsoundness）
 - 已知告警：`glib <0.20.0` 受 RUSTSEC-2024-0429 影响（`webkit2gtk-sys` 上游传递依赖），仅影响 Linux 平台，等待 Tauri 升级 GTK 4 工具链后再处理；详见 `SECURITY.md`
-
-## [0.6.0] - 2026-08-14
-
-### 新增
-- 引入 CONTRIBUTING.md、SECURITY.md 等开源协作文档
-- 整理项目目录，移除冗余内部脚本
 
 ## [0.5.1] - 2026-08-08
 
