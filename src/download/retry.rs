@@ -5,7 +5,7 @@
 //! - `LLAMAUI_MAX_RETRIES`：最大重试次数（默认 3）
 //! - `LLAMAUI_RETRY_BASE_MS`：基础退避毫秒数（默认 500）
 
-#![allow(dead_code)]
+#![allow(clippy::module_name_repetitions)]
 
 use std::env;
 use tracing::warn;
