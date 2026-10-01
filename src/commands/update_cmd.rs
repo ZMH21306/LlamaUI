@@ -29,6 +29,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
     // 发送检查开始状态
     emit_update_state(&app, UpdateState::Checking {
         current_version: current_version.clone(),
+        message: "正在检查更新...".to_string(),
     });
 
     let check_result = check_for_updates()
@@ -38,6 +39,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
     if !check_result.update_available {
         emit_update_state(&app, UpdateState::UpToDate {
             current_version: current_version.clone(),
+            message: format!("当前版本已是最新 {}", current_version),
         });
         return Ok(());
     }
@@ -50,6 +52,13 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
         download_url: check_result.download_url.clone(),
         file_size: check_result.file_size,
         sha256: check_result.sha256.clone(),
+        message: format!(
+            "发现新版本 {} (当前 {})，大小 {:.1}MB，发布说明: {}",
+            check_result.latest_version,
+            current_version,
+            check_result.file_size as f64 / 1_048_576.0,
+            check_result.release_notes
+        ),
     });
 
     // 重置取消标志（兼容旧代码）
@@ -67,7 +76,11 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
     emit_update_state(&app, UpdateState::DownloadStarted {
         total_bytes: check_result.file_size,
         version: check_result.latest_version.clone(),
-        message: format!("开始下载版本 {}", check_result.latest_version),
+        message: format!(
+            "开始下载版本 {}，大小 {:.1}MB",
+            check_result.latest_version,
+            check_result.file_size as f64 / 1_048_576.0
+        ),
     });
 
     // 在后台任务中下载（带重试机制）
@@ -93,6 +106,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                 download_path: download_path.clone(),
                 file_size,
                 version: check_result.latest_version.clone(),
+                message: format!("下载完成，准备安装版本 {}", check_result.latest_version),
             });
 
             // 验证下载文件
@@ -109,6 +123,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                     error: format!("文件验证失败: {}", e),
                     version: check_result.latest_version.clone(),
                     stage: "verification".to_string(),
+                    message: format!("文件验证失败: {}", e),
                 });
                 return Err(format!("文件验证失败: {}", e));
             }
@@ -127,6 +142,11 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                     emit_update_state(&app, UpdateState::Completed {
                         new_version: check_result.latest_version.clone(),
                         elapsed_ms,
+                        message: format!(
+                            "更新成功！已安装 {}，耗时 {:.1}秒，请重启应用程序以完成更新",
+                            check_result.latest_version,
+                            elapsed_ms as f64 / 1000.0
+                        ),
                     });
                     tracing::info!(target: "UpdateCmd", "更新安装成功");
                 }
@@ -135,6 +155,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                         error: e.to_string(),
                         version: check_result.latest_version.clone(),
                         stage: "installation".to_string(),
+                        message: format!("安装失败: {}", e),
                     });
                     return Err(e.to_string());
                 }
@@ -147,6 +168,7 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                 error: e.clone(),
                 version: check_result.latest_version.clone(),
                 stage: "download".to_string(),
+                message: format!("下载失败: {}", e),
             });
             return Err(e);
         }
@@ -182,7 +204,7 @@ async fn download_with_retry(
             emit_update_state(app, UpdateState::DownloadStarted {
                 total_bytes: total_size,
                 version: version.to_string(),
-                message: format!("开始下载版本 {}", version),
+                message: format!("开始下载版本 {}，大小 {:.1}MB", version, total_size as f64 / 1_048_576.0),
             });
         } else {
             emit_update_state(app, UpdateState::DownloadProgress {
@@ -327,7 +349,9 @@ pub async fn cancel_update_download(
             }
         }
     }
-    emit_update_state(&app, UpdateState::Cancelled);
+    emit_update_state(&app, UpdateState::Cancelled {
+        message: "更新已取消".to_string(),
+    });
     let _ = app.emit(
         EVT_UPDATE_DOWNLOAD_PROGRESS,
         UpdateDownloadProgress {
