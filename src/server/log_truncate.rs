@@ -10,20 +10,7 @@
 //! - 第一层：单行字节数（防单行 OOM）
 //! - 第二层：行数（防长跑下累积 OOM）
 
-/// 单行日志最大长度（字节）。超过此长度的行会被截断。
-///
-/// **16 KB** 是基于 `llama-server` verbose 模式正常单行输出（多为
-/// token 流，约 200-800 字节）保留 16-32 倍 headroom 后取整。
-pub const MAX_LOG_LINE_BYTES: usize = 16 * 1024;
-
-/// 截断时保留的头部字节数。
-const HEAD_KEEP: usize = 512;
-/// `<已截断 N 字节>` 占位符的最大可能长度。
-/// 取 32 是因为最大可能的 `format!("<已截断 65535 字节>")` 约 22 字符，留 10 字节余量。
-///
-/// 尾部长度采用动态计算公式：`tail_keep = MAX - HEAD - TAIL_RESERVE`（在保证
-/// 不超 MAX 的前提下取最大可用尾部），避免硬编码常量与实际不符。
-const TAIL_RESERVE: usize = 32;
+use crate::constants::{HEAD_KEEP, MAX_LOG_LINE_BYTES, TAIL_RESERVE};
 
 /// 截断单行日志。
 ///
