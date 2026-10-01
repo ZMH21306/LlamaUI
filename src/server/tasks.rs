@@ -40,8 +40,9 @@ use crate::util::time::now_ts;
 
 use super::log_channel::{try_send_or_count, DROPPED_LOG_LINES, LOG_CHANNEL_CAPACITY};
 use super::log_truncate::truncate_log_line;
-use super::metrics::{query_gpu_stats, Metrics, METRICS_INTERVAL_MS};
-use super::state::{ServerInner, MAX_LOG_LINES};
+use crate::constants::{MAX_LOG_LINES, METRICS_INTERVAL_MS};
+use super::metrics::{query_gpu_stats, Metrics};
+use super::state::ServerInner;
 #[cfg(windows)]
 use super::winapi::query_windows_virtual_size;
 
