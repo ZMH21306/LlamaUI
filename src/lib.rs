@@ -44,6 +44,7 @@
 
 mod commands;
 mod config;
+mod constants;
 mod detect;
 mod download;
 mod errors;
@@ -55,6 +56,7 @@ mod models;
 mod net;
 mod recovery;
 mod remote;
+mod security;
 mod server;
 mod update;
 pub mod util;
