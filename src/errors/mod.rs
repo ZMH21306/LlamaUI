@@ -80,7 +80,7 @@ impl From<String> for AppError {
 // ============================================================
 
 /// 配置错误。
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum ConfigError {
     #[error("端口号不能为 0")]
     PortZero,
