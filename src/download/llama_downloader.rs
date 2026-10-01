@@ -292,6 +292,11 @@ fn curl_download(
         let mut downloaded: u64 = 0;
         let mut buffer = [0u8; 65536]; // 64KB 缓冲区，提升读取吞吐
 
+        // 进度采样（用于计算瞬时速度）：保留最近 5 个采样点
+        let mut samples: [(u64, std::time::Instant); 5] = [(0, start); 5];
+        let mut sample_pos = 0usize;
+        let mut sample_count = 0usize;
+
         // 1 秒无进展保底上报：避免网络抖动导致前端卡在 22%
         const WATCHDOG_MS: u64 = 1000;
 
@@ -324,11 +329,32 @@ fn curl_download(
                         };
                         let global_progress =
                             progress_start + raw_progress * (progress_end - progress_start);
-                        let elapsed = start.elapsed().as_secs_f64();
-                        let speed_mbps = if elapsed > 0.0 {
-                            (downloaded as f64 / elapsed) / 1_048_576.0
+                        // 更新滑动窗口采样点（读取在覆盖之前）
+                        let oldest_idx = (sample_pos + samples.len() - 1) % samples.len();
+                        let oldest = if sample_count > 0 {
+                            samples[oldest_idx]
                         } else {
-                            0.0
+                            (downloaded, start)
+                        };
+                        samples[sample_pos] = (downloaded, now);
+                        sample_pos = (sample_pos + 1) % samples.len();
+                        if sample_count < samples.len() {
+                            sample_count += 1;
+                        }
+                        let speed_mbps = if sample_count >= 2 {
+                            let elapsed = now.duration_since(oldest.1).as_secs_f64();
+                            if elapsed > 0.0 {
+                                ((downloaded - oldest.0) as f64 / elapsed) / 1_048_576.0
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            let elapsed = start.elapsed().as_secs_f64();
+                            if elapsed > 0.0 {
+                                (downloaded as f64 / elapsed) / 1_048_576.0
+                            } else {
+                                0.0
+                            }
                         };
                         let remaining_bytes = size.saturating_sub(downloaded);
                         let eta_secs = if speed_mbps > 0.0 {
@@ -346,7 +372,7 @@ fn curl_download(
                                 downloaded as f64 / 1048576.0
                             ),
                             speed_mbps,
-                            eta_secs: if eta_secs > 0 { Some(eta_secs) } else { None },
+                            eta_secs: if speed_mbps > 0.0 { Some(eta_secs) } else { None },
                             detail: Some(DownloadProgressDetail {
                                 step: "downloading".to_string(),
                                 step_progress: raw_progress,
@@ -354,7 +380,7 @@ fn curl_download(
                                 candidate_count: 1,
                                 current_candidate: None,
                                 speed_mbps,
-                                eta_secs: if eta_secs > 0 {
+                                eta_secs: if speed_mbps > 0.0 {
                                     Some(eta_secs as f64)
                                 } else {
                                     None
@@ -391,11 +417,32 @@ fn curl_download(
                 };
                 let global_progress =
                     progress_start + raw_progress * (progress_end - progress_start);
-                let elapsed = start.elapsed().as_secs_f64();
-                let speed_mbps = if elapsed > 0.0 {
-                    (downloaded as f64 / elapsed) / 1_048_576.0
+                // 更新滑动窗口采样点（读取在覆盖之前）
+                let oldest_idx = (sample_pos + samples.len() - 1) % samples.len();
+                let oldest = if sample_count > 0 {
+                    samples[oldest_idx]
                 } else {
-                    0.0
+                    (downloaded, start)
+                };
+                samples[sample_pos] = (downloaded, now);
+                sample_pos = (sample_pos + 1) % samples.len();
+                if sample_count < samples.len() {
+                    sample_count += 1;
+                }
+                let speed_mbps = if sample_count >= 2 {
+                    let elapsed = now.duration_since(oldest.1).as_secs_f64();
+                    if elapsed > 0.0 {
+                        ((downloaded - oldest.0) as f64 / elapsed) / 1_048_576.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    let elapsed = start.elapsed().as_secs_f64();
+                    if elapsed > 0.0 {
+                        (downloaded as f64 / elapsed) / 1_048_576.0
+                    } else {
+                        0.0
+                    }
                 };
                 let remaining_bytes = size.saturating_sub(downloaded);
                 let eta_secs = if speed_mbps > 0.0 {
@@ -418,7 +465,7 @@ fn curl_download(
                             speed_mbps
                         ),
                         speed_mbps,
-                        eta_secs: if eta_secs > 0 { Some(eta_secs) } else { None },
+                        eta_secs: if speed_mbps > 0.0 { Some(eta_secs) } else { None },
                         detail: Some(DownloadProgressDetail {
                             step: "downloading".to_string(),
                             step_progress: raw_progress,
@@ -426,7 +473,7 @@ fn curl_download(
                             candidate_count: 1,
                             current_candidate: None,
                             speed_mbps,
-                            eta_secs: if eta_secs > 0 {
+                            eta_secs: if speed_mbps > 0.0 {
                                 Some(eta_secs as f64)
                             } else {
                                 None
@@ -847,6 +894,10 @@ fn curl_download_parallel(
     let mut last_emit_at = std::time::Instant::now();
     let mut retry_round = 0u32;
     const MAX_RETRY_ROUNDS: u32 = 5;
+    // 进度采样（用于计算瞬时速度）：保留最近 5 个采样点，剔除时间跨度大的点
+    let mut samples: [(u64, std::time::Instant); 5] = [(0, start); 5];
+    let mut sample_pos = 0usize;
+    let mut sample_count = 0usize;
 
     loop {
         let all_done = handles.iter().all(|h| h.is_finished());
@@ -864,12 +915,36 @@ fn curl_download_parallel(
         let time_due = last_emit_at.elapsed() >= CHUNK_EMIT_MIN_INTERVAL;
         if (global_progress - last_emitted_progress).abs() >= 0.0005 || time_due {
             last_emitted_progress = global_progress;
-            last_emit_at = std::time::Instant::now();
-            let elapsed = start.elapsed().as_secs_f64();
-            let speed_mbps = if elapsed > 0.0 {
-                (current as f64 / elapsed) / 1_048_576.0
+            let now = std::time::Instant::now();
+            last_emit_at = now;
+            // 取窗口中“上一个采样点”作为瞬时速度基准（读取必须在覆盖缓冲区之前）。
+            let oldest_idx = (sample_pos + samples.len() - 1) % samples.len();
+            let oldest = if sample_count > 0 {
+                samples[oldest_idx]
             } else {
-                0.0
+                (current, start)
+            };
+            // 更新滑动窗口采样点
+            samples[sample_pos] = (current, now);
+            sample_pos = (sample_pos + 1) % samples.len();
+            if sample_count < samples.len() {
+                sample_count += 1;
+            }
+            // 用最近两个采样点计算瞬时速度，不足两个采样点时回退到平均速度
+            let speed_mbps = if sample_count >= 2 {
+                let elapsed = now.duration_since(oldest.1).as_secs_f64();
+                if elapsed > 0.0 {
+                    ((current - oldest.0) as f64 / elapsed) / 1_048_576.0
+                } else {
+                    0.0
+                }
+            } else {
+                let elapsed = start.elapsed().as_secs_f64();
+                if elapsed > 0.0 {
+                    (current as f64 / elapsed) / 1_048_576.0
+                } else {
+                    0.0
+                }
             };
             let eta_secs = if speed_mbps > 0.0 {
                 Some(((total_size - current) as f64 / 1_048_576.0 / speed_mbps) as u64)
@@ -1682,8 +1757,8 @@ fn smart_find_asset<'a>(
                     cb(progress_with(
                         "finding_asset",
                         stage_progress::FINDING_ASSET_END,
-                        u64::from(candidate_index),
-                        u64::from(total_candidates),
+                        0,
+                        0,
                         format!(
                             "✅ 候选 {}/{} 可用，选中：{}",
                             candidate_index, total_candidates, candidate_name
@@ -1715,8 +1790,8 @@ fn smart_find_asset<'a>(
                         "finding_asset",
                         stage_progress::FINDING_ASSET_START
                             + (f64::from(candidate_index) / f64::from(total_candidates)) * asset_range,
-                        u64::from(candidate_index),
-                        u64::from(total_candidates),
+                        0,
+                        0,
                         format!(
                             "❌ {}/{} 失败（{}），尝试下一个...",
                             candidate_index, total_candidates, e
@@ -2409,7 +2484,7 @@ fn try_validate_asset_urls(
             stage: "finding_asset".to_string(),
             progress: stage_progress::FINDING_ASSET_START,
             downloaded: 0,
-            total: total as u64,
+            total: 0,
             message: format!("并行验证 {} 个候选安装包...", total),
             speed_mbps: 0.0,
             eta_secs: None,
@@ -2485,7 +2560,7 @@ fn try_validate_asset_urls(
                         stage: "finding_asset".to_string(),
                         progress: stage_progress::FINDING_ASSET_END,
                         downloaded: 0,
-                        total: total as u64,
+                        total: 0,
                         message: format!("✅ 选中：{}", asset_name),
                         speed_mbps: 0.0,
                         eta_secs: None,
@@ -2518,7 +2593,7 @@ fn try_validate_asset_urls(
                         stage: "finding_asset".to_string(),
                         progress: p,
                         downloaded: 0,
-                        total: total as u64,
+                        total: 0,
                         message: format!("❌ {}/{} 不可用", failed, total),
                         speed_mbps: 0.0,
                         eta_secs: None,
