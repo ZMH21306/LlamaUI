@@ -17,6 +17,9 @@ use std::time::Duration;
 use reqwest::blocking::{Client as SyncClient, ClientBuilder as SyncClientBuilder};
 use reqwest::{Client as AsyncClient, ClientBuilder as AsyncClientBuilder};
 
+// 从统一常量模块引入，避免重复定义
+use crate::constants::{HTTP_CONNECT_TIMEOUT_SECS, HTTP_TIMEOUT_SECS};
+
 /// 同步 HTTP 客户端（用于 blocking 上下文，如 spawn_blocking）。
 ///
 /// 自动注入系统代理和 TLS 证书验证。
@@ -39,8 +42,8 @@ impl HttpClient {
 
     fn builder() -> anyhow::Result<SyncClientBuilder> {
         let mut builder = SyncClientBuilder::new()
-            .timeout(Duration::from_secs(60))
-            .connect_timeout(Duration::from_secs(15));
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS));
 
         if let Some(proxy_url) = crate::util::proxy::read_system_proxy() {
             if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
@@ -128,8 +131,8 @@ impl AsyncHttpClient {
 
     fn builder() -> anyhow::Result<AsyncClientBuilder> {
         let mut builder = AsyncClientBuilder::new()
-            .timeout(Duration::from_secs(60))
-            .connect_timeout(Duration::from_secs(15));
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS));
 
         if let Some(proxy_url) = crate::util::proxy::read_system_proxy() {
             if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
