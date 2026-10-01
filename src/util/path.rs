@@ -18,6 +18,20 @@
 
 use std::path::{Path, PathBuf};
 
+// 从统一常量模块引入共享常量
+use crate::constants::{RISKY_DIR_SEGMENTS, SAFE_PATH_COMPONENTS};
+
+// 以下常量仅本模块使用，保持本地定义（历史兼容性）
+/// 可执行文件名白名单（大小写不敏感，自动追加 `.exe` 变体）。
+///
+/// 用于 `validate_executable_candidate` 的文件名校验。
+pub const ALLOWED_LLAMA_EXECUTABLE_NAMES: &[&str] = &["llama-server"];
+
+/// 路径标准化后用于比较的最大长度。
+///
+/// 超过此长度的路径将被截断以避免 DoS（极端长路径攻击）。
+pub const MAX_PATH_LENGTH_FOR_COMPARE: usize = 4096;
+
 /// 把路径标准化为"适合大小写不敏感比较"的形式。
 ///
 /// 1) 转 ASCII 小写
@@ -55,8 +69,7 @@ pub fn segment_eq_with_separator(path: &str, sep: &str, segment: &str) -> bool {
     path.contains(&needle)
 }
 
-/// 高风险目录段名。出现在父目录末段或中间段都视为可疑。
-pub const RISKY_DIR_SEGMENTS: &[&str] = &["tmp", "temp", "downloads"];
+
 
 /// 判断 `path` 是否位于世界可写 / 临时目录。
 ///
@@ -79,19 +92,43 @@ pub fn is_world_writable_path(path: &Path) -> bool {
     })
 }
 
+/// 检查路径是否包含不安全的组件（如 `..`, `.`, 设备名等）。
+///
+/// 用于防止路径遍历攻击：若路径的任意组件为 `..`、`.` 或设备名，
+/// 则视为不安全，返回 `true`。
+pub fn has_unsafe_component(path: &Path) -> bool {
+    path.components().any(|comp| {
+        let s = comp.as_os_str().to_string_lossy().to_ascii_lowercase();
+        SAFE_PATH_COMPONENTS.iter().any(|unsafe_comp| s == *unsafe_comp)
+    })
+}
+
 /// 通用可执行文件白名单校验。
 ///
-/// 接受候选前做三项校验（任一不通过即返回 `None`）：
-/// 1) 必须是 regular file（拒绝目录 / FIFO / device）
+/// 接受候选前做四项校验（任一不通过即返回 `None`）：
+/// 1) 必须是 regular file（拒绝目录 / FIFO / device / 符号链接）
 /// 2) 文件名必须严格等于 `allowed_names` 中的某一个
 ///    （按大小写不敏感比较，自动追加 `.exe` 变体）
 /// 3) 父目录不能在世界可写位置（防 PATH 注入）
+/// 4) 若文件是符号链接，目标路径也必须在安全位置
 ///
 /// `allowed_names` 应只包含**文件名**（不含路径），如 `&["llama-server"]`。
 pub fn validate_executable_candidate(p: &Path, allowed_names: &[&str]) -> Option<PathBuf> {
-    if !p.is_file() {
+    // 0) 检查路径包含不安全组件（如 ..、.、设备名）以防止路径遍历
+    if has_unsafe_component(p) {
         return None;
     }
+    // 1) 必须是 regular file（拒绝目录 / FIFO / device / 符号链接）
+    // 使用 symlink_metadata 而非 metadata，避免跟随符号链接
+    let metadata = std::fs::symlink_metadata(p).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    // 拒绝符号链接：即使目标是合法文件，符号链接本身可能被替换
+    if metadata.file_type().is_symlink() {
+        return None;
+    }
+
     let name = p.file_name().and_then(|s| s.to_str())?.to_ascii_lowercase();
     let stem = name.trim_end_matches(".exe");
     if !allowed_names.iter().any(|allowed| {
@@ -104,6 +141,7 @@ pub fn validate_executable_candidate(p: &Path, allowed_names: &[&str]) -> Option
     if is_world_writable_path(p) {
         return None;
     }
+
     Some(p.to_path_buf())
 }
 
