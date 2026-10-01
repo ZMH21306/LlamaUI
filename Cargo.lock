@@ -2357,6 +2357,7 @@ dependencies = [
  "ed25519-dalek",
  "flate2",
  "futures",
+ "libc",
  "num_cpus",
  "parking_lot",
  "regex",
