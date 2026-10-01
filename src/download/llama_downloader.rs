@@ -15,6 +15,35 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// 共享客户端超时（秒）。
+pub const SHARED_CLIENT_TIMEOUT_SECS: u64 = 300;
+/// 共享客户端连接超时（秒）。
+pub const SHARED_CLIENT_CONNECT_TIMEOUT_SECS: u64 = 30;
+/// 共享客户端连接池空闲超时（秒）。
+pub const SHARED_CLIENT_POOL_IDLE_TIMEOUT_SECS: u64 = 90;
+/// HEAD 请求超时（秒）。
+pub const HEAD_TIMEOUT_SECS: u64 = 15;
+/// 带宽探测超时（秒）。
+pub const BANDWIDTH_PROBE_TIMEOUT_SECS: u64 = 10;
+/// 分块超时下限（秒）。
+pub const MIN_CHUNK_TIMEOUT_SECS: u64 = 60;
+/// 分块超时上限（秒）。
+pub const MAX_CHUNK_TIMEOUT_SECS: u64 = 600;
+/// 重试轮次退避基数（毫秒）。
+pub const RETRY_BACKOFF_BASE_MS: u64 = 200;
+/// GitHub Release API 超时（秒）。
+pub const GITHUB_RELEASE_TIMEOUT_SECS: u64 = 45;
+/// GitHub Release API 连接超时（秒）。
+pub const GITHUB_RELEASE_CONNECT_TIMEOUT_SECS: u64 = 8;
+/// 资产探测超时（秒）。
+pub const ASSET_PROBE_TIMEOUT_SECS: u64 = 6;
+/// 资产探测连接超时（秒）。
+pub const ASSET_PROBE_CONNECT_TIMEOUT_SECS: u64 = 4;
+/// 初始重试退避基数（毫秒）。
+pub const RETRY_BASE_DELAY_MS: u64 = 500;
+/// 初始重试退避上限（秒）。
+pub const RETRY_MAX_DELAY_SECS: u64 = 2;
+
 /// 共享的阻塞 HTTP 客户端（直连 reqwest，不再依赖自研下载引擎）。
 ///
 /// 关键优化：所有 chunk 线程共享同一个 Client 实例，而不是每次重试都
@@ -37,11 +66,11 @@ static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
 fn shared_client() -> &'static Client {
     SHARED_CLIENT.get_or_init(|| {
         Client::builder()
-            .timeout(Duration::from_secs(300))
-            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(SHARED_CLIENT_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(SHARED_CLIENT_CONNECT_TIMEOUT_SECS))
             .tcp_nodelay(true)
             .pool_max_idle_per_host(128)
-            .pool_idle_timeout(Some(Duration::from_secs(90)))
+            .pool_idle_timeout(Some(Duration::from_secs(SHARED_CLIENT_POOL_IDLE_TIMEOUT_SECS)))
             .user_agent("LlamaUI/0.7.0")
             .build()
             .expect("构建 reqwest blocking Client 失败")
@@ -179,7 +208,8 @@ fn curl_download(
     for attempt in 1..=MAX_ATTEMPTS {
         if attempt > 1 {
             let backoff =
-                Duration::from_millis(500 * u64::from(attempt)).min(Duration::from_secs(2));
+                Duration::from_millis(RETRY_BASE_DELAY_MS * u64::from(attempt))
+                    .min(Duration::from_secs(RETRY_MAX_DELAY_SECS));
             tracing::warn!(target: "LlamaDownloader", attempt, ?backoff, "下载失败，准备重试");
             std::thread::sleep(backoff);
             if let Some(cb) = progress_callback {
@@ -445,7 +475,7 @@ fn probe_bandwidth(url: &str) -> Option<u64> {
     let mut resp = shared_client()
         .get(url)
         .header("Range", format!("bytes=0-{}", PROBE_BYTES - 1))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(BANDWIDTH_PROBE_TIMEOUT_SECS))
         .send()
         .ok()?;
 
@@ -693,7 +723,8 @@ fn curl_download_parallel(
             // "越下载越慢"的直接原因。
             // 按 32KiB/s 的悲观速率预留 4 倍余量，再夹在 [60s, 600s]。
             let chunk_timeout = Duration::from_secs(
-                ((range_end - range_start + 1) / 32 * 4).clamp(60, 600),
+                ((range_end - range_start + 1) / 32 * 4)
+                    .clamp(MIN_CHUNK_TIMEOUT_SECS, MAX_CHUNK_TIMEOUT_SECS),
             );
             // 读缓冲提升到 256KB：
             // 64KB 在百兆以上链路上会让 read() 系统调用过于频繁，
@@ -891,14 +922,17 @@ fn curl_download_parallel(
                     const MAX_CHUNK_RETRIES: u32 = 3;
                     // 与首轮一致：超时按块大小缩放，缓冲同为 256KB
                     let chunk_timeout = Duration::from_secs(
-                        ((end - offset + 1) / 32 * 4).clamp(60, 600),
+                        ((end - offset + 1) / 32 * 4)
+                            .clamp(MIN_CHUNK_TIMEOUT_SECS, MAX_CHUNK_TIMEOUT_SECS),
                     );
                     const STREAM_BUF: usize = 256 * 1024;
                     let mut last_err: Option<anyhow::Error> = None;
                     for attempt in 1..=MAX_CHUNK_RETRIES {
                         // 重试退避，与首轮保持一致
                         if attempt > 1 {
-                            std::thread::sleep(Duration::from_millis(200 * u64::from(attempt - 1)));
+                            std::thread::sleep(Duration::from_millis(
+                                RETRY_BACKOFF_BASE_MS * u64::from(attempt - 1),
+                            ));
                             tracing::debug!(
                                 target: "LlamaDownloader",
                                 offset,
@@ -1778,8 +1812,8 @@ fn fetch_llama_latest_release_with_retry(
 fn fetch_latest_release_via_api() -> anyhow::Result<GitHubRelease> {
     let client = Client::builder()
         // 整体超时必须覆盖「响应体读取」，弱网下 67KB 可能需要数秒
-        .timeout(Duration::from_secs(45))
-        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(GITHUB_RELEASE_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(GITHUB_RELEASE_CONNECT_TIMEOUT_SECS))
         .user_agent("LlamaUI/0.7.0")
         .build()?;
 
@@ -2403,8 +2437,8 @@ fn try_validate_asset_urls(
         std::thread::spawn(move || {
             // 短超时：HEAD 只需快速判定可用性
             let client = match Client::builder()
-                .timeout(Duration::from_secs(6))
-                .connect_timeout(Duration::from_secs(4))
+                .timeout(Duration::from_secs(ASSET_PROBE_TIMEOUT_SECS))
+                .connect_timeout(Duration::from_secs(ASSET_PROBE_CONNECT_TIMEOUT_SECS))
                 .user_agent("LlamaUI/0.7.0")
                 .build()
             {
