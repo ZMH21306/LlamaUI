@@ -12,18 +12,13 @@
 use parking_lot::Mutex;
 use std::mem;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::Child;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::events::{LogLine, ServerStatus};
 
 use super::job::Job;
-
-/// Maximum number of log lines retained in memory. Older lines are dropped.
-///
-/// 与 [`super::log_truncate::MAX_LOG_LINE_BYTES`]（单行字节上限）配合形成
-/// 日志缓冲的双层防御：单行字节数 + 总行数。
-pub const MAX_LOG_LINES: usize = 5000;
 
 /// 进程运行时状态容器。
 ///
@@ -68,6 +63,10 @@ pub struct ServerProcess {
     /// 串行化 start / stop / restart 调用，防止并发导致子进程孤儿泄漏。
     /// 注意是 `tokio::sync::Mutex`（不是 parking_lot），因为调用方都在 async 上下文。
     pub(crate) start_mutex: Arc<TokioMutex<()>>,
+    /// 生命周期代际计数（generation）。每次 start 自增，供后台任务判断
+    /// 「自己是否仍属于当前这次运行」，避免上一代任务的迟到日志 / 状态回写
+    /// 污染新一代。无锁读取（`AtomicU64`），不参与 `inner` 的加锁。
+    pub(crate) generation: Arc<AtomicU64>,
 }
 
 impl ServerProcess {
@@ -89,6 +88,7 @@ impl ServerProcess {
                 tasks: Vec::new(),
             })),
             start_mutex: Arc::new(TokioMutex::new(())),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -113,6 +113,28 @@ impl ServerProcess {
     /// 当前实际绑定的端口（与 `cfg.port` 不同的原因是 auto-port 可能顺延）。
     pub fn active_port(&self) -> Option<u16> {
         self.inner.lock().active_port
+    }
+
+    /// 当前生命周期代际号（每次 start 自增，从 1 开始）。
+    ///
+    /// 后台任务（stdout/stderr reader、log pump、watcher、metrics sampler）
+    /// 在派生时捕获该值，循环里用它判断自己是否已过期：
+    /// `sp.generation() != my_gen` 即表示期间发生过 restart，应立刻退出，
+    /// 避免「上一代的 metrics 覆盖新一代的 active_port / uptime」这类
+    /// 跨代状态污染。
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// 在 `start` 入口自增代际并返回新的代际号。
+    /// 必须在持有 `start_mutex` 的前提下调用，保证「一次 start 一次自增」。
+    pub(crate) fn bump_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// 判定某个后台任务所属的代际是否已过期。
+    pub(crate) fn is_stale_generation(&self, gen: u64) -> bool {
+        self.generation() != gen
     }
 }
 
