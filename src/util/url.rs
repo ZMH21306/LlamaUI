@@ -15,8 +15,7 @@
 //!
 //! 仅允许 `http://` 与 `https://`，且长度不超过 [`MAX_URL_BYTES`]。
 
-/// URL 长度上限（字节）。防止异常大的 payload 攻击 `ShellExecuteW` / 前端解析器。
-pub const MAX_URL_BYTES: usize = 2048;
+use crate::constants::MAX_URL_BYTES;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum UrlError {
