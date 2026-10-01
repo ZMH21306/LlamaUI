@@ -10,8 +10,93 @@ use crate::errors::ConfigError;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// 配置验证器，集中管理所有配置验证规则
+pub struct ConfigValidator {
+    errors: Vec<ConfigError>,
+}
+
+impl ConfigValidator {
+    /// 创建新的验证器
+    pub fn new() -> Self {
+        Self { errors: Vec::new() }
+    }
+    
+    /// 验证端口
+    pub fn validate_port(&mut self, port: u16) {
+        if port == 0 {
+            self.errors.push(ConfigError::PortZero);
+        }
+    }
+    
+    /// 验证模式
+    pub fn validate_mode(&mut self, mode: &str) {
+        match mode {
+            "normal" | "advanced" | "pro" => {},
+            other => self.errors.push(ConfigError::InvalidMode(other.to_string())),
+        }
+    }
+    
+    /// 验证上下文大小
+    pub fn validate_ctx_size(&mut self, ctx_size: u32) {
+        if !(128..=1_048_576).contains(&ctx_size) {
+            self.errors.push(ConfigError::CtxSizeOutOfRange {
+                value: ctx_size,
+            });
+        }
+    }
+    
+    /// 验证GPU层数
+    pub fn validate_gpu_layers(&mut self, n_gpu_layers: i32) {
+        if !(-1..=200).contains(&n_gpu_layers) {
+            self.errors.push(ConfigError::GpuLayersOutOfRange {
+                value: n_gpu_layers,
+            });
+        }
+    }
+    
+    /// 验证MTP草稿数量
+    pub fn validate_mtp_draft(&mut self, mtp_draft_n_max: u32) {
+        if mtp_draft_n_max > 16 {
+            self.errors.push(ConfigError::MtpDraftOutOfRange {
+                value: mtp_draft_n_max,
+            });
+        }
+    }
+    
+    /// 验证路径安全（检查NUL字符和命令注入）
+    pub fn validate_path_safety(&mut self, custom_command: &str, extra_args: &str) {
+        // 检查NUL字符
+        if custom_command.contains('\u{0}') || extra_args.contains('\u{0}') {
+            self.errors.push(ConfigError::NulInPath {
+                field: "path".to_string(),
+            });
+        }
+        
+        // 检查命令注入（shell元字符）
+        let dangerous_chars = [';', '|', '&', '`', '$', '(', ')', '<', '>', '{', '}', '[', ']', '\\', '/'];
+        for field in ["custom_command", "extra_args"] {
+            let value = if field == "custom_command" { custom_command } else { extra_args };
+            if dangerous_chars.iter().any(|&c| value.contains(c)) {
+                self.errors.push(ConfigError::InvalidCharInField {
+                    field: field.to_string(),
+                    ch: '?',
+                });
+            }
+        }
+    }
+    
+    /// 执行所有验证
+    pub fn validate_all(&self) -> Result<(), ConfigError> {
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors[0].clone())
+        }
+    }
+}
 
 const CONFIG_FILE: &str = "config.json";
 
@@ -103,81 +188,50 @@ impl AppConfig {
     /// - 若 `models_dir` 非空，必须指向存在的目录
     /// - 路径中不能含 NUL 字符（Windows 路径非法）
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.port == 0 {
-            return Err(ConfigError::PortZero);
-        }
-        match self.mode.as_str() {
-            "normal" | "advanced" | "pro" => {}
-            other => return Err(ConfigError::InvalidMode(other.to_string())),
-        }
-        if !(128..=1_048_576).contains(&self.ctx_size) {
-            return Err(ConfigError::CtxSizeOutOfRange {
-                value: self.ctx_size,
-            });
-        }
-        if !(-1..=200).contains(&self.n_gpu_layers) {
-            return Err(ConfigError::GpuLayersOutOfRange {
-                value: self.n_gpu_layers,
-            });
-        }
-        if self.mtp_draft_n_max > 16 {
-            return Err(ConfigError::MtpDraftOutOfRange {
-                value: self.mtp_draft_n_max,
-            });
-        }
-        // 安全加固：检测命令注入（shell 元字符）
-        for field_name in &["custom_command", "extra_args"] {
-            let value = if *field_name == "custom_command" {
-                &self.custom_command
-            } else {
-                &self.extra_args
-            };
-            if value.contains('\0') {
-                return Err(ConfigError::NulInPath {
-                    field: field_name.to_string(),
-                });
-            }
-            // 拒绝包含 shell 管道/重定向/命令分隔符的命令
-            for ch in &['|', '&', ';', '`', '$', '\n', '\r'] {
-                if value.contains(*ch) {
-                    return Err(ConfigError::InvalidCharInField {
-                        field: field_name.to_string(),
-                        ch: *ch,
-                    });
-                }
-            }
-        }
+        let mut validator = ConfigValidator::new();
+        
+        // 验证基本字段
+        validator.validate_port(self.port);
+        validator.validate_mode(&self.mode);
+        validator.validate_ctx_size(self.ctx_size);
+        validator.validate_gpu_layers(self.n_gpu_layers);
+        validator.validate_mtp_draft(self.mtp_draft_n_max);
+        
+        // 验证路径安全
+        validator.validate_path_safety(&self.custom_command, &self.extra_args);
+        
+        // 验证路径存在性
         if let Some(p) = &self.llama_server_path {
             if !p.is_empty() {
-                if p.contains('\0') {
-                    return Err(ConfigError::NulInPath {
-                        field: "llama_server_path".to_string(),
-                    });
-                }
-                let pb = std::path::Path::new(p);
+                let pb = Path::new(p);
                 if !pb.exists() {
-                    return Err(ConfigError::PathNotFound(pb.to_path_buf()));
-                }
-                if !pb.is_file() {
-                    return Err(ConfigError::NotAFile(pb.to_path_buf()));
+                    // 需要创建一个新的错误，因为 PathNotFound只接受PathBuf
+                    validator.errors.push(ConfigError::Other(
+                        format!("llama_server_path 不存在：{}", p)
+                    ));
+                } else if !pb.is_file() {
+                    validator.errors.push(ConfigError::Other(
+                        format!("llama_server_path 不是文件：{}", p)
+                    ));
                 }
             }
         }
+        
         if !self.models_dir.is_empty() {
-            if self.models_dir.contains('\0') {
-                return Err(ConfigError::NulInPath {
-                    field: "models_dir".to_string(),
-                });
-            }
-            let pb = std::path::Path::new(&self.models_dir);
+            let pb = Path::new(&self.models_dir);
             if !pb.exists() {
-                return Err(ConfigError::PathNotFound(pb.to_path_buf()));
-            }
-            if !pb.is_dir() {
-                return Err(ConfigError::NotADirectory(pb.to_path_buf()));
+                validator.errors.push(ConfigError::Other(
+                    format!("models_dir 不存在：{}", self.models_dir)
+                ));
+            } else if !pb.is_dir() {
+                validator.errors.push(ConfigError::Other(
+                    format!("models_dir 不是目录：{}", self.models_dir)
+                ));
             }
         }
-        Ok(())
+        
+        // 执行所有验证并返回结果
+        validator.validate_all()
     }
 }
 
