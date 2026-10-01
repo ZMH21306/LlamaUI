@@ -131,7 +131,7 @@ pub enum UpdateState {
     /// 空闲（未进行任何更新操作）。
     Idle,
     /// 正在检查更新。
-    Checking { current_version: String },
+    Checking { current_version: String, message: String },
     /// 检查完成，有新版本。
     Available {
         latest_version: String,
@@ -140,9 +140,10 @@ pub enum UpdateState {
         download_url: String,
         file_size: u64,
         sha256: Option<String>,
+        message: String,
     },
     /// 检查完成，已是最新。
-    UpToDate { current_version: String },
+    UpToDate { current_version: String, message: String },
     /// 检查失败。
     CheckFailed { error: String, current_version: String },
     /// 开始下载更新。
@@ -165,6 +166,7 @@ pub enum UpdateState {
         download_path: String,
         file_size: u64,
         version: String,
+        message: String,
     },
     /// 安装中。
     Installing { progress: f64, message: String, version: String },
@@ -172,15 +174,17 @@ pub enum UpdateState {
     Completed { 
         new_version: String,
         elapsed_ms: u64,
+        message: String,
     },
     /// 下载/安装失败。
     Failed { 
         error: String, 
         version: String,
         stage: String,
+        message: String,
     },
     /// 已取消。
-    Cancelled,
+    Cancelled { message: String },
 }
 
 /// 更新下载进度（实时推送给前端）。
