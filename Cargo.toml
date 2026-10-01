@@ -92,6 +92,7 @@ uuid = { version = "1", features = ["v4"] }
 num_cpus = "1"
 ed25519-dalek = { version = "2", features = ["pem"] }
 zip = "0.6"
+libc = "0.2"
 
 # 结构化日志：tracing 生态（控制台彩色 + 文件滚动输出）
 tracing = "0.1"
