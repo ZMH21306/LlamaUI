@@ -206,6 +206,7 @@ pub async fn install_update(
         UpdateState::Completed {
             new_version: new_version.to_string(),
             elapsed_ms: 0,
+            message: format!("更新安装完成，请重启应用程序以生效 (版本 {})", new_version),
         },
     );
 
