@@ -295,12 +295,17 @@ fn verify_download_file(
             }
         }
         None => {
-            tracing::warn!(
+            // 签名验证已在 Manifest 检查阶段完成；SHA256 作为额外的完整性校验（纵深防御）。
+            // 若 Manifest 未提供 SHA256，拒绝安装，避免安装被篡改但签名合法的包。
+            tracing::error!(
                 target: "UpdateDownload",
-                sha256 = %sha256.unwrap_or_else(|| "未计算".to_string()),
                 version = version,
-                "更新包缺少预期的SHA256校验，但继续验证"
+                "更新包缺少 SHA256 完整性校验，拒绝安装"
             );
+            return Err(format!(
+                "更新包完整性校验缺失：缺少 SHA256，版本：{}",
+                version
+            ));
         }
     }
     
