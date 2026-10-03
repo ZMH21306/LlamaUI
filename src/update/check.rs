@@ -90,7 +90,10 @@ pub async fn check_for_updates() -> Result<UpdateCheckResult, UpdateError> {
         Some(a) => (a.url, a.size, a.sha256),
         None => {
             tracing::warn!(target: "UpdateCheck", platform = %platform, "no matching asset");
-            (String::new(), 0, None)
+            return Err(UpdateError::PlatformNotSupported(format!(
+                "当前平台 {} 无可用更新包",
+                platform
+            )));
         }
     };
 
@@ -100,12 +103,12 @@ pub async fn check_for_updates() -> Result<UpdateCheckResult, UpdateError> {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(target: "UpdateCheck", error = %e, "signature verification failed");
-                false
+                return Err(UpdateError::SignatureVerification);
             }
         },
         None => {
             tracing::warn!(target: "UpdateCheck", "manifest has no signature");
-            false
+            return Err(UpdateError::MissingSignature);
         }
     };
 
@@ -198,7 +201,17 @@ pub fn is_newer_version(latest: &str, current: &str) -> bool {
     match (l_pre, c_pre) {
         (None, Some(_)) => true,
         (Some(_), None) | (None, None) => false,
-        (Some(l), Some(c)) => l.cmp(c) == Ordering::Greater,
+        (Some(l), Some(c)) => {
+            // 先按语义化的数字部分比较（rc10 > rc2），剩余部分字典序
+            let l_nums: Vec<u32> = l.split('v').flat_map(|s| s.split('.')).filter_map(|s| s.parse().ok()).collect();
+            let c_nums: Vec<u32> = c.split('v').flat_map(|s| s.split('.')).filter_map(|s| s.parse().ok()).collect();
+            let l_max = l_nums.iter().max().copied().unwrap_or(0);
+            let c_max = c_nums.iter().max().copied().unwrap_or(0);
+            if l_max != c_max {
+                return l_max > c_max;
+            }
+            l.cmp(c) == Ordering::Greater
+        }
     }
 }
 
