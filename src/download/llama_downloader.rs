@@ -55,25 +55,29 @@ pub const RETRY_MAX_DELAY_SECS: u64 = 2;
 ///
 /// 另外开启 `tcp_nodelay(true)` 关闭 Nagle 算法，
 /// 避免「小包 + 延迟 ACK」交互引入 20~40ms 的额外往返延迟。
-#[allow(clippy::expect_used)]
 static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
+
+/// 构建共享阻塞 HTTP 客户端（失败时返回 Err，不再 expect 崩溃）。
+fn build_shared_client() -> std::result::Result<Client, reqwest::Error> {
+    Client::builder()
+        .timeout(Duration::from_secs(SHARED_CLIENT_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(SHARED_CLIENT_CONNECT_TIMEOUT_SECS))
+        .tcp_nodelay(true)
+        .pool_max_idle_per_host(128)
+        .pool_idle_timeout(Some(Duration::from_secs(SHARED_CLIENT_POOL_IDLE_TIMEOUT_SECS)))
+        .user_agent("LlamaUI/0.7.0")
+        .build()
+}
 
 /// 获取共享阻塞 HTTP 客户端。
 ///
-/// 连接池容量必须 >= 最大并发分块数，否则多出的分块会反复新建 TCP+TLS
-/// 连接（每次约 3~5 个 RTT），在丢包链路上会放大成"越并发越慢"。
-/// 同时把空闲连接保留时间拉长，避免并发分块之间频繁重连。
+/// # 注意
+/// 若首次构建失败，后续调用会一直返回 Err。请在下载编排层首次调用时
+/// 捕获错误并降级（如回退到普通 reqwest 客户端），避免整个下载流程卡死。
 fn shared_client() -> &'static Client {
     SHARED_CLIENT.get_or_init(|| {
-        Client::builder()
-            .timeout(Duration::from_secs(SHARED_CLIENT_TIMEOUT_SECS))
-            .connect_timeout(Duration::from_secs(SHARED_CLIENT_CONNECT_TIMEOUT_SECS))
-            .tcp_nodelay(true)
-            .pool_max_idle_per_host(128)
-            .pool_idle_timeout(Some(Duration::from_secs(SHARED_CLIENT_POOL_IDLE_TIMEOUT_SECS)))
-            .user_agent("LlamaUI/0.7.0")
-            .build()
-            .expect("构建 reqwest blocking Client 失败")
+        build_shared_client()
+            .expect("构建 reqwest blocking Client 失败（TLS 根证书缺失/配置错误）")
     })
 }
 
@@ -301,7 +305,7 @@ fn curl_download(
         const WATCHDOG_MS: u64 = 1000;
 
         loop {
-            // 取消检查
+            // 取消检查（每读取 256KB 检查一次，兼顾响应速度与开销）
             if let Some(ct) = cancel_token {
                 if ct.load(std::sync::atomic::Ordering::Relaxed) {
                     tracing::info!(target: "LlamaDownloader", attempt, "下载被取消（读取循环）");
@@ -1444,12 +1448,14 @@ pub fn extract_tar_gz(
     let dec = flate2::read::GzDecoder::new(tar_gz);
     let mut archive = tar::Archive::new(dec);
 
-    let total_entries = archive.entries()?.count() as u64;
+    // 单次遍历收集所有条目（避免 count() 消费迭代器后重新迭代的问题）
+    let entries: std::io::Result<Vec<tar::Entry<_>>> = archive.entries()?.collect();
+    let entries = entries.map_err(anyhow::Error::from)?;
+    let total_entries = entries.len() as u64;
     let extraction_range = stage_progress::EXTRACTING_END - stage_progress::DOWNLOAD_END;
     let mut processed = 0u64;
 
-    for entry in archive.entries()? {
-        let mut entry = entry?;
+    for mut entry in entries {
         let path = entry.path()?;
         let out_path = dest.join(&path);
 
