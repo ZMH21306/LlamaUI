@@ -48,6 +48,10 @@ pub enum UpdateError {
     #[error("Manifest 签名验证失败")]
     SignatureVerification,
 
+    /// Manifest 未提供 Ed25519 签名，无法验证发布来源合法性。
+    #[error("Manifest 未签名，拒绝安装")]
+    MissingSignature,
+
     /// 更新被用户取消。
     #[error("更新已取消")]
     Cancelled,
@@ -55,6 +59,10 @@ pub enum UpdateError {
     /// 下载超时。
     #[error("下载超时")]
     Timeout,
+
+    /// 当前平台无可用更新包。
+    #[error("当前平台无可用更新包：{0}")]
+    PlatformNotSupported(String),
 
     /// 通用回退错误。
     #[error("更新失败：{0}")]
