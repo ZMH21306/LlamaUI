@@ -72,7 +72,7 @@ pub async fn download_llama_server(
     let cancel_flag = state.download_cancel.clone();
 
     // 执行下载，实时推送进度
-    let result = tokio::task::spawn_blocking(move || {
+    let download_handle = tokio::task::spawn_blocking(move || {
         download_and_install(
             gpu_backend,
             &dir,
@@ -92,30 +92,45 @@ pub async fn download_llama_server(
             }),
             Some(&cancel_flag),
         )
-    })
-    .await
-    .map_err(|e| {
-        let msg = format!("下载任务执行失败: {}", e);
-        tracing::error!(target: "DownloadCmd", error = %e, "spawn_blocking 失败");
-        // 发送失败状态
-        let _ = app.emit(
-            EVT_DOWNLOAD_STATE,
-            DownloadState::Failed {
-                error: msg.clone(),
-                log_entry: Some(DownloadLogEntry {
-                    message: msg.clone(),
-                    level: "error".to_string(),
-                    stage: "error".to_string(),
-                    auto_scroll: true,
-                }),
-            },
-        );
-        msg
-    })?
-    .map_err(|e| {
+    });
+
+    let download_result: Result<DownloadResult, anyhow::Error> = match download_handle.await {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(e)) => {
+            // download_and_install 抛出的 anyhow::Error：正确分类后重抛
+            tracing::error!(target: "DownloadCmd", error = %e, "spawn_blocking 任务返回错误");
+            Err(e)
+        }
+        Err(e) => {
+            // 下载线程 panic 或被取消（如主任务取消导致 Join 被中断）
+            if e.is_cancelled() {
+                tracing::info!(target: "DownloadCmd", "下载任务被取消");
+                let _ = app.emit(
+                    EVT_DOWNLOAD_STATE,
+                    DownloadState::Cancelled,
+                );
+                return Err("下载已取消".to_string());
+            }
+            let msg = format!("下载任务执行失败：下载线程 panic 或崩溃：{}", e);
+            tracing::error!(target: "DownloadCmd", error = %e, "spawn_blocking 线程异常");
+            let _ = app.emit(
+                EVT_DOWNLOAD_STATE,
+                DownloadState::Failed {
+                    error: msg.clone(),
+                    log_entry: Some(DownloadLogEntry {
+                        message: msg.clone(),
+                        level: "error".to_string(),
+                        stage: "error".to_string(),
+                        auto_scroll: true,
+                    }),
+                },
+            );
+            Err(anyhow::anyhow!("{}", msg))
+        }
+    };
+    let result = download_result.map_err(|e| {
         let msg = format!("{}", e);
         tracing::error!(target: "DownloadCmd", error = %e, "下载安装失败");
-        // 如果是取消导致的错误，发送 Cancelled 状态
         if msg.contains("取消") || msg.contains("cancelled") {
             let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelled);
         } else {
@@ -172,13 +187,27 @@ pub async fn cancel_download_llama_server(
     // 设置取消标志
     state.download_cancel.store(true, Ordering::Relaxed);
     tracing::info!(target: "DownloadCmd", "收到取消下载请求");
-    
+
     // 发送正在取消状态
     let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelling);
-    
-    // 等待一小段时间让下载线程检查取消标志
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    
+
+    // 等待下载线程检查取消标志：每 100ms 检查一次，最多等 3 秒。
+    // download_and_install 在每次重试和 watchdog 路径都会检查 AtomicBool，
+    // 因此 3s 足够在绝大多数情况下响应。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if !state.download_cancel.load(Ordering::Relaxed) {
+            // 下载线程已重置标志（说明任务已结束或被外部重置）
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!(target: "DownloadCmd", "取消等待超时，下载线程可能仍在运行");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelled);
     Ok(())
 }
 
