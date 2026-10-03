@@ -22,7 +22,7 @@ static RELEASE_RE: OnceLock<regex::Regex> = OnceLock::new();
 fn get_release_regex() -> &'static regex::Regex {
     RELEASE_RE.get_or_init(|| {
         regex::Regex::new(
-            r"^https://github\.com/([^/]+)/releases/download/([^/]+)/(.+)$"
+            r"^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/(.+)$"
         ).unwrap()
     })
 }
@@ -77,8 +77,8 @@ impl MirrorConfig {
     /// 根据原始 GitHub URL 生成镜像 URL
     ///
     /// 支持的转换：
-    /// - GitHub → jsDelivr: `https://github.com/owner/releases/download/tag/asset`
-    ///   → `https://cdn.jsdelivr.net/gh/owner@tag/asset`
+    /// - GitHub → jsDelivr: `https://github.com/owner/repo/releases/download/tag/asset`
+    ///   → `https://cdn.jsdelivr.net/gh/owner/repo@tag/asset`
     pub fn build_url_from_github(&self, github_url: &str) -> String {
         // 如果设置了自定义镜像前缀，直接使用
         if let Some(custom) = &self.custom_prefix {
@@ -91,16 +91,18 @@ impl MirrorConfig {
         }
 
         // GitHub Releases URL 格式：
-        // https://github.com/{owner}/releases/download/{tag}/{asset}
+        // https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}
         if let Some(cap) = get_release_regex().captures(github_url) {
-            let owner = &cap[1];
+            let repo = &cap[1];
             let tag = &cap[2];
             let asset = &cap[3];
-            
+
             // 使用 jsdelivr 作为主镜像（全局可用性好）
+            // https://github.com/owner/repo/releases/download/tag/asset
+            //   → https://cdn.jsdelivr.net/gh/owner/repo@tag/asset
             return format!(
-                "https://cdn.jsdelivr.net/gh/{}/@{}/{}",
-                owner, tag, asset
+                "https://cdn.jsdelivr.net/gh/{}@{}/{}",
+                repo, tag, asset
             );
         }
 
@@ -188,7 +190,8 @@ mod tests {
         };
         let github_url = "https://github.com/ggml-org/llama.cpp/releases/download/v0.4.2/llama-linux-x64.zip";
         let mirrored = config.build_url_from_github(github_url);
-        assert!(mirrored.starts_with("https://github.com")); // 测试自定义前缀
+        // enabled=true 时应转换为 jsDelivr URL
+        assert!(mirrored.starts_with("https://cdn.jsdelivr.net/gh/ggml-org/llama.cpp@v0.4.2/"), "{}", mirrored)
     }
 
     #[test]
