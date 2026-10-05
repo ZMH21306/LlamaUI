@@ -42,7 +42,10 @@ pub fn init() {
     let _ = fs::create_dir_all(&log_dir);
 
     // 按日滚动文件 appender：文件名格式 llama-ui.YYYY-MM-DD.log
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "llama-ui.log");
+    use chrono::Local;
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+    let file_appender =
+        tracing_appender::rolling::daily(&log_dir, format!("llama-ui-{}.log", timestamp));
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // 保存 guard 到 static，防止 WorkerGuard 被 drop（会停止写入线程）
