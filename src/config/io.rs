@@ -28,6 +28,8 @@ pub fn import_config(json_str: &str) -> anyhow::Result<AppConfig> {
     if cfg._v == 0 || cfg._v > 1_000_000 {
         return Err(anyhow::anyhow!("配置版本号 {} 不合理", cfg._v));
     }
+    // 验证配置的有效性
+    cfg.validate()?;
     Ok(cfg)
 }
 
