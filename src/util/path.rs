@@ -69,8 +69,6 @@ pub fn segment_eq_with_separator(path: &str, sep: &str, segment: &str) -> bool {
     path.contains(&needle)
 }
 
-
-
 /// 判断 `path` 是否位于世界可写 / 临时目录。
 ///
 /// 检查两种情况（任一命中即返回 `true`）：
@@ -99,7 +97,9 @@ pub fn is_world_writable_path(path: &Path) -> bool {
 pub fn has_unsafe_component(path: &Path) -> bool {
     path.components().any(|comp| {
         let s = comp.as_os_str().to_string_lossy().to_ascii_lowercase();
-        SAFE_PATH_COMPONENTS.iter().any(|unsafe_comp| s == *unsafe_comp)
+        SAFE_PATH_COMPONENTS
+            .iter()
+            .any(|unsafe_comp| s == *unsafe_comp)
     })
 }
 
