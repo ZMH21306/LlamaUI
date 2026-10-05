@@ -45,7 +45,10 @@ impl InstallState {
     pub fn state_path(target: &Path) -> PathBuf {
         target.parent().unwrap_or(Path::new(".")).join(format!(
             "{}.state.json",
-            target.file_name().map(|s| s.to_string_lossy()).unwrap_or_default()
+            target
+                .file_name()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_default()
         ))
     }
 
@@ -83,7 +86,10 @@ impl InstallState {
 
 fn suffixed(target: &Path, suffix: &str) -> PathBuf {
     let parent = target.parent().unwrap_or(Path::new("."));
-    let name = target.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
+    let name = target
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
     parent.join(format!("{}.{}", name, suffix))
 }
 
@@ -166,7 +172,8 @@ pub fn atomic_install(
         if let Err(e) = std::fs::rename(target, &backup) {
             InstallState::clear(target);
             return Err(InstallError::BadTarget(format!(
-                "无法重命名旧目录（文件可能正被占用，请先停止 llama-server）: {}", e
+                "无法重命名旧目录（文件可能正被占用，请先停止 llama-server）: {}",
+                e
             )));
         }
         state.backup = Some(backup.to_string_lossy().to_string());
@@ -237,8 +244,16 @@ pub fn recover_from_crash(target: &Path) -> Option<String> {
 pub fn make_staging(target: &Path, label: &str) -> Result<PathBuf> {
     let parent = target.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let name = target.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
-    let staging = parent.join(format!("{}.{}-{}", name, label, &uuid::Uuid::new_v4().to_string()[..8]));
+    let name = target
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let staging = parent.join(format!(
+        "{}.{}-{}",
+        name,
+        label,
+        &uuid::Uuid::new_v4().to_string()[..8]
+    ));
     std::fs::create_dir_all(&staging)?;
     Ok(staging)
 }
@@ -286,7 +301,9 @@ fn make_writable(dir: &Path) {
         .status();
     match status {
         Ok(s) if s.success() => {}
-        Ok(s) => tracing::debug!(target: "LlamaInstaller", code = s.code(), "attrib 返回非零（可能无只读文件）"),
+        Ok(s) => {
+            tracing::debug!(target: "LlamaInstaller", code = s.code(), "attrib 返回非零（可能无只读文件）")
+        }
         Err(e) => tracing::debug!(target: "LlamaInstaller", error = %e, "attrib 执行失败（忽略）"),
     }
 }
@@ -299,11 +316,7 @@ mod tests {
     use std::fs;
 
     fn temp_root(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "llamaui_inst_{}_{}",
-            tag,
-            uuid::Uuid::new_v4()
-        ));
+        let p = std::env::temp_dir().join(format!("llamaui_inst_{}_{}", tag, uuid::Uuid::new_v4()));
         fs::create_dir_all(&p).expect("create temp root");
         p
     }
@@ -361,8 +374,8 @@ mod tests {
 
         let staging = make_staging(&target, "dl").expect("staging");
 
-        let err = atomic_install(&staging, &target, &["llama-server.exe"], None)
-            .expect_err("应当失败");
+        let err =
+            atomic_install(&staging, &target, &["llama-server.exe"], None).expect_err("应当失败");
         assert!(matches!(err, InstallError::MissingBinary(_)));
         assert!(target.join("llama-server.exe").is_file(), "旧版本必须完好");
         let _ = fs::remove_dir_all(&root);
