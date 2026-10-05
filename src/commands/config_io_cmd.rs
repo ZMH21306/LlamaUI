@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn export_import_roundtrip() {
-        let json = r#"{"_v":1,"models_dir":"m","ctx_size":4096,"n_gpu_layers":0,"flash_attn":false,"mtp":false,"mtp_draft_n_max":3,"port":8080,"auto_port":true,"extra_args":"","mode":"normal","custom_command":""}"#;
+        let json = r#"{"_v":1,"models_dir":"D:\\","ctx_size":4096,"n_gpu_layers":0,"flash_attn":false,"mtp":false,"mtp_draft_n_max":3,"port":8080,"auto_port":true,"extra_args":"","mode":"normal","custom_command":""}"#;
         let cfg = crate::config::import_config(json).unwrap();
         assert_eq!(cfg._v, 1);
         let exported = crate::config::export_config(&cfg).unwrap();
