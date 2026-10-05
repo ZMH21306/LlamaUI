@@ -23,31 +23,34 @@ impl ConfigValidator {
     pub fn new() -> Self {
         Self { errors: Vec::new() }
     }
-    
+
     /// 验证端口
     pub fn validate_port(&mut self, port: u16) {
         if port == 0 {
             self.errors.push(ConfigError::PortZero);
         }
+        // Note: u16 type ensures port <= 65535, so explicit upper bound check is not needed
+        // Keeping the error variant for completeness and potential future type changes
     }
-    
+
     /// 验证模式
     pub fn validate_mode(&mut self, mode: &str) {
         match mode {
-            "normal" | "advanced" | "pro" => {},
-            other => self.errors.push(ConfigError::InvalidMode(other.to_string())),
+            "normal" | "advanced" | "pro" => {}
+            other => self
+                .errors
+                .push(ConfigError::InvalidMode(other.to_string())),
         }
     }
-    
+
     /// 验证上下文大小
     pub fn validate_ctx_size(&mut self, ctx_size: u32) {
         if !(128..=1_048_576).contains(&ctx_size) {
-            self.errors.push(ConfigError::CtxSizeOutOfRange {
-                value: ctx_size,
-            });
+            self.errors
+                .push(ConfigError::CtxSizeOutOfRange { value: ctx_size });
         }
     }
-    
+
     /// 验证GPU层数
     pub fn validate_gpu_layers(&mut self, n_gpu_layers: i32) {
         if !(-1..=200).contains(&n_gpu_layers) {
@@ -56,7 +59,7 @@ impl ConfigValidator {
             });
         }
     }
-    
+
     /// 验证MTP草稿数量
     pub fn validate_mtp_draft(&mut self, mtp_draft_n_max: u32) {
         if mtp_draft_n_max > 16 {
@@ -65,7 +68,7 @@ impl ConfigValidator {
             });
         }
     }
-    
+
     /// 验证路径安全（检查NUL字符和命令注入）
     pub fn validate_path_safety(&mut self, custom_command: &str, extra_args: &str) {
         // 检查NUL字符
@@ -74,11 +77,17 @@ impl ConfigValidator {
                 field: "path".to_string(),
             });
         }
-        
+
         // 检查命令注入（shell元字符）
-        let dangerous_chars = [';', '|', '&', '`', '$', '(', ')', '<', '>', '{', '}', '[', ']', '\\', '/'];
+        let dangerous_chars = [
+            ';', '|', '&', '`', '$', '(', ')', '<', '>', '{', '}', '[', ']', '\\', '/',
+        ];
         for field in ["custom_command", "extra_args"] {
-            let value = if field == "custom_command" { custom_command } else { extra_args };
+            let value = if field == "custom_command" {
+                custom_command
+            } else {
+                extra_args
+            };
             if dangerous_chars.iter().any(|&c| value.contains(c)) {
                 self.errors.push(ConfigError::InvalidCharInField {
                     field: field.to_string(),
@@ -87,7 +96,7 @@ impl ConfigValidator {
             }
         }
     }
-    
+
     /// 执行所有验证
     pub fn validate_all(&self) -> Result<(), ConfigError> {
         if self.errors.is_empty() {
@@ -102,7 +111,7 @@ const CONFIG_FILE: &str = "config.json";
 
 /// 配置 schema 版本号。每次破坏性变更（重命名字段、改变语义、移除字段）必须 +1。
 /// 旧版本文件会在 `load_from_disk` 阶段被静默迁移到当前版本，迁移失败时退回默认。
-pub const CURRENT_CONFIG_VERSION: u32 = 1;
+pub const CURRENT_CONFIG_VERSION: u32 = 2;
 
 /// 专业模式默认启动命令（首次安装或新配置时使用）
 pub const DEFAULT_PRO_CUSTOM_COMMAND: &str =
@@ -142,6 +151,28 @@ pub struct AppConfig {
     /// 留空时回退到普通模式命令。
     #[serde(default)]
     pub custom_command: String,
+    // ===== new fields: UI state and HF config =====
+    /// whether light theme (false = dark, true = light)
+    #[serde(default)]
+    pub light_theme: bool,
+    /// left panel width (px)
+    #[serde(default)]
+    pub pane_left_w: u16,
+    /// right panel width (px)
+    #[serde(default)]
+    pub pane_right_w: u16,
+    /// window width (px)
+    #[serde(default)]
+    pub window_width: u16,
+    /// window height (px)
+    #[serde(default)]
+    pub window_height: u16,
+    /// HF Token (encrypted storage, temporarily not encrypted)
+    #[serde(default)]
+    pub hf_token_encrypted: Option<String>,
+    /// last accessed remote server URL
+    #[serde(default)]
+    pub last_remote_url: Option<String>,
 }
 
 fn default_mode() -> String {
@@ -168,6 +199,13 @@ impl Default for AppConfig {
             extra_args: String::new(),
             mode: default_mode(),
             custom_command: DEFAULT_PRO_CUSTOM_COMMAND.to_string(),
+             light_theme: false,
+             pane_left_w: 420,
+             pane_right_w: 280,
+             window_width: 1400,
+             window_height: 900,
+             hf_token_encrypted: None,
+             last_remote_url: None,
         }
     }
 }
@@ -189,47 +227,51 @@ impl AppConfig {
     /// - 路径中不能含 NUL 字符（Windows 路径非法）
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut validator = ConfigValidator::new();
-        
+
         // 验证基本字段
         validator.validate_port(self.port);
         validator.validate_mode(&self.mode);
         validator.validate_ctx_size(self.ctx_size);
         validator.validate_gpu_layers(self.n_gpu_layers);
         validator.validate_mtp_draft(self.mtp_draft_n_max);
-        
+
         // 验证路径安全
         validator.validate_path_safety(&self.custom_command, &self.extra_args);
-        
+
         // 验证路径存在性
         if let Some(p) = &self.llama_server_path {
             if !p.is_empty() {
                 let pb = Path::new(p);
                 if !pb.exists() {
                     // 需要创建一个新的错误，因为 PathNotFound只接受PathBuf
-                    validator.errors.push(ConfigError::Other(
-                        format!("llama_server_path 不存在：{}", p)
-                    ));
+                    validator.errors.push(ConfigError::Other(format!(
+                        "llama_server_path 不存在：{}",
+                        p
+                    )));
                 } else if !pb.is_file() {
-                    validator.errors.push(ConfigError::Other(
-                        format!("llama_server_path 不是文件：{}", p)
-                    ));
+                    validator.errors.push(ConfigError::Other(format!(
+                        "llama_server_path 不是文件：{}",
+                        p
+                    )));
                 }
             }
         }
-        
+
         if !self.models_dir.is_empty() {
             let pb = Path::new(&self.models_dir);
             if !pb.exists() {
-                validator.errors.push(ConfigError::Other(
-                    format!("models_dir 不存在：{}", self.models_dir)
-                ));
+                validator.errors.push(ConfigError::Other(format!(
+                    "models_dir 不存在：{}",
+                    self.models_dir
+                )));
             } else if !pb.is_dir() {
-                validator.errors.push(ConfigError::Other(
-                    format!("models_dir 不是目录：{}", self.models_dir)
-                ));
+                validator.errors.push(ConfigError::Other(format!(
+                    "models_dir 不是目录：{}",
+                    self.models_dir
+                )));
             }
         }
-        
+
         // 执行所有验证并返回结果
         validator.validate_all()
     }
@@ -361,7 +403,9 @@ fn migrate(mut cfg: AppConfig) -> AppConfig {
                 cfg._v = 1;
             }
             1 => {
-                // v1 → v2：当前与最新版本一致，跳出循环。
+                // v1 → v2：新增 UI 状态字段 (light_theme, pane_left_w, pane_right_w,
+                // window_width, window_height, hf_token_encrypted, last_remote_url)。
+                // 所有新字段均使用 #[serde(default)]，旧配置文件自动兼容，无需数据迁移。
                 break;
             }
             other => {
