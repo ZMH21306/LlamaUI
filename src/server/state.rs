@@ -11,8 +11,8 @@
 
 use parking_lot::Mutex;
 use std::mem;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::process::Child;
 use tokio::sync::Mutex as TokioMutex;
 
