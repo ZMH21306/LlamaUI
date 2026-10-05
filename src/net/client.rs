@@ -105,11 +105,7 @@ impl NetClient {
             .and_then(|s| s.parse::<u64>().ok()))
     }
 
-    async fn send_head(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<Response, NetError> {
+    async fn send_head(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, NetError> {
         let mut builder = self.client.head(url);
         for (k, v) in headers {
             builder = builder.header(*k, *v);
