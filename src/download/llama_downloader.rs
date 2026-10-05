@@ -7,6 +7,7 @@
 use crate::download::mirror;
 pub use crate::download::platform::GpuBackend;
 use crate::util::process::silent_command;
+use crate::util::progress::ProgressReporter;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -64,7 +65,9 @@ fn build_shared_client() -> std::result::Result<Client, reqwest::Error> {
         .connect_timeout(Duration::from_secs(SHARED_CLIENT_CONNECT_TIMEOUT_SECS))
         .tcp_nodelay(true)
         .pool_max_idle_per_host(128)
-        .pool_idle_timeout(Some(Duration::from_secs(SHARED_CLIENT_POOL_IDLE_TIMEOUT_SECS)))
+        .pool_idle_timeout(Some(Duration::from_secs(
+            SHARED_CLIENT_POOL_IDLE_TIMEOUT_SECS,
+        )))
         .user_agent("LlamaUI/0.7.0")
         .build()
 }
@@ -76,8 +79,7 @@ fn build_shared_client() -> std::result::Result<Client, reqwest::Error> {
 /// 捕获错误并降级（如回退到普通 reqwest 客户端），避免整个下载流程卡死。
 fn shared_client() -> &'static Client {
     SHARED_CLIENT.get_or_init(|| {
-        build_shared_client()
-            .expect("构建 reqwest blocking Client 失败（TLS 根证书缺失/配置错误）")
+        build_shared_client().expect("构建 reqwest blocking Client 失败（TLS 根证书缺失/配置错误）")
     })
 }
 
@@ -170,6 +172,109 @@ pub mod stage_progress {
     pub const VERIFYING_END: f64 = 0.98;
     pub const FINALIZING_START: f64 = 0.98;
     pub const COMPLETE_END: f64 = 1.00;
+
+    /// 把「阶段内比例」映射到该阶段占据的全局进度区间。
+    pub fn map_ratio(start: f64, end: f64, ratio: f64) -> f64 {
+        let r = ratio.clamp(0.0, 1.0);
+        start + r * (end - start)
+    }
+}
+
+/// 单调进度守卫（Monotonic Progress Guard）。
+///
+/// # 为什么需要它
+///
+/// 更新流程由多个阶段串行组成，而每个阶段内部又可能**多路径并行**
+/// （例如资产匹配会同时跑 N 个 HEAD 探测）。旧实现里每个路径都各自
+/// 按「自己的候选序号」计算全局进度，于是出现了两类倒退：
+///
+/// 1. **跨路径倒退**：版本获取的回退分支 `try_validate_asset_urls`
+///    会把进度推到 `finding_asset` 区间（4%→8%），随后主流程的
+///    `smart_find_asset` 又从 4% 重新开始 —— 肉眼可见「7% 退回 4%」。
+/// 2. **路径内倒退**：并行 HEAD 探测用固定的 `candidate_index` 折算
+///    进度，而线程完成顺序是非确定的。第 5 个候选先返回把进度推到
+///    7%，随后第 1 个候选失败又把进度拉回 4.7%。
+///
+/// # 保证
+///
+/// 所有发往前端的 `progress` 都经过本守卫，**永远单调不回退**：
+/// 一旦进度达到过 `x`，后续任何小于 `x` 的上报都会被抬回 `x`。
+/// 这样无论内部有多少条并行/回退路径，UI 看到的都是一条平滑上升的曲线。
+///
+/// 使用 `Cell<f64>` 而非 `&mut self`，是为了让包装后的闭包仍然满足
+/// `Fn`（而非 `FnMut`），从而可以继续以 `&dyn Fn(DownloadProgress)`
+/// 的形式向下传递，无需改动任何下游函数签名。
+#[derive(Debug)]
+pub struct ProgressTracker {
+    /// 历史最高进度（高水位线）
+    high_water: std::cell::Cell<f64>,
+}
+
+impl Default for ProgressTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProgressTracker {
+    /// 创建守卫，初始高水位为 0。
+    pub fn new() -> Self {
+        Self {
+            high_water: std::cell::Cell::new(0.0),
+        }
+    }
+
+    /// 当前高水位（历史最高进度）。
+    pub fn high_water(&self) -> f64 {
+        self.high_water.get()
+    }
+
+    /// 夹紧单个进度值：低于高水位时抬回高水位，否则抬高水位。
+    ///
+    /// 同时把结果约束在 `[0.0, 1.0]`。
+    pub fn clamp(&self, progress: f64) -> f64 {
+        // NaN 视为无效输入，按「不推进」处理，避免污染高水位。
+        let p = if progress.is_finite() {
+            progress.clamp(0.0, 1.0)
+        } else {
+            self.high_water.get()
+        };
+        if p > self.high_water.get() {
+            self.high_water.set(p);
+        }
+        self.high_water.get()
+    }
+
+    /// 对完整进度事件做单调化处理。
+    pub fn apply(&self, mut p: DownloadProgress) -> DownloadProgress {
+        p.progress = self.clamp(p.progress);
+        // `detail.step_progress` 是阶段内比例，不参与全局高水位，
+        // 但仍需约束在 [0,1] 以免 UI 画出越界进度条。
+        if let Some(ref mut d) = p.detail {
+            if d.step_progress.is_finite() {
+                d.step_progress = d.step_progress.clamp(0.0, 1.0);
+            } else {
+                d.step_progress = 0.0;
+            }
+        }
+        p
+    }
+}
+
+/// 用单调守卫包装原始回调，得到一个新的 `Fn(DownloadProgress)`。
+///
+/// 包装后的闭包捕获守卫的**不可变引用**，因此仍满足 `Fn`，可以继续
+/// 作为 `&dyn Fn(DownloadProgress)` 传给下游所有阶段函数。
+pub fn guard_progress<'a>(
+    tracker: &'a ProgressTracker,
+    raw: Option<&'a dyn Fn(DownloadProgress)>,
+) -> impl Fn(DownloadProgress) + 'a {
+    move |p: DownloadProgress| {
+        let p = tracker.apply(p);
+        if let Some(cb) = raw {
+            cb(p);
+        }
+    }
 }
 
 fn curl_download(
@@ -211,9 +316,8 @@ fn curl_download(
 
     for attempt in 1..=MAX_ATTEMPTS {
         if attempt > 1 {
-            let backoff =
-                Duration::from_millis(RETRY_BASE_DELAY_MS * u64::from(attempt))
-                    .min(Duration::from_secs(RETRY_MAX_DELAY_SECS));
+            let backoff = Duration::from_millis(RETRY_BASE_DELAY_MS * u64::from(attempt))
+                .min(Duration::from_secs(RETRY_MAX_DELAY_SECS));
             tracing::warn!(target: "LlamaDownloader", attempt, ?backoff, "下载失败，准备重试");
             std::thread::sleep(backoff);
             if let Some(cb) = progress_callback {
@@ -376,7 +480,11 @@ fn curl_download(
                                 downloaded as f64 / 1048576.0
                             ),
                             speed_mbps,
-                            eta_secs: if speed_mbps > 0.0 { Some(eta_secs) } else { None },
+                            eta_secs: if speed_mbps > 0.0 {
+                                Some(eta_secs)
+                            } else {
+                                None
+                            },
                             detail: Some(DownloadProgressDetail {
                                 step: "downloading".to_string(),
                                 step_progress: raw_progress,
@@ -469,7 +577,11 @@ fn curl_download(
                             speed_mbps
                         ),
                         speed_mbps,
-                        eta_secs: if speed_mbps > 0.0 { Some(eta_secs) } else { None },
+                        eta_secs: if speed_mbps > 0.0 {
+                            Some(eta_secs)
+                        } else {
+                            None
+                        },
                         detail: Some(DownloadProgressDetail {
                             step: "downloading".to_string(),
                             step_progress: raw_progress,
@@ -890,18 +1002,10 @@ fn curl_download_parallel(
     //
     // 关键：分块可能因超时/失败而中断，必须在等待循环内**重试失败分块**，
     // 否则 `handles` 永远不会全部 finished，下载会无限卡住。
-    let start = std::time::Instant::now();
-    let mut last_emitted_progress: f64 = progress_start;
-    // 强制上报间隔：即使进度差不足 0.0005，也保证 UI 至少每 500ms 收到一次事件。
-    // 原实现只按 `进度差 >= 0.0005` 触发，在高速下载时两次回调可间隔数秒。
-    const CHUNK_EMIT_MIN_INTERVAL: std::time::Duration = Duration::from_millis(500);
-    let mut last_emit_at = std::time::Instant::now();
     let mut retry_round = 0u32;
     const MAX_RETRY_ROUNDS: u32 = 5;
-    // 进度采样（用于计算瞬时速度）：保留最近 5 个采样点，剔除时间跨度大的点
-    let mut samples: [(u64, std::time::Instant); 5] = [(0, start); 5];
-    let mut sample_pos = 0usize;
-    let mut sample_count = 0usize;
+    // 进度报告器：1秒最小发射间隔，EMA速度平滑
+    let mut progress_reporter = ProgressReporter::new(total_size, 10, Duration::from_secs(1));
 
     loop {
         let all_done = handles.iter().all(|h| h.is_finished());
@@ -910,77 +1014,35 @@ fn curl_download_parallel(
         }
 
         let current = downloaded.load(std::sync::atomic::Ordering::Relaxed);
-        let raw_progress = if total_size > 0 {
-            current as f64 / total_size as f64
-        } else {
-            0.0
-        };
-        let global_progress = progress_start + raw_progress * (progress_end - progress_start);
-        let time_due = last_emit_at.elapsed() >= CHUNK_EMIT_MIN_INTERVAL;
-        if (global_progress - last_emitted_progress).abs() >= 0.0005 || time_due {
-            last_emitted_progress = global_progress;
-            let now = std::time::Instant::now();
-            last_emit_at = now;
-            // 取窗口中“上一个采样点”作为瞬时速度基准（读取必须在覆盖缓冲区之前）。
-            let oldest_idx = (sample_pos + samples.len() - 1) % samples.len();
-            let oldest = if sample_count > 0 {
-                samples[oldest_idx]
-            } else {
-                (current, start)
-            };
-            // 更新滑动窗口采样点
-            samples[sample_pos] = (current, now);
-            sample_pos = (sample_pos + 1) % samples.len();
-            if sample_count < samples.len() {
-                sample_count += 1;
-            }
-            // 用最近两个采样点计算瞬时速度，不足两个采样点时回退到平均速度
-            let speed_mbps = if sample_count >= 2 {
-                let elapsed = now.duration_since(oldest.1).as_secs_f64();
-                if elapsed > 0.0 {
-                    ((current - oldest.0) as f64 / elapsed) / 1_048_576.0
-                } else {
-                    0.0
-                }
-            } else {
-                let elapsed = start.elapsed().as_secs_f64();
-                if elapsed > 0.0 {
-                    (current as f64 / elapsed) / 1_048_576.0
-                } else {
-                    0.0
-                }
-            };
-            let eta_secs = if speed_mbps > 0.0 {
-                Some(((total_size - current) as f64 / 1_048_576.0 / speed_mbps) as u64)
-            } else {
-                None
-            };
+        if let Some((progress_fraction, downloaded_bytes, speed_bps, eta_secs)) = progress_reporter.observe(current) {
+            // 将0-1的进度映射到当前阶段的范围
+            let global_progress = progress_start + progress_fraction * (progress_end - progress_start);
             if let Some(cb) = progress_callback {
                 cb(DownloadProgress {
                     stage: "downloading".into(),
                     progress: global_progress,
-                    downloaded: current,
+                    downloaded: downloaded_bytes,
                     total: total_size,
                     message: format!(
                         "下载中 {:.1}% · {:.1}/{:.1} MB · {:.2} MB/s · {}",
                         global_progress * 100.0,
-                        current as f64 / 1_048_576.0,
+                        downloaded_bytes as f64 / 1_048_576.0,
                         total_size as f64 / 1_048_576.0,
-                        speed_mbps,
+                        speed_bps / 1_048_576.0,
                         match eta_secs {
                             Some(s) => format!("约还需 {} 秒", s),
                             None => "计算中...".to_string(),
                         }
                     ),
-                    speed_mbps,
+                    speed_mbps: speed_bps / 1_048_576.0,
                     eta_secs,
                     detail: Some(DownloadProgressDetail {
                         step: format!("分块下载 ({} chunks)", num_chunks),
-                        step_progress: raw_progress,
+                        step_progress: progress_fraction,
                         candidate_index: 1,
                         candidate_count: 1,
                         current_candidate: None,
-                        speed_mbps,
+                        speed_mbps: speed_bps / 1_048_576.0,
                         eta_secs: eta_secs.map(|v| v as f64),
                     }),
                 });
@@ -1035,30 +1097,34 @@ fn curl_download_parallel(
                             }
                         };
                         if resp.status().as_u16() != 206 {
-                        // 服务器忽略 Range 头返回 200/其他状态码，会导致分块互相覆盖、文件损坏。
-                        // 记录错误并进入下一次重试，避免静默损坏。
-                        let status = resp.status();
-                        let cr = resp.headers().get("Content-Range").cloned();
-                        last_err = Some(anyhow::anyhow!(
-                            "期望 206 Partial Content，实际 {}，Content-Range: {:?}",
-                            status,
-                            cr
-                        ));
-                        continue;
-                    }
-                    // 验证 Content-Range 与请求一致，防止透明代理/边缘节点返回错误区间
-                    if let Some(cr) = resp.headers().get("Content-Range") {
-                        let cr_str = cr.to_str().unwrap_or("");
-                        // 格式: "bytes start-end/total"
-                        if !cr_str.starts_with("bytes ") || !cr_str.contains(&format!("{}-{}", offset, end)) {
+                            // 服务器忽略 Range 头返回 200/其他状态码，会导致分块互相覆盖、文件损坏。
+                            // 记录错误并进入下一次重试，避免静默损坏。
+                            let status = resp.status();
+                            let cr = resp.headers().get("Content-Range").cloned();
                             last_err = Some(anyhow::anyhow!(
-                                "Content-Range 不匹配：期望 bytes {}-{}，实际 {}",
-                                offset, end, cr_str
+                                "期望 206 Partial Content，实际 {}，Content-Range: {:?}",
+                                status,
+                                cr
                             ));
                             continue;
                         }
-                    }
-                    let expected_len = end - offset + 1;
+                        // 验证 Content-Range 与请求一致，防止透明代理/边缘节点返回错误区间
+                        if let Some(cr) = resp.headers().get("Content-Range") {
+                            let cr_str = cr.to_str().unwrap_or("");
+                            // 格式: "bytes start-end/total"
+                            if !cr_str.starts_with("bytes ")
+                                || !cr_str.contains(&format!("{}-{}", offset, end))
+                            {
+                                last_err = Some(anyhow::anyhow!(
+                                    "Content-Range 不匹配：期望 bytes {}-{}，实际 {}",
+                                    offset,
+                                    end,
+                                    cr_str
+                                ));
+                                continue;
+                            }
+                        }
+                        let expected_len = end - offset + 1;
 
                         // 与首轮一致：流式读取并直接写入文件偏移
                         let mut file = match fs::OpenOptions::new().write(true).open(&dest_path) {
@@ -1090,7 +1156,8 @@ fn curl_download_parallel(
                                 last_err = Some(anyhow::anyhow!("写入文件失败: {}", e));
                                 break;
                             }
-                            downloaded_clone.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+                            downloaded_clone
+                                .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
                             local_downloaded += n as u64;
                         }
 
@@ -1667,7 +1734,11 @@ fn smart_find_asset<'a>(
     // 而本机已装有 CUDA 运行时，无需重复下载。
     candidates.sort_by_key(|a| {
         let n = a.name.to_lowercase();
-        if n.starts_with("cudart-") { 1 } else { 0 }
+        if n.starts_with("cudart-") {
+            1
+        } else {
+            0
+        }
     });
 
     // 如果没有候选，尝试更宽松的匹配
@@ -1731,7 +1802,10 @@ fn smart_find_asset<'a>(
     // 并行执行所有 HEAD 请求，但使用通道确保第一个成功的即刻返回
     let asset_range = stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START;
     let (tx, rx) = std::sync::mpsc::channel();
-    let urls: Vec<String> = candidates.iter().map(|a| a.browser_download_url.clone()).collect();
+    let urls: Vec<String> = candidates
+        .iter()
+        .map(|a| a.browser_download_url.clone())
+        .collect();
 
     // 启动所有验证线程
     for (i, url) in urls.iter().enumerate() {
@@ -1744,10 +1818,25 @@ fn smart_find_asset<'a>(
     }
 
     // 立即检查通道，第一个成功的结果就返回
+    //
+    // 【进度倒退修复】旧实现用固定的 `candidate_index`（即 `i+1`）折算
+    // 全局进度。但并行线程的完成顺序是非确定的：第 5 个候选先返回会把
+    // 进度推到 7%，随后第 1 个候选失败又把进度拉回 4.7%，UI 上就是
+    // 「7% 退回 4%」。
+    //
+    // 改用单调完成计数器：每收到一个结果（无论成功/失败）计数器 +1，
+    // 进度只升不降。一旦有候选成功，立刻把进度推到区间终点并返回。
+    let mut completed: u32 = 0;
     while let Ok((i, result)) = rx.recv() {
+        completed += 1;
         let candidate = &candidates[i];
         let candidate_index = (i + 1) as u32;
         let candidate_name = &candidate.name;
+
+        // 单调完成比例：已完成数 / 总候选数，落在 [FINDING_ASSET_START, FINDING_ASSET_END)
+        let completed_ratio = f64::from(completed) / f64::from(total_candidates);
+        let current_progress = stage_progress::FINDING_ASSET_START
+            + completed_ratio * asset_range;
 
         match result {
             Ok(content_length) => {
@@ -1758,7 +1847,7 @@ fn smart_find_asset<'a>(
                     "✅ URL 可用，选择此资产"
                 );
 
-                // 通知前端：验证成功
+                // 通知前端：验证成功 → 直接推到区间终点
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",
@@ -1790,12 +1879,11 @@ fn smart_find_asset<'a>(
                     "❌ URL 不可用，尝试下一个"
                 );
 
-                // 通知前端：验证失败
+                // 通知前端：验证失败 → 推进到「已完成数」对应的单调位置
                 if let Some(cb) = progress_callback {
                     cb(progress_with(
                         "finding_asset",
-                        stage_progress::FINDING_ASSET_START
-                            + (f64::from(candidate_index) / f64::from(total_candidates)) * asset_range,
+                        current_progress,
                         0,
                         0,
                         format!(
@@ -1804,7 +1892,7 @@ fn smart_find_asset<'a>(
                         ),
                         DownloadProgressDetail {
                             step: format!("❌ {}/{} 失败", candidate_index, total_candidates),
-                            step_progress: f64::from(candidate_index) / f64::from(total_candidates),
+                            step_progress: completed_ratio,
                             candidate_index,
                             candidate_count: total_candidates,
                             current_candidate: Some(candidate_name.clone()),
@@ -1982,7 +2070,7 @@ fn try_fetch_with_client_direct(
     }
 
     // 2) 直连 nightly-tag.txt 获取 nightly tag（不使用 API）
-    if let Some(nightly_tag) = fetch_nightly_tag_direct() {
+    if let Some(nightly_tag) = fetch_nightly_tag_direct(progress_callback) {
         tracing::warn!(
             target: "LlamaDownloader",
             nightly_tag = %nightly_tag,
@@ -2032,6 +2120,23 @@ pub fn download_and_install(
 ) -> anyhow::Result<DownloadResult> {
     let start = std::time::Instant::now();
     let max_retries = 3;
+
+    // ── 单调进度守卫 ────────────────────────────────────────────────
+    //
+    // 工作流里有两条独立的「资产匹配」路径会向同一区间发进度：
+    //   1) 版本获取的回退分支 try_fetch_with_client_direct
+    //      → try_validate_asset_urls（占用 4%~8%）
+    //   2) 主流程 smart_find_asset（同样占用 4%~8%，且从 4% 起步）
+    // 两者串行执行时就会出现肉眼可见的「7% 退回 4%」。
+    // 并行 HEAD 探测内部还有第二类倒退：用固定 candidate_index 折算
+    // 进度，而线程完成顺序非确定。
+    //
+    // 这里在入口处统一套一层守卫，之后无论哪个路径、哪个线程上报，
+    // UI 看到的都是一条单调不回退的曲线。
+    let tracker = ProgressTracker::new();
+    let guarded = guard_progress(&tracker, progress_callback);
+    let progress_callback: Option<&dyn Fn(DownloadProgress)> = Some(&guarded);
+    // ───────────────────────────────────────────────────────────────
 
     tracing::info!(target: "LlamaDownloader",
         backend = %backend.as_str(),
@@ -2436,14 +2541,32 @@ fn compute_sha256_fast(
 }
 
 /// 从 GitHub release 页面直接下载 nightly-tag.txt（不使用 API）
-fn fetch_nightly_tag_direct() -> Option<String> {
+fn fetch_nightly_tag_direct(progress_callback: Option<&dyn Fn(DownloadProgress)>) -> Option<String> {
     // 注意：这里必须是 **llama.cpp 的 stable release tag**（vX.Y.Z），
     // 不能使用应用自身的版本号。stable release 下挂着 nightly-tag.txt，
     // 指向真正含二进制的 build tag。
     let stable_tags = [
         "v0.5.0", "v0.4.5", "v0.4.4", "v0.4.3", "v0.4.2", "v0.4.1", "v0.4.0",
     ];
-    for stable_tag in &stable_tags {
+    let total = stable_tags.len();
+    
+    for (index, stable_tag) in stable_tags.iter().enumerate() {
+        // 报告进度：在 fetching_version 阶段 (1%~3%) 内平均分配
+        if let Some(cb) = progress_callback {
+            let progress_ratio = index as f64 / total as f64;
+            let progress = stage_progress::FETCHING_VERSION_START + progress_ratio * (stage_progress::PREPARING_ASSET_START - stage_progress::FETCHING_VERSION_START);
+            cb(DownloadProgress {
+                stage: "fetching_version".to_string(),
+                progress,
+                downloaded: 0,
+                total: 0,
+                message: format!("尝试获取 nightly tag ({}/{})...", index + 1, total),
+                speed_mbps: 0.0,
+                eta_secs: None,
+                detail: None,
+            });
+        }
+        
         let url = format!(
             "https://github.com/ggml-org/llama.cpp/releases/download/{}/nightly-tag.txt",
             stable_tag
@@ -2456,17 +2579,55 @@ fn fetch_nightly_tag_direct() -> Option<String> {
                     let tag = content.trim().to_string();
                     if !tag.is_empty() && tag.starts_with('b') {
                         tracing::info!(target: "LlamaDownloader", nightly_tag = %tag, "直接获取到 nightly tag");
+                        // 报告完成进度
+                        if let Some(cb) = progress_callback {
+                            cb(DownloadProgress {
+                                stage: "fetching_version".to_string(),
+                                progress: stage_progress::PREPARING_ASSET_START,
+                                downloaded: 0,
+                                total: 0,
+                                message: format!("成功获取 nightly tag: {}", tag),
+                                speed_mbps: 0.0,
+                                eta_secs: None,
+                                detail: None,
+                            });
+                        }
                         return Some(tag);
                     }
                 }
             }
         }
     }
+    
+    // 所有尝试失败
+    if let Some(cb) = progress_callback {
+        cb(DownloadProgress {
+            stage: "fetching_version".to_string(),
+            progress: stage_progress::PREPARING_ASSET_START,
+            downloaded: 0,
+            total: 0,
+            message: "所有夜间标签获取尝试失败".to_string(),
+            speed_mbps: 0.0,
+            eta_secs: None,
+            detail: None,
+        });
+    }
     None
 }
 
-/// 通过 HEAD 请求验证候选 URL 是否可用
-fn try_validate_asset_urls(
+/// 通过 HEAD 请求验证候选 URL 是否可用。
+///
+/// 【进度区间修正】本函数属于**版本解析**的回退策略（GitHub API 不可用时，
+/// 靠猜名字 + 并行 HEAD 探测定位资产），却在旧实现里上报
+/// `stage: "finding_asset"` 并占用 `FINDING_ASSET` 区间（4%~8%）。
+/// 主流程随后会执行 `smart_find_asset`，它同样从 4% 起步 —— 于是 UI 上
+/// 出现「已到 7% 又退回 4%」。
+///
+/// 现在统一改为：
+/// - `stage: "fetching_version"`，占用 `RESOLVING_VERSION` 子区间
+///   （1.0% ~ 3.0%），与它实际所处的阶段语义一致；
+/// - 并行探测改用单调完成计数器（而非 `failed` 计数）折算进度。
+pub fn try_validate_asset_urls(
     tag: &str,
     os: &str,
     arch: &str,
@@ -2485,10 +2646,12 @@ fn try_validate_asset_urls(
     );
 
     let total = candidates.len();
+    let version_range =
+        stage_progress::PREPARING_ASSET_START - stage_progress::FETCHING_VERSION_START;
     if let Some(cb) = progress_callback {
         cb(DownloadProgress {
-            stage: "finding_asset".to_string(),
-            progress: stage_progress::FINDING_ASSET_START,
+            stage: "fetching_version".to_string(),
+            progress: stage_progress::FETCHING_VERSION_START,
             downloaded: 0,
             total: 0,
             message: format!("并行验证 {} 个候选安装包...", total),
@@ -2505,6 +2668,7 @@ fn try_validate_asset_urls(
             }),
         });
     }
+
 
     // 并行验证所有候选：一旦有任意一个可用即刻返回
     let (tx, rx) = std::sync::mpsc::channel::<(usize, String, anyhow::Result<u64>)>();
@@ -2550,8 +2714,20 @@ fn try_validate_asset_urls(
     }
     drop(tx);
 
+    // 【进度倒退修复】旧实现用 `failed / total` 折算进度。`failed` 只统计失败数，
+    // 因此一旦有成功结果就立即 return，而失败的候选按乱序到达会让 `failed`
+    // 在时间上非单调（例如第 5 个候选先失败 → failed=1 → 进度 4.8%；
+    //  第 1 个候选后失败 → failed=2 → 进度 5.6%，看似单调，但一旦中途
+    //  有成功就直接跳到区间终点，与主流程 smart_find_asset 的 4% 起点冲突）。
+    // 改用「已完成数」计数器：每收到一个结果 +1，进度严格单调上升。
+    let mut completed: u32 = 0;
     let mut failed = 0u32;
     while let Ok((i, asset_name, res)) = rx.recv() {
+        completed += 1;
+        let completed_ratio = completed as f64 / total as f64;
+        let current_progress =
+            stage_progress::FETCHING_VERSION_START + completed_ratio * version_range;
+
         match res {
             Ok(content_length) => {
                 tracing::info!(
@@ -2563,8 +2739,8 @@ fn try_validate_asset_urls(
                 );
                 if let Some(cb) = progress_callback {
                     cb(DownloadProgress {
-                        stage: "finding_asset".to_string(),
-                        progress: stage_progress::FINDING_ASSET_END,
+                        stage: "fetching_version".to_string(),
+                        progress: stage_progress::PREPARING_ASSET_START,
                         downloaded: 0,
                         total: 0,
                         message: format!("✅ 选中：{}", asset_name),
@@ -2592,20 +2768,17 @@ fn try_validate_asset_urls(
                     "候选 URL 不可用"
                 );
                 if let Some(cb) = progress_callback {
-                    let p = stage_progress::FINDING_ASSET_START
-                        + (failed as f64 / total as f64)
-                            * (stage_progress::FINDING_ASSET_END - stage_progress::FINDING_ASSET_START);
                     cb(DownloadProgress {
-                        stage: "finding_asset".to_string(),
-                        progress: p,
+                        stage: "fetching_version".to_string(),
+                        progress: current_progress,
                         downloaded: 0,
                         total: 0,
-                        message: format!("❌ {}/{} 不可用", failed, total),
+                        message: format!("❌ {}/{} 不可用", completed, total),
                         speed_mbps: 0.0,
                         eta_secs: None,
                         detail: Some(DownloadProgressDetail {
                             step: format!("❌ {} 不可用", asset_name),
-                            step_progress: failed as f64 / total as f64,
+                            step_progress: completed_ratio,
                             candidate_index: (i + 1) as u32,
                             candidate_count: total as u32,
                             current_candidate: Some(asset_name.clone()),
@@ -2709,8 +2882,7 @@ mod tests {
     #[ignore = "需要访问 GitHub 网络"]
     fn test_api_release_lookup_is_fast_and_selects_real_asset() {
         let start = std::time::Instant::now();
-        let release =
-            fetch_latest_release_via_api().expect("应能通过 GitHub API 获取到最新构建");
+        let release = fetch_latest_release_via_api().expect("应能通过 GitHub API 获取到最新构建");
         let elapsed = start.elapsed();
 
         assert!(!release.tag_name.is_empty(), "tag 不应为空");
