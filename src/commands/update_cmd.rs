@@ -1,4 +1,4 @@
-﻿//! 自动更新检查命令。
+//! 自动更新检查命令。
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -11,8 +11,8 @@ use crate::events::{
     UpdateDownloadProgress, UpdateState, EVT_UPDATE_DOWNLOAD_PROGRESS, EVT_UPDATE_STATE,
 };
 use crate::update::{
-    check_for_updates, cleanup_old_installation, create_update_download_cancel,
-    install_update, remove_update_download_cancel, UpdateCheckResult, UPDATE_DOWNLOAD_CANCELS,
+    check_for_updates, cleanup_old_installation, create_update_download_cancel, install_update,
+    remove_update_download_cancel, UpdateCheckResult, UPDATE_DOWNLOAD_CANCELS,
 };
 
 /// 发送更新状态事件（辅助函数）
@@ -25,41 +25,50 @@ fn emit_update_state(app: &AppHandle, state: UpdateState) {
 pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
     let start_time = Instant::now();
     let current_version = env!("CARGO_PKG_VERSION").to_string();
-    
+
     // 发送检查开始状态
-    emit_update_state(&app, UpdateState::Checking {
-        current_version: current_version.clone(),
-        message: "正在检查更新...".to_string(),
-    });
+    emit_update_state(
+        &app,
+        UpdateState::Checking {
+            current_version: current_version.clone(),
+            message: "正在检查更新...".to_string(),
+        },
+    );
 
     let check_result = check_for_updates()
         .await
         .map_err(|e| format!("检查更新失败：{}", e))?;
-    
+
     if !check_result.update_available {
-        emit_update_state(&app, UpdateState::UpToDate {
-            current_version: current_version.clone(),
-            message: format!("当前版本已是最新 {}", current_version),
-        });
+        emit_update_state(
+            &app,
+            UpdateState::UpToDate {
+                current_version: current_version.clone(),
+                message: format!("当前版本已是最新 {}", current_version),
+            },
+        );
         return Ok(());
     }
 
     // 发送有新版本状态
-    emit_update_state(&app, UpdateState::Available {
-        latest_version: check_result.latest_version.clone(),
-        current_version: current_version.clone(),
-        release_notes: check_result.release_notes.clone(),
-        download_url: check_result.download_url.clone(),
-        file_size: check_result.file_size,
-        sha256: check_result.sha256.clone(),
-        message: format!(
-            "发现新版本 {} (当前 {})，大小 {:.1}MB，发布说明: {}",
-            check_result.latest_version,
-            current_version,
-            check_result.file_size as f64 / 1_048_576.0,
-            check_result.release_notes
-        ),
-    });
+    emit_update_state(
+        &app,
+        UpdateState::Available {
+            latest_version: check_result.latest_version.clone(),
+            current_version: current_version.clone(),
+            release_notes: check_result.release_notes.clone(),
+            download_url: check_result.download_url.clone(),
+            file_size: check_result.file_size,
+            sha256: check_result.sha256.clone(),
+            message: format!(
+                "发现新版本 {} (当前 {})，大小 {:.1}MB，发布说明: {}",
+                check_result.latest_version,
+                current_version,
+                check_result.file_size as f64 / 1_048_576.0,
+                check_result.release_notes
+            ),
+        },
+    );
 
     // 重置取消标志（兼容旧代码）
     crate::update::UPDATE_DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
@@ -70,18 +79,24 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
 
     // 确定下载目录（缓存目录）
     let download_dir = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
-    let dest_path = download_dir.join(format!("LlamaUI-{}-update.zip", check_result.latest_version));
+    let dest_path = download_dir.join(format!(
+        "LlamaUI-{}-update.zip",
+        check_result.latest_version
+    ));
 
     // 发送下载开始状态
-    emit_update_state(&app, UpdateState::DownloadStarted {
-        total_bytes: check_result.file_size,
-        version: check_result.latest_version.clone(),
-        message: format!(
-            "开始下载版本 {}，大小 {:.1}MB",
-            check_result.latest_version,
-            check_result.file_size as f64 / 1_048_576.0
-        ),
-    });
+    emit_update_state(
+        &app,
+        UpdateState::DownloadStarted {
+            total_bytes: check_result.file_size,
+            version: check_result.latest_version.clone(),
+            message: format!(
+                "开始下载版本 {}，大小 {:.1}MB",
+                check_result.latest_version,
+                check_result.file_size as f64 / 1_048_576.0
+            ),
+        },
+    );
 
     // 在后台任务中下载（带重试机制）
     let download_result = download_with_retry(
@@ -92,7 +107,8 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
         cancel_rx,
         &check_result.latest_version,
         3, // 最大重试次数
-    ).await;
+    )
+    .await;
 
     // 等待下载完成
     match download_result {
@@ -102,12 +118,15 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
             let file_size = download_result.file_size;
 
             // 发送下载完成状态
-            emit_update_state(&app, UpdateState::DownloadCompleted {
-                download_path: download_path.clone(),
-                file_size,
-                version: check_result.latest_version.clone(),
-                message: format!("下载完成，准备安装版本 {}", check_result.latest_version),
-            });
+            emit_update_state(
+                &app,
+                UpdateState::DownloadCompleted {
+                    download_path: download_path.clone(),
+                    file_size,
+                    version: check_result.latest_version.clone(),
+                    message: format!("下载完成，准备安装版本 {}", check_result.latest_version),
+                },
+            );
 
             // 验证下载文件
             let verification_result = verify_download_file(
@@ -117,14 +136,17 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
                 &app,
                 &check_result.latest_version,
             );
-            
+
             if let Err(e) = verification_result {
-                emit_update_state(&app, UpdateState::Failed {
-                    error: format!("文件验证失败: {}", e),
-                    version: check_result.latest_version.clone(),
-                    stage: "verification".to_string(),
-                    message: format!("文件验证失败: {}", e),
-                });
+                emit_update_state(
+                    &app,
+                    UpdateState::Failed {
+                        error: format!("文件验证失败: {}", e),
+                        version: check_result.latest_version.clone(),
+                        stage: "verification".to_string(),
+                        message: format!("文件验证失败: {}", e),
+                    },
+                );
                 return Err(format!("文件验证失败: {}", e));
             }
 
@@ -139,24 +161,30 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
             {
                 Ok(_) => {
                     let elapsed_ms = start_time.elapsed().as_millis() as u64;
-                    emit_update_state(&app, UpdateState::Completed {
-                        new_version: check_result.latest_version.clone(),
-                        elapsed_ms,
-                        message: format!(
-                            "更新成功！已安装 {}，耗时 {:.1}秒，请重启应用程序以完成更新",
-                            check_result.latest_version,
-                            elapsed_ms as f64 / 1000.0
-                        ),
-                    });
+                    emit_update_state(
+                        &app,
+                        UpdateState::Completed {
+                            new_version: check_result.latest_version.clone(),
+                            elapsed_ms,
+                            message: format!(
+                                "更新成功！已安装 {}，耗时 {:.1}秒，请重启应用程序以完成更新",
+                                check_result.latest_version,
+                                elapsed_ms as f64 / 1000.0
+                            ),
+                        },
+                    );
                     tracing::info!(target: "UpdateCmd", "更新安装成功");
                 }
                 Err(e) => {
-                    emit_update_state(&app, UpdateState::Failed {
-                        error: e.to_string(),
-                        version: check_result.latest_version.clone(),
-                        stage: "installation".to_string(),
-                        message: format!("安装失败: {}", e),
-                    });
+                    emit_update_state(
+                        &app,
+                        UpdateState::Failed {
+                            error: e.to_string(),
+                            version: check_result.latest_version.clone(),
+                            stage: "installation".to_string(),
+                            message: format!("安装失败: {}", e),
+                        },
+                    );
                     return Err(e.to_string());
                 }
             }
@@ -164,12 +192,15 @@ pub async fn download_update_cmd(app: AppHandle) -> Result<(), String> {
         Err(e) => {
             remove_update_download_cancel(&download_id_for_task);
             // 发送失败状态
-            emit_update_state(&app, UpdateState::Failed {
-                error: e.clone(),
-                version: check_result.latest_version.clone(),
-                stage: "download".to_string(),
-                message: format!("下载失败: {}", e),
-            });
+            emit_update_state(
+                &app,
+                UpdateState::Failed {
+                    error: e.clone(),
+                    version: check_result.latest_version.clone(),
+                    stage: "download".to_string(),
+                    message: format!("下载失败: {}", e),
+                },
+            );
             return Err(e);
         }
     }
@@ -188,42 +219,54 @@ async fn download_with_retry(
     max_retries: u32,
 ) -> Result<crate::update::download::UpdateDownloadResult, String> {
     let mut attempt = 0;
-    
+
     loop {
         attempt += 1;
-        
+
         // 取消检查
         if *cancel_rx.borrow() {
             return Err("下载已取消".to_string());
         }
-        
+
         tracing::info!(target: "UpdateDownload", attempt = attempt, version = %version, "开始更新下载尝试");
-        
+
         // 发送下载开始/重试状态
         if attempt == 1 {
-            emit_update_state(app, UpdateState::DownloadStarted {
-                total_bytes: total_size,
-                version: version.to_string(),
-                message: format!("开始下载版本 {}，大小 {:.1}MB", version, total_size as f64 / 1_048_576.0),
-            });
+            emit_update_state(
+                app,
+                UpdateState::DownloadStarted {
+                    total_bytes: total_size,
+                    version: version.to_string(),
+                    message: format!(
+                        "开始下载版本 {}，大小 {:.1}MB",
+                        version,
+                        total_size as f64 / 1_048_576.0
+                    ),
+                },
+            );
         } else {
-            emit_update_state(app, UpdateState::DownloadProgress {
-                progress: 0.0,
-                downloaded: 0,
-                total: total_size,
-                speed_mbps: 0.0,
-                eta_secs: None,
-                message: format!("重试第 {} 次下载...", attempt),
-            });
+            emit_update_state(
+                app,
+                UpdateState::DownloadProgress {
+                    progress: 0.0,
+                    downloaded: 0,
+                    total: total_size,
+                    speed_mbps: 0.0,
+                    eta_secs: None,
+                    message: format!("重试第 {} 次下载...", attempt),
+                },
+            );
         }
-        
+
         match crate::update::download::download_update(
             app,
             url,
             dest,
             total_size,
             cancel_rx.clone(),
-        ).await {
+        )
+        .await
+        {
             Ok(result) => return Ok(result),
             Err(e) => {
                 tracing::warn!(
@@ -233,16 +276,14 @@ async fn download_with_retry(
                     version = %version,
                     "更新下载失败"
                 );
-                
+
                 if attempt >= max_retries {
                     return Err(format!(
-                        "更新下载失败，已重试{}次，版本 {}: {}", 
-                        max_retries, 
-                        version, 
-                        e
+                        "更新下载失败，已重试{}次，版本 {}: {}",
+                        max_retries, version, e
                     ));
                 }
-                
+
                 // 指数退避：3s, 6s, 12s
                 let delay = 3u64.pow(attempt);
                 tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
@@ -260,34 +301,33 @@ fn verify_download_file(
     version: &str,
 ) -> Result<(), String> {
     let path = std::path::Path::new(file_path);
-    
+
     // 1. 检查文件是否存在
     if !path.exists() {
         return Err(format!("更新包文件不存在: {}", file_path));
     }
-    
+
     // 2. 检查文件大小
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| format!("无法读取更新包元数据: {}", e))?;
-    
+    let metadata = std::fs::metadata(path).map_err(|e| format!("无法读取更新包元数据: {}", e))?;
+
     if expected_size > 0 && metadata.len() != expected_size {
         return Err(format!(
-            "更新包大小不匹配: 期望 {} 字节，实际 {} 字节，版本: {}", 
+            "更新包大小不匹配: 期望 {} 字节，实际 {} 字节，版本: {}",
             expected_size,
             metadata.len(),
             version
         ));
     }
-    
+
     // 3. 计算SHA256
     let sha256 = crate::update::download::compute_sha256(path);
-    
+
     // 4. 验证SHA256
     match expected_sha256 {
         Some(expected) => {
             if sha256 != Some(expected.clone()) {
                 return Err(format!(
-                    "更新包SHA256校验失败: 期望 {}, 实际 {}, 版本: {}", 
+                    "更新包SHA256校验失败: 期望 {}, 实际 {}, 版本: {}",
                     expected,
                     sha256.unwrap_or_else(|| "计算失败".to_string()),
                     version
@@ -308,7 +348,7 @@ fn verify_download_file(
             ));
         }
     }
-    
+
     // 5. 发送验证进度
     let progress = UpdateDownloadProgress {
         stage: "verifying".to_string(),
@@ -321,9 +361,9 @@ fn verify_download_file(
         version: Some(version.to_string()),
         step: Some("verification_complete".to_string()),
     };
-    
+
     let _ = app.emit(EVT_UPDATE_DOWNLOAD_PROGRESS, progress);
-    
+
     Ok(())
 }
 
@@ -354,9 +394,12 @@ pub async fn cancel_update_download(
             }
         }
     }
-    emit_update_state(&app, UpdateState::Cancelled {
-        message: "更新已取消".to_string(),
-    });
+    emit_update_state(
+        &app,
+        UpdateState::Cancelled {
+            message: "更新已取消".to_string(),
+        },
+    );
     let _ = app.emit(
         EVT_UPDATE_DOWNLOAD_PROGRESS,
         UpdateDownloadProgress {
