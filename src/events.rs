@@ -66,10 +66,12 @@ pub struct DownloadLogEntry {
     pub auto_scroll: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// 下载状态变更事件（llama-server 下载流程）
-/// 
+///
 /// **设计要点**：
 /// - 所有状态变更通过此事件通知前端，前端根据此状态机驱动 UI
 /// - `Running` 状态下每次进度更新都会附带一个 `progress` 事件（见 `EVT_DOWNLOAD_PROGRESS`）
@@ -77,7 +79,7 @@ fn default_true() -> bool { true }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DownloadState {
     /// 开始下载
-    Started { 
+    Started {
         backend: String,
         log_message: Option<String>,
     },
@@ -96,7 +98,7 @@ pub enum DownloadState {
         log_message: Option<String>,
     },
     /// 下载失败
-    Failed { 
+    Failed {
         error: String,
         log_entry: Option<DownloadLogEntry>,
     },
@@ -105,12 +107,17 @@ pub enum DownloadState {
 impl DownloadState {
     /// 是否为终态（不会再接收任何状态事件）
     pub fn is_terminal(&self) -> bool {
-        matches!(self, DownloadState::Cancelled | DownloadState::Completed { .. } | DownloadState::Failed { .. })
+        matches!(
+            self,
+            DownloadState::Cancelled
+                | DownloadState::Completed { .. }
+                | DownloadState::Failed { .. }
+        )
     }
 }
 
 /// 下载进度事件（实时推送给前端）
-/// 
+///
 /// 此事件与 `DownloadState::Running` 配合使用，在每次进度更新时发射。
 /// 前端应在收到 `DownloadState::Running` 后开始监听此事件。
 pub const EVT_DOWNLOAD_PROGRESS: &str = "download-progress";
@@ -131,7 +138,10 @@ pub enum UpdateState {
     /// 空闲（未进行任何更新操作）。
     Idle,
     /// 正在检查更新。
-    Checking { current_version: String, message: String },
+    Checking {
+        current_version: String,
+        message: String,
+    },
     /// 检查完成，有新版本。
     Available {
         latest_version: String,
@@ -143,12 +153,18 @@ pub enum UpdateState {
         message: String,
     },
     /// 检查完成，已是最新。
-    UpToDate { current_version: String, message: String },
+    UpToDate {
+        current_version: String,
+        message: String,
+    },
     /// 检查失败。
-    CheckFailed { error: String, current_version: String },
+    CheckFailed {
+        error: String,
+        current_version: String,
+    },
     /// 开始下载更新。
-    DownloadStarted { 
-        total_bytes: u64, 
+    DownloadStarted {
+        total_bytes: u64,
         version: String,
         message: String,
     },
@@ -169,16 +185,20 @@ pub enum UpdateState {
         message: String,
     },
     /// 安装中。
-    Installing { progress: f64, message: String, version: String },
+    Installing {
+        progress: f64,
+        message: String,
+        version: String,
+    },
     /// 安装完成（需要重启）。
-    Completed { 
+    Completed {
         new_version: String,
         elapsed_ms: u64,
         message: String,
     },
     /// 下载/安装失败。
-    Failed { 
-        error: String, 
+    Failed {
+        error: String,
         version: String,
         stage: String,
         message: String,
