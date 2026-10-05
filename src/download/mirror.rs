@@ -21,9 +21,8 @@ static RELEASE_RE: OnceLock<regex::Regex> = OnceLock::new();
 
 fn get_release_regex() -> &'static regex::Regex {
     RELEASE_RE.get_or_init(|| {
-        regex::Regex::new(
-            r"^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/(.+)$"
-        ).unwrap()
+        regex::Regex::new(r"^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/(.+)$")
+            .unwrap()
     })
 }
 
@@ -100,10 +99,7 @@ impl MirrorConfig {
             // 使用 jsdelivr 作为主镜像（全局可用性好）
             // https://github.com/owner/repo/releases/download/tag/asset
             //   → https://cdn.jsdelivr.net/gh/owner/repo@tag/asset
-            return format!(
-                "https://cdn.jsdelivr.net/gh/{}@{}/{}",
-                repo, tag, asset
-            );
+            return format!("https://cdn.jsdelivr.net/gh/{}@{}/{}", repo, tag, asset);
         }
 
         // 如果不匹配，直接返回原 URL
@@ -188,10 +184,15 @@ mod tests {
             custom_prefix: None,
             mirrors: vec!["https://github.com".to_string()],
         };
-        let github_url = "https://github.com/ggml-org/llama.cpp/releases/download/v0.4.2/llama-linux-x64.zip";
+        let github_url =
+            "https://github.com/ggml-org/llama.cpp/releases/download/v0.4.2/llama-linux-x64.zip";
         let mirrored = config.build_url_from_github(github_url);
         // enabled=true 时应转换为 jsDelivr URL
-        assert!(mirrored.starts_with("https://cdn.jsdelivr.net/gh/ggml-org/llama.cpp@v0.4.2/"), "{}", mirrored)
+        assert!(
+            mirrored.starts_with("https://cdn.jsdelivr.net/gh/ggml-org/llama.cpp@v0.4.2/"),
+            "{}",
+            mirrored
+        )
     }
 
     #[test]
