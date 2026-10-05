@@ -35,12 +35,16 @@ pub fn save_token_securely(token: &str) -> Result<(), StorageError> {
 
 pub fn load_token_securely() -> Result<Option<String>, StorageError> {
     let path = get_token_file_path()?;
-    if !path.exists() { return Ok(None); }
+    if !path.exists() {
+        return Ok(None);
+    }
 
     let mut file = fs::File::open(&path)?;
     let mut header = [0u8; 6];
     file.read_exact(&mut header)?;
-    if &header != b"LUAITE" { return Err(StorageError::Crypto("Invalid format".into())); }
+    if &header != b"LUAITE" {
+        return Err(StorageError::Crypto("Invalid format".into()));
+    }
 
     let mut len_bytes = [0u8; 4];
     file.read_exact(&mut len_bytes)?;
@@ -54,16 +58,25 @@ pub fn load_token_securely() -> Result<Option<String>, StorageError> {
 
 pub fn delete_token_securely() -> Result<(), StorageError> {
     let path = get_token_file_path()?;
-    if path.exists() { fs::remove_file(&path)?; }
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
     Ok(())
 }
 
-fn encrypt_data(data: &[u8]) -> Vec<u8> { xor_encrypt(data, b"LlamaUI-Secret-Key-2026") }
+fn encrypt_data(data: &[u8]) -> Vec<u8> {
+    xor_encrypt(data, b"LlamaUI-Secret-Key-2026")
+}
 
-fn decrypt_data(encrypted: &[u8]) -> Vec<u8> { xor_decrypt(encrypted, b"LlamaUI-Secret-Key-2026") }
+fn decrypt_data(encrypted: &[u8]) -> Vec<u8> {
+    xor_decrypt(encrypted, b"LlamaUI-Secret-Key-2026")
+}
 
 fn xor_encrypt(data: &[u8], key: &[u8]) -> Vec<u8> {
-    data.iter().enumerate().map(|(i, &byte)| byte ^ key[i % key.len()]).collect()
+    data.iter()
+        .enumerate()
+        .map(|(i, &byte)| byte ^ key[i % key.len()])
+        .collect()
 }
 
 fn xor_decrypt(encrypted: &[u8], key: &[u8]) -> Vec<u8> {
