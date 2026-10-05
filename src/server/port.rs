@@ -3,7 +3,10 @@
 
 use std::net::TcpListener;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use tauri::AppHandle;
+use tokio::sync::Semaphore;
 
 use futures::stream::{self, StreamExt};
 
@@ -19,6 +22,9 @@ use crate::util::process::silent_tokio_command;
 /// `futures::stream::buffer_unordered(PARALLEL_PROBE)` 把前 10 个端口并行探测，
 /// 找到第一个空闲立即返回，使常见「端口空闲」场景的探测时间从分钟级降到 < 1s。
 const PARALLEL_PROBE: u16 = 10;
+
+/// 并行端口探测的并发限制（防止系统资源耗尽）
+const MAX_CONCURRENT_PORT_PROBES: usize = 20;
 
 /// 异步检查 `127.0.0.1:port` 是否可绑定。
 /// 用 `tokio::task::spawn_blocking` 包裹 `std::net::TcpListener::bind`，避免阻塞
@@ -109,6 +115,9 @@ pub async fn select_smart_port(
     max_probes: u16,
     cancel: &CancelFlag,
 ) -> Result<PortChoice, String> {
+    // 运行时信号量，用于限制并发端口探测（防止端口扫描资源耗尽）
+    static RUNTIME_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+    let _semaphore = RUNTIME_SEMAPHORE.get_or_init(|| Semaphore::new(MAX_CONCURRENT_PORT_PROBES));
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -163,17 +172,20 @@ pub async fn select_smart_port(
     }
 
     // 2) 并行探测前 PARALLEL_PROBE 个端口（DEFECT-004 性能修复）
+    // 使用信号量限制并发，防止系统资源耗尽
     let par = PARALLEL_PROBE.min(max_probes);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PORT_PROBES));
     let candidates: Vec<u16> = (0..par)
         .map(|i| desired.saturating_add(i))
         .filter(|&p| p != 0)
         .collect();
-    let probes = stream::iter(
-        candidates
-            .iter()
-            .copied()
-            .map(|port| async move { (port, is_port_available(port).await) }),
-    )
+    let probes = stream::iter(candidates.iter().copied().map(|port| {
+        let sem = semaphore.clone();
+        async move {
+            let _permit = sem.acquire().await.unwrap();
+            (port, is_port_available(port).await)
+        }
+    }))
     .buffer_unordered(par as usize)
     .collect::<Vec<_>>()
     .await;
@@ -219,16 +231,20 @@ async fn probe_ports_parallel(desired: u16, max: u16, cancel: &CancelFlag) -> Op
         return None;
     }
     let par = PARALLEL_PROBE.min(max);
+    // 使用信号量限制并发数，防止系统资源耗尽
+    let semaphore = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_PORT_PROBES));
     let candidates: Vec<u16> = (0..par)
         .map(|i| desired.saturating_add(i))
         .filter(|&p| p != 0)
         .collect();
-    let probes = stream::iter(
-        candidates
-            .iter()
-            .copied()
-            .map(|port| async move { (port, is_port_available(port).await) }),
-    )
+    let probes = stream::iter(candidates.iter().copied().map(|port| {
+        let sem = semaphore.clone();
+        async move {
+            // 获取信号量许可，限制并发
+            let _permit = sem.acquire().await.unwrap();
+            (port, is_port_available(port).await)
+        }
+    }))
     .buffer_unordered(par as usize)
     .collect::<Vec<_>>()
     .await;
