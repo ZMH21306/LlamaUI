@@ -1,4 +1,3 @@
-// MODIFIED
 // ============================================================
 // LlamaUI 前端主脚本
 // 结构：常量 → 状态 → DOM 缓存 → 工具 → 业务模块 → 事件 → 启动
@@ -83,14 +82,10 @@ const els = {
   // 顶栏
   statusPill: $('statusPill'),
   statusText: document.querySelector('.status-text'),
-
-
-
-
   startBtn: $('startBtn'),
   stopBtn: $('stopBtn'),
   restartBtn: $('restartBtn'),
-
+  checkUpdateBtn: $('checkUpdateBtn'),
 
   // 通用确认弹窗
   modal: $('modal'),
@@ -418,29 +413,21 @@ function readConfigFromUI() {
   // 专业模式命令：含 NUL 字符时清空
   const customCmd = els.customCommand?.value || '';
   const safeCustomCmd = customCmd.includes('\0') ? '' : customCmd;
-   return {
-     llama_server_path: llamaPath,
-     models_dir: modelsDir,
-     // 普通模式不使用以下参数，保留以兼容旧配置；启动时由后端按 mode 决定是否使用
-     ctx_size: 4096,
-     n_gpu_layers: -1,
-     flash_attn: false,
-     mtp: false,
-     mtp_draft_n_max: 3,
-     port,
-     auto_port: els.autoPort.checked,
-     extra_args: extraArgs,
-     mode: state.mode,
-     custom_command: safeCustomCmd,
-     // UI state fields
-     lightTheme: state.lightTheme,
-     paneLeftW: parseInt(getComputedStyle(document.documentElement).getPropertyValue('--pane-left-w')) || 420,
-     paneRightW: parseInt(getComputedStyle(document.documentElement).getPropertyValue('--pane-right-w')) || 280,
-     windowWidth: window.innerWidth || 1400,
-     windowHeight: window.innerHeight || 900,
-     hfTokenEncrypted: state.hfTokenEncrypted || null,
-     lastRemoteUrl: state.lastRemoteUrl || null,
-   };
+  return {
+    llama_server_path: llamaPath,
+    models_dir: modelsDir,
+    // 普通模式不使用以下参数，保留以兼容旧配置；启动时由后端按 mode 决定是否使用
+    ctx_size: 4096,
+    n_gpu_layers: -1,
+    flash_attn: false,
+    mtp: false,
+    mtp_draft_n_max: 3,
+    port,
+    auto_port: els.autoPort.checked,
+    extra_args: extraArgs,
+    mode: state.mode,
+    custom_command: safeCustomCmd,
+  };
 }
 
 function writeConfigToUI(cfg) {
@@ -462,41 +449,8 @@ function writeConfigToUI(cfg) {
   updatePlaceholderUrl();
   refreshAllPreviews();
   // 加载后做一次 pro 模式命令实时校验
-   if (state.mode === 'pro') validateProCommandLive();
-   // Apply UI state from config
-    if (cfg.lightTheme !== undefined) {
-      state.lightTheme = cfg.lightTheme;
-      document.body.classList.toggle('light-theme', state.lightTheme);
-      syncIframeTheme();
-    }
-
-   if (cfg.paneLeftW !== undefined) {
-     document.documentElement.style.setProperty('--pane-left-w', cfg.paneLeftW + 'px');
-   }
-
-   if (cfg.paneRightW !== undefined) {
-     document.documentElement.style.setProperty('--pane-right-w', cfg.paneRightW + 'px');
-   }
-
-   // Note: windowWidth and windowHeight are read-only from browser
-   // We store them in state but don't apply them to avoid resizing user's window
-   if (cfg.windowWidth !== undefined) {
-     state.windowWidth = cfg.windowWidth;
-   }
-
-   if (cfg.windowHeight !== undefined) {
-     state.windowHeight = cfg.windowHeight;
-   }
-
-   if (cfg.hfTokenEncrypted !== undefined) {
-     // TODO: Apply HF token when UI is added
-     state.hfTokenEncrypted = cfg.hfTokenEncrypted;
-   }
-
-   if (cfg.lastRemoteUrl !== undefined) {
-     state.lastRemoteUrl = cfg.lastRemoteUrl;
-   }
- }
+  if (state.mode === 'pro') validateProCommandLive();
+}
 
 const scheduleSave = debounce(async () => {
   if (state.saving) return;
@@ -582,8 +536,8 @@ function toggleTheme() {
   // 同步 iframe 主题（立即响应）
   syncIframeTheme();
 
-  // 通过 body 类切换主题（CSS 通过 body.light-theme 控制主题样式）
-  document.body.classList.toggle('light-theme', isLight);
+  // 使用主题引擎执行颜色动画过渡
+  themeManager.setLightTheme(isLight);
 
   showNotification(isLight ? '已切换到亮色主题' : '已切换到暗色主题', 'info', 1500);
 
@@ -1797,6 +1751,38 @@ function attachUIListeners() {
       }
     }
   });
+  els.checkUpdateBtn?.addEventListener('click', async () => {
+    showNotification('正在检查更新...', 'info', 2000);
+    try {
+      const result = await invoke('check_updates');
+      if (result && result.update_available) {
+        showNotification(
+          `发现新版本 ${result.latest_version}（当前 ${result.current_version}），前往 GitHub 下载？`,
+          'info',
+          8000
+        );
+        setTimeout(() => {
+          const toasts = els.toastContainer?.querySelectorAll('.toast');
+          if (toasts?.length) {
+            const lastToast = toasts[toasts.length - 1];
+            lastToast.style.cursor = 'pointer';
+            lastToast.addEventListener('click', () => {
+              invoke('open_external_url', { url: result.download_url });
+            });
+          }
+        }, 100);
+      } else {
+        showNotification('当前已是最新版本', 'info', 3000);
+        // 无更新：隐藏进度条，节省空间
+        hideUpdateToast();
+      }
+      console.log('[UpdateCheck] result:', JSON.stringify(result));
+    } catch (e) {
+      showNotification(`检查更新失败：${e}`, 'error', 4000);
+      // 检查失败：隐藏进度条
+      hideUpdateToast();
+    }
+  });
   els.clearLogs?.addEventListener('click', clearAllLogs);
   els.exportLogs?.addEventListener('click', handleExportLogs);
   els.exportConfig?.addEventListener('click', handleExportConfig);
@@ -2501,15 +2487,12 @@ async function init() {
 
   // 启动时按当前主题状态同步一次 iframe 配色（避免 reload 后 class/style 丢失）
   syncIframeTheme();
-   // Apply theme on startup
-   document.body.classList.toggle('light-theme', state.lightTheme);
 
   // 启动时根据当前主题设置主题切换按钮图标（CSS 通过 body.light-theme 类控制图标显示）
 
   // 监听主题变化：同步到状态和 iframe（处理系统主题变化或 engine 触发的变化）
   window.addEventListener('theme-change', (e) => {
     state.lightTheme = e.detail?.isLight ?? false;
-    document.body.classList.toggle('light-theme', state.lightTheme);
     syncIframeTheme();
   });
 
