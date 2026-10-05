@@ -59,7 +59,8 @@ where
                     warn!(target: "Retry", context, attempt, max_retries, "所有重试均失败");
                     return Err(e);
                 }
-                let delay_ms = (base_ms as u64).saturating_mul(2u64.saturating_pow(attempt - 1))
+                let delay_ms = (base_ms as u64)
+                    .saturating_mul(2u64.saturating_pow(attempt - 1))
                     .min(30_000);
                 warn!(target: "Retry", context, attempt, delay_ms, "重试失败，等待后重试");
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
@@ -79,16 +80,22 @@ mod tests {
     #[tokio::test]
     async fn test_retry_success_on_first_attempt() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let result = retry("test", {
-            let calls = Arc::clone(&calls);
-            move || {
+        let result = retry(
+            "test",
+            {
                 let calls = Arc::clone(&calls);
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, ()>(42)
+                move || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, ()>(42)
+                    }
                 }
-            }
-        }, 3, 10).await;
+            },
+            3,
+            10,
+        )
+        .await;
         assert_eq!(result, Ok(42));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
@@ -96,20 +103,26 @@ mod tests {
     #[tokio::test]
     async fn test_retry_success_after_failures() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let result = retry("test", {
-            let calls = Arc::clone(&calls);
-            move || {
+        let result = retry(
+            "test",
+            {
                 let calls = Arc::clone(&calls);
-                async move {
-                    let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n < 3 {
-                        Err("fail")
-                    } else {
-                        Ok(())
+                move || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                        if n < 3 {
+                            Err("fail")
+                        } else {
+                            Ok(())
+                        }
                     }
                 }
-            }
-        }, 5, 10).await;
+            },
+            5,
+            10,
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
@@ -117,16 +130,22 @@ mod tests {
     #[tokio::test]
     async fn test_retry_exhausted() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let result: Result<(), &str> = retry("test", {
-            let calls = Arc::clone(&calls);
-            move || {
+        let result: Result<(), &str> = retry(
+            "test",
+            {
                 let calls = Arc::clone(&calls);
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err("always fail")
+                move || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err("always fail")
+                    }
                 }
-            }
-        }, 3, 10).await;
+            },
+            3,
+            10,
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
