@@ -20,21 +20,27 @@ pub fn parse_llama_version(output: &str) -> Option<String> {
     // 1) 优先匹配构建号 bNNNNN
     if let Some(idx) = text.find("version: b") {
         let after = &text[idx + "version: b".len()..];
-        let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+        let end = after
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(after.len());
         return Some(format!("b{}", &after[..end]));
     }
 
     // 2) "llama-server bNNNNN"
     if let Some(idx) = text.find("llama-server b") {
         let after = &text[idx + "llama-server b".len()..];
-        let end = after.find(|c: char| !c.is_ascii_alphanumeric() && c != '.').unwrap_or(after.len());
+        let end = after
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+            .unwrap_or(after.len());
         return Some(format!("b{}", &after[..end]));
     }
 
     // 3) 语义版本 vX.Y.Z
     if let Some(idx) = text.find("version: ") {
         let after = &text[idx + "version: ".len()..];
-        let end = after.find(|c: char| matches!(c, ' ' | '(' | '\n')).unwrap_or(after.len());
+        let end = after
+            .find(|c: char| matches!(c, ' ' | '(' | '\n'))
+            .unwrap_or(after.len());
         let v = after[..end].trim().trim_start_matches('v');
         if !v.is_empty() {
             return Some(v.to_string());
@@ -44,7 +50,9 @@ pub fn parse_llama_version(output: &str) -> Option<String> {
     // 4) "llama-server vX.Y.Z"
     if let Some(idx) = text.find("llama-server v") {
         let after = &text[idx + "llama-server v".len()..];
-        let end = after.find(|c: char| !c.is_ascii_alphanumeric() && c != '.').unwrap_or(after.len());
+        let end = after
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+            .unwrap_or(after.len());
         return Some(after[..end].to_string());
     }
 
@@ -93,14 +101,8 @@ pub fn compare_versions(a: &str, b: &str) -> VersionCmp {
     }
 
     // 语义版本比较
-    let a_parts: Vec<u64> = a
-        .split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    let b_parts: Vec<u64> = b
-        .split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let a_parts: Vec<u64> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let b_parts: Vec<u64> = b.split('.').filter_map(|s| s.parse().ok()).collect();
 
     for (a_val, b_val) in a_parts.iter().zip(b_parts.iter()) {
         if a_val < b_val {
@@ -140,7 +142,8 @@ mod tests {
 
     #[test]
     fn parse_semver_with_build() {
-        let text = "llama-server version: 0.4.0-dev (build 10809, commit 5266f24da) built with Clang";
+        let text =
+            "llama-server version: 0.4.0-dev (build 10809, commit 5266f24da) built with Clang";
         assert_eq!(parse_llama_version(text), Some("0.4.0-dev".to_string()));
     }
 
