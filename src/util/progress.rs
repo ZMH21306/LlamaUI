@@ -24,6 +24,13 @@ pub struct ProgressReporter {
     min_interval: Duration,
     last_emit: Instant,
     total: u64,
+    // 平滑参数（可配置）
+    speed_alpha: f64,              // EMA 平滑系数，范围 (0, 1)，默认 0.2
+    eta_decrease_limit: f64,       // 每次更新 ETA 最多下降当前值的比例，默认 0.5
+    // 平滑状态
+    smoothed_speed_bps: f64,       // EMA 平滑后的瞬时速度 (bytes/s)
+    smoothed_eta_secs: Option<u64>,
+    smooth_samples: usize,         // 已累计采样次数（用于 warm-up）
 }
 
 impl ProgressReporter {
@@ -39,14 +46,37 @@ impl ProgressReporter {
             min_interval,
             last_emit: Instant::now(),
             total,
+            speed_alpha: 0.2,
+            eta_decrease_limit: 0.5,
+            smoothed_speed_bps: 0.0,
+            smoothed_eta_secs: None,
+            smooth_samples: 0,
         }
     }
 
-    /// 记录一个 chunk 的到达。达到去抖间隔时自动 emit。
+    /// 设置 EMA 平滑系数（0 < alpha <= 1）。
+    /// alpha 越小越平滑（响应越慢）。
+    pub fn with_speed_alpha(mut self, alpha: f64) -> Self {
+        self.speed_alpha = alpha.clamp(0.001, 1.0);
+        self
+    }
+
+    /// 设置 ETA 下降限制（0 <= limit <= 1）。
+    /// limit 越小越保守（ETA 下降越慢）。
+    /// 例如 limit=0.5 表示每次更新 ETA 最多下降当前值的 50%。
+    pub fn with_eta_decrease_limit(mut self, limit: f64) -> Self {
+        self.eta_decrease_limit = limit.clamp(0.0, 1.0);
+        self
+    }
+
+    /// 记录一个 chunk 的到达。每次调用会更新内部平滑状态，
+    /// 并在达到 UI 更新间隔时返回平滑后的进度。
     ///
-    /// 返回 `(progress, downloaded, speed_bps, eta_secs)` 供调用方 emit。
+    /// 返回 `(progress, downloaded, smoothed_speed_bps, smoothed_eta_secs)`；
+    /// 如果未达到 UI 更新间隔，则返回 `None`。
     pub fn observe(&mut self, downloaded: u64) -> Option<(f64, u64, f64, Option<u64>)> {
         let now = Instant::now();
+        // 添加新样本到滑动窗口
         self.samples.push(Sample {
             downloaded,
             instant: now,
@@ -55,23 +85,73 @@ impl ProgressReporter {
             self.samples.remove(0);
         }
 
+        // 计算瞬时速度和瞬时 ETA（基于滑动窗口）
+        let (progress, _, instant_speed_bps, _instant_eta) = self.compute(downloaded);
+
+        // EMA 平滑瞬时速度
+        if self.smooth_samples == 0 {
+            self.smoothed_speed_bps = instant_speed_bps;
+        } else {
+            self.smoothed_speed_bps =
+                self.speed_alpha * instant_speed_bps + (1.0 - self.speed_alpha) * self.smoothed_speed_bps;
+        }
+        self.smooth_samples += 1;
+
+        // 基于平滑速度计算 ETA 并施加下降限制
+        let smoothed_eta_option = if self.smoothed_speed_bps > 0.0 && self.total > downloaded {
+            let mut eta = ((self.total - downloaded) as f64 / self.smoothed_speed_bps) as u64;
+            if let Some(last_eta) = self.smoothed_eta_secs {
+                // 限制 ETA 下降速度：每次更新最多下降当前值的 (1 - eta_decrease_limit)
+                // 例如 eta_decrease_limit=0.5 时，每次最多下降 50%
+                let min_allowed = ((last_eta as f64) * self.eta_decrease_limit).ceil().max(1.0) as u64;
+                if eta < last_eta && eta < min_allowed {
+                    eta = min_allowed;
+                }
+            }
+            Some(eta)
+        } else {
+            None
+        };
+        self.smoothed_eta_secs = smoothed_eta_option;
+
+        // 检查是否达到 UI 更新间隔
         if now.duration_since(self.last_emit) < self.min_interval {
             return None;
         }
         self.last_emit = now;
 
-        Some(self.compute(downloaded))
+        // 返回平滑后的进度（速度转换为 MB/s 由调用方处理，这里保持 bps）
+        Some((
+            progress,
+            downloaded,
+            self.smoothed_speed_bps,
+            self.smoothed_eta_secs,
+        ))
     }
 
     /// 强制发射进度（即使没有新 chunk 到达）。
     /// 用于定时器回调，确保 UI 定期刷新而不是卡在上一次 emit。
+    ///
+    /// 返回 `(progress, downloaded, smoothed_speed_bps, smoothed_eta_secs)`，
+    /// 其中速度和 ETA 为上次 observe 的平滑结果（若尚未有样本则为零）。
     pub fn force_emit(&mut self, downloaded: u64) -> Option<(f64, u64, f64, Option<u64>)> {
         let now = Instant::now();
         if now.duration_since(self.last_emit) < self.min_interval {
             return None;
         }
         self.last_emit = now;
-        Some(self.compute(downloaded))
+
+        let progress = if self.total > 0 {
+            downloaded as f64 / self.total as f64
+        } else {
+            0.0
+        };
+        Some((
+            progress,
+            downloaded,
+            self.smoothed_speed_bps,
+            self.smoothed_eta_secs,
+        ))
     }
 
     fn compute(&self, downloaded: u64) -> (f64, u64, f64, Option<u64>) {
