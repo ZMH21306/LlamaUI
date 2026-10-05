@@ -173,7 +173,10 @@ mod tests {
     #[test]
     fn gpu_backend_from_str() {
         use std::str::FromStr;
-        assert_eq!(GpuBackend::from_str("cuda-12.4").unwrap(), GpuBackend::Cuda12_4);
+        assert_eq!(
+            GpuBackend::from_str("cuda-12.4").unwrap(),
+            GpuBackend::Cuda12_4
+        );
         assert_eq!(GpuBackend::from_str("CPU").unwrap(), GpuBackend::Cpu);
     }
 
