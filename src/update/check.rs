@@ -147,15 +147,15 @@ fn verify_manifest_signature(
     let pubkey_array: [u8; 32] = pubkey_bytes
         .try_into()
         .map_err(|_| "公钥长度错误".to_string())?;
-    let verifying_key = VerifyingKey::from_bytes(&pubkey_array)
-        .map_err(|e| format!("公钥格式错误：{}", e))?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&pubkey_array).map_err(|e| format!("公钥格式错误：{}", e))?;
 
     // 解析签名（Base64）
     let sig_bytes = STANDARD
         .decode(signature)
         .map_err(|e| format!("解析签名失败：{}", e))?;
-    let signature = Signature::from_slice(&sig_bytes)
-        .map_err(|e| format!("签名格式错误：{}", e))?;
+    let signature =
+        Signature::from_slice(&sig_bytes).map_err(|e| format!("签名格式错误：{}", e))?;
 
     // 对 Manifest 的 JSON 序列化字节进行验证
     let manifest_json =
@@ -203,8 +203,16 @@ pub fn is_newer_version(latest: &str, current: &str) -> bool {
         (Some(_), None) | (None, None) => false,
         (Some(l), Some(c)) => {
             // 先按语义化的数字部分比较（rc10 > rc2），剩余部分字典序
-            let l_nums: Vec<u32> = l.split('v').flat_map(|s| s.split('.')).filter_map(|s| s.parse().ok()).collect();
-            let c_nums: Vec<u32> = c.split('v').flat_map(|s| s.split('.')).filter_map(|s| s.parse().ok()).collect();
+            let l_nums: Vec<u32> = l
+                .split('v')
+                .flat_map(|s| s.split('.'))
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            let c_nums: Vec<u32> = c
+                .split('v')
+                .flat_map(|s| s.split('.'))
+                .filter_map(|s| s.parse().ok())
+                .collect();
             let l_max = l_nums.iter().max().copied().unwrap_or(0);
             let c_max = c_nums.iter().max().copied().unwrap_or(0);
             if l_max != c_max {
@@ -295,8 +303,7 @@ fn scan_for_old_installations(
             .unwrap_or_default();
         let dir_version = extract_version_from_name(name_str);
         if let Some(ref ver) = dir_version {
-            if ver != current_version
-                && !installs.iter().any(|i| i.path == path.to_string_lossy())
+            if ver != current_version && !installs.iter().any(|i| i.path == path.to_string_lossy())
             {
                 let last_modified = fs::metadata(&path)
                     .and_then(|m| m.modified())
@@ -366,7 +373,10 @@ fn is_valid_version_format(version: &str) -> bool {
     }
     if parts.len() > 1 {
         let prerelease = parts[1];
-        if !prerelease.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') {
+        if !prerelease
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.')
+        {
             return false;
         }
     }
@@ -519,7 +529,10 @@ mod tests {
             Some("0.3.0".to_string())
         );
         assert_eq!(extract_version_from_name("random"), None);
-        assert_eq!(extract_version_from_name("v1.2.3"), Some("1.2.3".to_string()));
+        assert_eq!(
+            extract_version_from_name("v1.2.3"),
+            Some("1.2.3".to_string())
+        );
         assert_eq!(
             extract_version_from_name("LlamaUI-v0.7.0-windows-x64"),
             Some("0.7.0".to_string())
