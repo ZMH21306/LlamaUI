@@ -47,7 +47,10 @@ pub async fn download_llama_server(
         EVT_DOWNLOAD_STATE,
         DownloadState::Started {
             backend: gpu_backend.as_str().to_string(),
-            log_message: Some(format!("开始下载 llama-server (后端: {})", gpu_backend.as_str())),
+            log_message: Some(format!(
+                "开始下载 llama-server (后端: {})",
+                gpu_backend.as_str()
+            )),
         },
     );
     // 立即切换到 Running 状态，确保前端 UI 知道下载已开始
@@ -105,10 +108,7 @@ pub async fn download_llama_server(
             // 下载线程 panic 或被取消（如主任务取消导致 Join 被中断）
             if e.is_cancelled() {
                 tracing::info!(target: "DownloadCmd", "下载任务被取消");
-                let _ = app.emit(
-                    EVT_DOWNLOAD_STATE,
-                    DownloadState::Cancelled,
-                );
+                let _ = app.emit(EVT_DOWNLOAD_STATE, DownloadState::Cancelled);
                 return Err("下载已取消".to_string());
             }
             let msg = format!("下载任务执行失败：下载线程 panic 或崩溃：{}", e);
