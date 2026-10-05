@@ -111,7 +111,7 @@ pub async fn download_update(
     let mut downloaded: u64 = 0;
     let mut file = fs::File::create(dest_path)?;
     let mut stream = response.bytes_stream();
-    let mut progress_reporter = ProgressReporter::new(total, 10, Duration::from_millis(500));
+    let mut progress_reporter = ProgressReporter::new(total, 10, Duration::from_secs(1));
 
     while let Some(chunk_result) = stream.next().await {
         if *cancel_rx.borrow() {
