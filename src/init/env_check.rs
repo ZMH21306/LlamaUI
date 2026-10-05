@@ -87,14 +87,20 @@ pub(super) fn step_env_check(app: &AppHandle, cfg: &AppConfig) -> Result<(), Str
             emit_log_to(
                 app,
                 "system",
-                &format!("注意：模型目录不存在：{}（可在后续配置中修正）", cfg.models_dir),
+                &format!(
+                    "注意：模型目录不存在：{}（可在后续配置中修正）",
+                    cfg.models_dir
+                ),
                 Some(STEP_ENV),
             );
         } else if !p.is_dir() {
             emit_log_to(
                 app,
                 "system",
-                &format!("注意：路径不是目录：{}（可在后续配置中修正）", cfg.models_dir),
+                &format!(
+                    "注意：路径不是目录：{}（可在后续配置中修正）",
+                    cfg.models_dir
+                ),
                 Some(STEP_ENV),
             );
         } else {
