@@ -29,43 +29,34 @@ impl ConfigValidator {
         if port == 0 {
             self.errors.push(ConfigError::PortZero);
         }
-        // Note: u16 type ensures port <= 65535, so explicit upper bound check is not needed
-        // Keeping the error variant for completeness and potential future type changes
     }
 
     /// 验证模式
     pub fn validate_mode(&mut self, mode: &str) {
         match mode {
             "normal" | "advanced" | "pro" => {}
-            other => self
-                .errors
-                .push(ConfigError::InvalidMode(other.to_string())),
+            other => self.errors.push(ConfigError::InvalidMode(other.to_string())),
         }
     }
 
     /// 验证上下文大小
     pub fn validate_ctx_size(&mut self, ctx_size: u32) {
         if !(128..=1_048_576).contains(&ctx_size) {
-            self.errors
-                .push(ConfigError::CtxSizeOutOfRange { value: ctx_size });
+            self.errors.push(ConfigError::CtxSizeOutOfRange { value: ctx_size });
         }
     }
 
     /// 验证GPU层数
     pub fn validate_gpu_layers(&mut self, n_gpu_layers: i32) {
         if !(-1..=200).contains(&n_gpu_layers) {
-            self.errors.push(ConfigError::GpuLayersOutOfRange {
-                value: n_gpu_layers,
-            });
+            self.errors.push(ConfigError::GpuLayersOutOfRange { value: n_gpu_layers });
         }
     }
 
     /// 验证MTP草稿数量
     pub fn validate_mtp_draft(&mut self, mtp_draft_n_max: u32) {
         if mtp_draft_n_max > 16 {
-            self.errors.push(ConfigError::MtpDraftOutOfRange {
-                value: mtp_draft_n_max,
-            });
+            self.errors.push(ConfigError::MtpDraftOutOfRange { value: mtp_draft_n_max });
         }
     }
 
@@ -79,9 +70,7 @@ impl ConfigValidator {
         }
 
         // 检查命令注入（shell元字符）
-        let dangerous_chars = [
-            ';', '|', '&', '`', '$', '(', ')', '<', '>', '{', '}', '[', ']', '\\', '/',
-        ];
+        let dangerous_chars = [';', '|', '&', '`', '$', '(', ')', '<', '>', '{', '}', '[', ']', '\\', '/'];
         for field in ["custom_command", "extra_args"] {
             let value = if field == "custom_command" {
                 custom_command
