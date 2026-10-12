@@ -16,16 +16,14 @@
 //! - 状态监视器 (`WatcherTask`)
 //! - 指标采样器 (`MetricsSamplerTask`)
 use crate::constants::*;
-use crate::errors::AppError;
-use crate::events::{LogLine, ServerStatus, EVT_SERVER_METRICS};
+use crate::events::{LogLine, ServerStatus, EVT_SERVER_LOG, EVT_SERVER_METRICS};
 use crate::log::emit_log;
 use crate::server::manager::state_store::ServerStateStore;
+use crate::server::metrics::Metrics;
 use crate::util::time::now_ts;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{ChildStderr, ChildStdout};
-use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 /// 后台任务抽象 - 所有后台任务必须实现的接口
 ///
@@ -36,7 +34,7 @@ pub trait BackgroundTask: Send + Sync {
     
     /// 派生任务，获取状态存储引用
     /// 任务应该通过状态存储访问状态，而不是直接访问内部结构
-    fn spawn(&self, state_store: Arc<ServerStateStore>) -> JoinHandle<()>;
+    fn spawn(&mut self, state_store: Arc<ServerStateStore>) -> JoinHandle<()>;
 }
 
 /// 子进程标准输出读取器任务
@@ -50,17 +48,40 @@ impl BackgroundTask for StdoutReaderTask {
         "stdout_reader"
     }
     
-    fn spawn(&self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
-        tokio::spawn(async move {
+    fn spawn(&mut self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
+        // 从子进程获取stdout，并将log_tx取出
+        // 使用 take() 移除 log_tx，因为我们需要将它移动到 async 闭包中
+        let (stdout, tx) = {
             let mut inner = state_store.get_mut();
-            // 从子进程获取stdout（这需要调用者先设置子进程）
-            // 这里只是一个示例实现，实际使用需要调用者提供子进程句柄
-            drop(inner);
-            // 为了测试目的，让任务能够响应取消信号
+            let stdout = match &mut inner.child {
+                Some(child) => match child.stdout.take() {
+                    Some(stdout) => stdout,
+                    None => return tokio::spawn(async {}),
+                },
+                None => return tokio::spawn(async {}),
+            };
+            let tx = inner.log_tx.take().expect("Log channel should be initialized");
+            (stdout, tx)
+        };
+        
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
             loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                        // 定时检查子进程状态
+                match reader.next_line().await {
+                    Ok(Some(text)) => {
+                        let entry = LogLine {
+                            timestamp: now_ts(),
+                            stream: "stdout".into(),
+                            text: text.clone(),
+                            group: None,
+                        };
+                        let _ = tx.try_send(entry);
+                    }
+                    Ok(None) => {
+                        break;
+                    }
+                    Err(_) => {
+                        break;
                     }
                 }
             }
@@ -79,16 +100,39 @@ impl BackgroundTask for StderrReaderTask {
         "stderr_reader"
     }
     
-    fn spawn(&self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
-        tokio::spawn(async move {
+    fn spawn(&mut self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
+        // 从子进程获取stderr，并将log_tx取出
+        let (stderr, tx) = {
             let mut inner = state_store.get_mut();
-            drop(inner);
-            // TODO: 实际实现需要获取子进程的stderr
-            // 为了测试目的，让任务能够响应取消信号
+            let stderr = match &mut inner.child {
+                Some(child) => match child.stderr.take() {
+                    Some(stderr) => stderr,
+                    None => return tokio::spawn(async {}),
+                },
+                None => return tokio::spawn(async {}),
+            };
+            let tx = inner.log_tx.take().expect("Log channel should be initialized");
+            (stderr, tx)
+        };
+        
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
             loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                        // 定时检查子进程状态
+                match reader.next_line().await {
+                    Ok(Some(text)) => {
+                        let entry = LogLine {
+                            timestamp: now_ts(),
+                            stream: "stderr".into(),
+                            text: text.clone(),
+                            group: None,
+                        };
+                        let _ = tx.try_send(entry);
+                    }
+                    Ok(None) => {
+                        break;
+                    }
+                    Err(_) => {
+                        break;
                     }
                 }
             }
@@ -98,7 +142,7 @@ impl BackgroundTask for StderrReaderTask {
 
 /// 日志泵任务 - 从共享通道提取日志并发送给前端
 ///
-/// 负责协调日志存储和前端事件，保证日志的一致性和完整性
+/// 负责创建日志通道、协调日志存储和前端事件，保证日志的一致性和完整性
 pub struct LogPumpTask;
 
 impl BackgroundTask for LogPumpTask {
@@ -106,17 +150,45 @@ impl BackgroundTask for LogPumpTask {
         "log_pump"
     }
     
-    fn spawn(&self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
+    fn spawn(&mut self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
+        // 创建日志通道
+        let (tx, mut rx) = tokio::sync::mpsc::channel(crate::server::log_channel::LOG_CHANNEL_CAPACITY);
+        
+        // 存储发送端到状态存储，供 stdout/stderr reader 使用
+        {
+            let mut inner = state_store.get_mut();
+            inner.log_tx = Some(tx);
+        }
+        
         tokio::spawn(async move {
-            // TODO: 实现日志泵逻辑
-            // 为了测试目的，我们让任务能够响应取消信号
-            // 在实际实现中，这应该是从通道读取日志并处理它们
             loop {
                 tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                        // 定时任务逻辑
-                        // 这里可以添加实际的日志泵逻辑
-                    }
+                    maybe_line = rx.recv() => {
+                        match maybe_line {
+                            Some(log_line) => {
+                                // 将日志发送到前端
+                                let inner_ref = state_store.get();
+                                if let Some(app) = &inner_ref.app_handle {
+                                    let _ = app.emit(&EVT_SERVER_LOG, &log_line);
+                                }
+                                drop(inner_ref);
+                                // 同时写入内存缓冲
+                                let mut inner = state_store.get_mut();
+                                inner.logs.push(log_line);
+                                // 控制缓冲区大小
+                                let current_len = inner.logs.len();
+                                if current_len > MAX_LOG_LINES {
+                                    let keep = MAX_LOG_LINES - 100;
+                                    inner.logs.drain(0..current_len - keep);
+                                }
+                            }
+                            None => {
+                                // 通道已关闭，退出任务
+                                break;
+                            }
+                        }
+                    },
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {}
                 }
             }
         })
@@ -133,12 +205,61 @@ impl BackgroundTask for WatcherTask {
         "watcher"
     }
     
-    fn spawn(&self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
+    fn spawn(&mut self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
         tokio::spawn(async move {
-            // TODO: 实现状态监视器逻辑
             loop {
                 // 检查子进程状态
-                // 执行状态转换
+                let pid = {
+                    let inner = state_store.get();
+                    inner.pid
+                };
+                
+                if let Some(pid) = pid {
+                    // 检查子进程是否还在运行
+                    let still_running = {
+                        let inner = state_store.get();
+                        matches!(inner.status, ServerStatus::Running | ServerStatus::Starting)
+                    };
+                    
+                    if !still_running {
+                        // 进程已停止，更新状态
+                        state_store.update_status(ServerStatus::Stopped);
+                        if let Some(app) = &state_store.get().app_handle {
+                            emit_log(app, "system", "llama-server 已停止");
+                        }
+                        break;
+                    }
+                    
+                    // 检查进程是否退出（使用 try_wait）
+                    #[cfg(windows)]
+                    {
+                        use std::process::Command;
+                        let output = Command::new("tasklist")
+                            .arg("/FI")
+                            .arg(format!("PID eq {}", pid))
+                            .output();
+                        
+                        if let Ok(output) = output {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if !stdout.contains(&pid.to_string()) {
+                                // 进程已退出，更新状态
+                                state_store.update_status(ServerStatus::Stopped);
+                                if let Some(app) = &state_store.get().app_handle {
+                                    emit_log(app, "system", "llama-server 已停止");
+                                }
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // 没有活跃的 PID，检查状态
+                    let status = state_store.status();
+                    if matches!(status, ServerStatus::Running | ServerStatus::Starting) {
+                        // 状态显示运行但没有 PID，可能是异常状态
+                        state_store.update_status(ServerStatus::Stopped);
+                    }
+                }
+                
                 tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
             }
         })
@@ -155,14 +276,75 @@ impl BackgroundTask for MetricsSamplerTask {
         "metrics_sampler"
     }
     
-    fn spawn(&self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
+    fn spawn(&mut self, state_store: Arc<ServerStateStore>) -> JoinHandle<()> {
         tokio::spawn(async move {
-            // TODO: 实现指标采样逻辑
+            let mut acc_cpu = 0.0;
+            let mut acc_virt = 0u64;
+            let mut acc_total_mem = 0u64;
+            let mut sample_count = 0u32;
+            let mut last_pid: Option<u32> = None;
+            
+            let mut sys = sysinfo::System::new_all();
+            
             loop {
-                // 采样指标
-                // 计算平均值
-                // 发送指标事件
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                // 获取当前状态
+                let (pid, port, uptime_secs) = {
+                    let inner = state_store.get();
+                    (inner.pid, inner.active_port, inner.started_at.map(|t| t.elapsed().as_secs()))
+                };
+                
+                if let Some(pid) = pid {
+                    // 采样 CPU 和内存
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]));
+                    sys.refresh_memory();
+                    
+                    if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
+                        let cpu = process.cpu_usage();
+                        let virtual_size = process.virtual_memory() as u64;
+                        let total_mem = sys.total_memory();
+                        
+                        acc_cpu += cpu;
+                        acc_virt += virtual_size;
+                        acc_total_mem += total_mem;
+                        sample_count += 1;
+                        
+                        // 每 5 次采样（约 500ms）发送一次
+                        if sample_count >= 5 {
+                            let m = Metrics {
+                                pid,
+                                cpu_percent: acc_cpu / sample_count as f32,
+                                virtual_size_bytes: acc_virt / sample_count as u64,
+                                total_mem_bytes: acc_total_mem / sample_count as u64,
+                                uptime_secs: uptime_secs.unwrap_or(0),
+                                port: port.unwrap_or(0),
+                                gpu_mem_used_mb: 0.0,
+                                gpu_mem_total_mb: 0.0,
+                                gpu_util_pct: -1.0,
+                                app_memory_bytes: 0,
+                            };
+                            
+                            if let Some(app) = &state_store.get().app_handle {
+                                let _ = app.emit(EVT_SERVER_METRICS, &m);
+                            }
+                            
+                            acc_cpu = 0.0;
+                            acc_virt = 0;
+                            acc_total_mem = 0;
+                            sample_count = 0;
+                        }
+                        
+                        last_pid = Some(pid);
+                    } else if last_pid.is_some() {
+                        // 进程已退出
+                        state_store.update_status(ServerStatus::Stopped);
+                        break;
+                    }
+                } else {
+                    // 没有 PID，等待
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+                
+                tokio::time::sleep(tokio::time::Duration::from_millis(METRICS_INTERVAL_MS)).await;
             }
         })
     }
@@ -204,9 +386,9 @@ impl TaskManager {
     ///
     /// 遍历所有任务，调用其 spawn 方法派生任务
     /// 所有派生的任务会被添加到状态存储的任务列表中
-    pub async fn start_all(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start_all(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("start_all: 开始启动任务");
-        for task in &self.tasks {
+        for task in &mut self.tasks {
             println!("start_all: 正在启动任务: {}", task.name());
             let handle = task.spawn(self.state_store.clone());
             println!("start_all: 任务已派生");
@@ -341,7 +523,7 @@ mod tests {
         use tokio::time::sleep;
         
         let state_store = Arc::new(ServerStateStore::new());
-        let manager = TaskManager::new(state_store);
+        let mut manager = TaskManager::new(state_store);
         
         // 启动所有任务
         let start_result = manager.start_all().await;
