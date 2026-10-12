@@ -1,5 +1,6 @@
 // ui/metricsView.mjs - Metrics display renderer
 import { MESSAGES } from '../constants/messages.mjs';
+import { EVENTS } from '../constants/events.mjs';
 
 /**
  * Metrics View - Renders CPU, VRAM, GPU usage
