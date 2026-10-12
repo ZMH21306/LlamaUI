@@ -16,7 +16,7 @@
 //! - 状态监视器 (`WatcherTask`)
 //! - 指标采样器 (`MetricsSamplerTask`)
 use crate::constants::*;
-use crate::error::AppError;
+use crate::errors::AppError;
 use crate::events::{LogLine, ServerStatus, EVT_SERVER_METRICS};
 use crate::log::emit_log;
 use crate::server::manager::state_store::ServerStateStore;
