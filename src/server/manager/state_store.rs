@@ -5,12 +5,12 @@
 //! 所有状态变化都必须通过 `lifecycle.rs` 中的协调函数完成，
 //! 以确保事务一致性和状态机正确性。
 
-use crate::constants::*;
 use crate::events::{LogLine, ServerStatus};
 use crate::server::job::Job;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::process::Child;
+use tokio::sync::mpsc;
 
 /// 服务器运行时状态容器。
 ///
@@ -37,8 +37,12 @@ pub(crate) struct ServerInner {
     pub(crate) job: Option<Job>,
     /// 本次 start 派生的所有后台任务（stdout reader / stderr reader /
     /// log pump / watcher / metrics sampler）。stop() / restart() 时
-    /// 调用 abort() 强制结束，防止跨 start 任务堆叠（修复 C1.2）。
+    /// 调用 abort() 强制结束，避免跨 start 任务堆叠（修复 C1.2）。
     pub(crate) tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// 日志通道发送端 - stdout/stderr reader 通过此发送日志到 log pump
+    pub(crate) log_tx: Option<mpsc::Sender<LogLine>>,
+    /// Tauri 应用句柄 - 用于发送事件到前端
+    pub(crate) app_handle: Option<Arc<tauri::AppHandle>>,
 }
 
 /// 服务器状态存储 - 提供对服务器状态的统一访问接口
@@ -66,6 +70,8 @@ impl ServerStateStore {
                 active_port: None,
                 job: None,
                 tasks: Vec::new(),
+                log_tx: None,
+                app_handle: None,
             }),
         }
     }
