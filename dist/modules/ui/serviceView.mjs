@@ -1,5 +1,6 @@
 // ui/serviceView.mjs - Service status UI renderer
-import { MESSAGES } from '../constants/messages.mjs';
+import { MESSAGES, formatElapsedMs } from '../constants/messages.mjs';
+import { EVENTS } from '../constants/events.mjs';
 
 /**
  * Service View - Renders service status and controls
@@ -67,9 +68,9 @@ export function createServiceView({ store, bus, ipc, elements }) {
     if (!els.startBtn) return;
     
     // Determine button states based on service status
-    const canStart = [status.Stopped, status.Crashed].includes(status.status);
-    const canStop = [status.Starting, status.Running].includes(status.status);
-    const canRestart = [status.Running].includes(status.status);
+    const canStart = ['Stopped', 'Crashed'].includes(status.status || status);
+    const canStop = ['Starting', 'Running'].includes(status.status || status);
+    const canRestart = ['Running'].includes(status.status || status);
     
     els.startBtn.disabled = !canStart;
     els.stopBtn.disabled = !canStop;
@@ -79,46 +80,43 @@ export function createServiceView({ store, bus, ipc, elements }) {
   function initEventListeners() {
     // Button click handlers - dispatch intents to event bus
     if (els.startBtn) {
-      els.startBtn.addEventListener('click', () => {
+      const startHandler = () => {
         if (!els.startBtn.disabled) {
           bus.emit(EVENTS.UI_START_REQUESTED);
         }
-      });
+      };
+      els.startBtn.addEventListener('click', startHandler);
+      els.startBtn._clickHandler = startHandler;
     }
     
     if (els.stopBtn) {
-      els.stopBtn.addEventListener('click', () => {
+      const stopHandler = () => {
         if (!els.stopBtn.disabled) {
           bus.emit(EVENTS.UI_STOP_REQUESTED);
         }
-      });
+      };
+      els.stopBtn.addEventListener('click', stopHandler);
+      els.stopBtn._clickHandler = stopHandler;
     }
     
     if (els.restartBtn) {
-      els.restartBtn.addEventListener('click', () => {
+      const restartHandler = () => {
         if (!els.restartBtn.disabled) {
-          bus.emit(EVENTS.UI_RESTART_REQUESTED);
+          // 直接调用 IPC 重启命令
+          ipc.invoke('restart_server')
+            .catch(err => console.error('[bootstrap] restart failed:', err));
         }
-      });
+      };
+      els.restartBtn.addEventListener('click', restartHandler);
+      els.restartBtn._clickHandler = restartHandler;
     }
   }
-  
-  // Listen for actual service status updates from backend
-  const statusUnsubscribe = bus.on(EVENTS.SERVER_STATUS, (status) => {
-    stateKey.setState(status);
-  });
   
   // Public API
   return {
     /** Clean up listeners and subscriptions */
     destroy() {
       unsubscribe();
-      statusUnsubscribe.off();
-      
-      // Remove event listeners
-      if (els.startBtn) els.startBtn.removeEventListener('click', els.startBtn._clickHandler);
-      if (els.stopBtn) els.stopBtn.removeEventListener('click', els.stopBtn._clickHandler);
-      if (els.restartBtn) els.restartBtn.removeEventListener('click', els.restartBtn._clickHandler);
     },
     
     /** Force a re-render */
@@ -126,15 +124,6 @@ export function createServiceView({ store, bus, ipc, elements }) {
       render(undefined, stateKey.get());
     }
   };
-}
-
-// Helper function (will be replaced by import)
-function formatElapsedMs(ms) {
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  const ss = Math.floor(s % 60);
-  return `${m}分${ss}秒`;
 }
 
 /** Default export */
