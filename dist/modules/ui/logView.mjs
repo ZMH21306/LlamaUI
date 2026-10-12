@@ -1,5 +1,6 @@
 // ui/logView.mjs - Log display with batching
 import { MESSAGES } from '../constants/messages.mjs';
+import { EVENTS } from '../constants/events.mjs';
 
 /**
  * Log View - Renders logs with efficient batching
