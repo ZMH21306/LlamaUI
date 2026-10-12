@@ -1,6 +1,7 @@
 // ui/configView.mjs - Configuration form handler (simplified)
 import { MESSAGES } from '../constants/messages.mjs';
 import { formatTime } from '../constants/messages.mjs';
+import { EVENTS } from '../constants/events.mjs';
 
 /**
  * Config View - Handles configuration form and persistence
