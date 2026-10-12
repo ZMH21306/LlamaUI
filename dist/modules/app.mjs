@@ -3,8 +3,52 @@
 
 import { createApp } from './app.bootstrap.mjs';
 
-// 初始化应用
-createApp().catch(err => {
-    console.error('Failed to initialize application:', err);
-    // 可以在这里显示错误 UI
-});
+/**
+ * LlamaUIApp - Application class
+ * Instantiating this will bootstrap the app
+ */
+export class LlamaUIApp {
+    constructor() {
+        this._app = null;
+        this._destroyed = false;
+        
+        // Bootstrap the app asynchronously
+        createApp().then(app => {
+            if (!this._destroyed) {
+                this._app = app;
+                // Expose on window for debugging
+                window.__llamaApp = this;
+            }
+        }).catch(err => {
+            console.error('Failed to initialize application:', err);
+        });
+    }
+    
+    /** Get the underlying store */
+    get store() {
+        return this._app?.store;
+    }
+    
+    /** Get the event bus */
+    get bus() {
+        return this._app?.bus;
+    }
+    
+    /** Get the service state machine */
+    get serviceMachine() {
+        return this._app?.serviceMachine;
+    }
+    
+    /** Get all views */
+    get views() {
+        return this._app?.views;
+    }
+    
+    /** Destroy the application */
+    async destroy() {
+        this._destroyed = true;
+        if (this._app) {
+            await this._app.destroy();
+        }
+    }
+}
