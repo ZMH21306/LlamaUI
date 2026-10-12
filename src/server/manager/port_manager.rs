@@ -20,7 +20,7 @@ use crate::detect::CancelFlag;
 use crate::errors::AppError;
 use crate::server::manager::port_manager::availability::AvailabilityChecker;
 use crate::server::manager::port_manager::selector::PortSelector;
-use crate::server::manager::port_manager::constants::*;
+use crate::server::manager::port_manager::constants::{PARALLEL_PROBE, MAX_PORT_PROBES, PORT_PROBE_DELAY_MS};
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -122,6 +122,7 @@ pub mod availability {
     /// 端口可用性检查器
     ///
     /// 提供端口可用性检查的功能
+    #[derive(Clone)]
     pub struct AvailabilityChecker;
 
     impl AvailabilityChecker {
@@ -153,6 +154,7 @@ pub mod selector {
     use crate::errors::AppError;
     use crate::server::manager::port_manager::availability::AvailabilityChecker;
     use crate::server::manager::port_manager::PortChoice;
+    use crate::server::manager::port_manager::constants::{PARALLEL_PROBE, MAX_PORT_PROBES, PORT_PROBE_DELAY_MS};
     use futures::stream::{self, StreamExt};
     use std::sync::Arc;
     use tauri::AppHandle;
@@ -194,23 +196,87 @@ pub mod selector {
             auto_shift: bool,
             cancel: &CancelFlag,
         ) -> Result<PortChoice, AppError> {
-            // TODO: 实现完整的智能端口选择逻辑
             // 1. 检查取消标志
-            // 2. 并行探测前PARALLEL_PROBE个端口
-            // 3. 如果找到可用端口，返回
-            // 4. 否则进行顺序探测剩余端口
-            // 5. 处理端口占用情况
-            // 6. 返回结果或错误
-            
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(AppError::from("端口选择被取消"));
             }
             
-            // 简单实现：返回期望端口
-            Ok(PortChoice {
-                port: desired,
-                shifted: false,
-            })
+            // 2. 并行探测前 PARALLEL_PROBE 个端口
+            let par = PARALLEL_PROBE.min(if auto_shift { MAX_PORT_PROBES } else { 1 });
+            let mut tasks = Vec::new();
+            for offset in 0..par {
+                let test_port = if auto_shift {
+                    desired.saturating_add(offset)
+                } else {
+                    desired
+                };
+                if test_port == 0 {
+                    continue;
+                }
+                let checker = self.availability_checker.clone();
+                let task = tokio::spawn(async move {
+                    let available = checker.is_port_available(test_port).await;
+                    (test_port, available)
+                });
+                tasks.push(task);
+            }
+            
+            let mut parallel_candidates = Vec::new();
+            for task in tasks {
+                match task.await {
+                    Ok((port, true)) => {
+                        parallel_candidates.push(port);
+                    }
+                    Ok(_) | Err(_) => {}
+                }
+            }
+            
+            // 3. 如果找到可用端口，返回
+            if !parallel_candidates.is_empty() {
+                let chosen_port = parallel_candidates[0];
+                return Ok(PortChoice {
+                    port: chosen_port,
+                    shifted: chosen_port != desired,
+                });
+            }
+            
+            // 4. 否则进行顺序探测剩余端口
+            let max_attempts = if auto_shift { MAX_PORT_PROBES } else { 1 };
+            for offset in 0..max_attempts {
+                let test_port = if auto_shift {
+                    desired.saturating_add(offset)
+                } else {
+                    desired
+                };
+                if test_port == 0 {
+                    break;
+                }
+                
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(AppError::from("端口选择被取消"));
+                }
+                
+                let available = self.availability_checker.is_port_available(test_port).await;
+                if available {
+                    return Ok(PortChoice {
+                        port: test_port,
+                        shifted: test_port != desired,
+                    });
+                }
+                
+                tokio::time::sleep(std::time::Duration::from_millis(PORT_PROBE_DELAY_MS)).await;
+            }
+            
+            // 5. 返回结果或错误
+            if auto_shift {
+                Err(AppError::from(format!(
+                    "在端口 {}-{} 范围内未找到空闲端口",
+                    desired,
+                    desired.saturating_add(max_attempts.saturating_sub(1))
+                )))
+            } else {
+                Err(AppError::from(format!("端口 {} 不可用", desired)))
+            }
         }
     }
 //
