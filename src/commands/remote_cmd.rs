@@ -9,7 +9,7 @@ use tauri::State;
 #[tauri::command]
 pub fn add_remote_server(
     state: State<'_, AppState>,
-    info: crate::remote_server::RemoteServerInfo,
+    info: crate::remote::RemoteServerInfo,
 ) -> Result<(), String> {
     state.remote_server_manager.add_server(info)
 }
@@ -22,7 +22,7 @@ pub fn remove_remote_server(state: State<'_, AppState>, name: String) {
 
 /// 列出所有远程服务器。
 #[tauri::command]
-pub fn list_remote_servers(state: State<'_, AppState>) -> Vec<crate::remote_server::RemoteServerInfo> {
+pub fn list_remote_servers(state: State<'_, AppState>) -> Vec<crate::remote::RemoteServerInfo> {
     state.remote_server_manager.list_servers()
 }
 
@@ -31,7 +31,7 @@ pub fn list_remote_servers(state: State<'_, AppState>) -> Vec<crate::remote_serv
 pub fn get_remote_server(
     state: State<'_, AppState>,
     name: String,
-) -> Option<crate::remote_server::RemoteServerInfo> {
+) -> Option<crate::remote::RemoteServerInfo> {
     state.remote_server_manager.get_server(&name)
 }
 
@@ -44,7 +44,7 @@ pub async fn probe_remote_server(
 ) -> Result<bool, String> {
     // ureq 是同步 HTTP 客户端，放到阻塞线程池执行避免阻塞 Tauri 事件循环
     let join_result = tokio::task::spawn_blocking(move || {
-        crate::remote_server::probe_remote_server(&url, api_key.as_deref())
+        crate::remote::probe_remote_server(&url, api_key.as_deref())
     })
     .await
     .map_err(|e| format!("探测任务执行失败：{}", e))?;

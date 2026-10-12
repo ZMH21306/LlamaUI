@@ -71,15 +71,18 @@ pub(crate) fn osstr_to_utf8(p: &std::path::Path) -> String {
 ///
 /// 已知变量：llama_server、models_dir、port、host、llama_server_quote、models_dir_quote。
 /// 未知变量保持原样（不替换）。
+///
+/// 安全：`%%models_dir%%` 使用加引号的形式（等同于 `%%models_dir_quote%%`），
+/// 防止路径中含分号、空格等字符导致命令注入。
 pub fn expand_pro_vars(text: &str, cfg: &AppConfig) -> String {
     let program = resolve_program(cfg);
     let program_q = quote_path(&program);
     let models_q = quote_path(&cfg.models_dir);
-    text
-        .replace("%%llama_server%%", &program_q)         // 默认加引号
-        .replace("%%llama_server_quote%%", &program_q)  // 兼容旧模板
-        .replace("%%models_dir%%", &models_q)           // 默认加引号
-        .replace("%%models_dir_quote%%", &models_q)     // 兼容旧模板
+    text.replace("%%llama_server%%", &program_q)
+        .replace("%%llama_server_quote%%", &program_q)
+        // P0-4 安全修复：%%models_dir%% 必须加引号，防止命令注入
+        .replace("%%models_dir%%", &models_q)
+        .replace("%%models_dir_quote%%", &models_q)
         .replace("%%port%%", &cfg.port.to_string())
         .replace("%%host%%", "127.0.0.1")
 }
@@ -110,55 +113,112 @@ pub fn extract_port_from_argv(argv: &[String]) -> Option<u16> {
     None
 }
 
-/// 判断一个可执行文件名是否是 llama 相关（llama-server.exe / llama.cpp 等）。
-#[allow(dead_code)]
-pub fn is_llama_related_exe(name: &str) -> bool {
-    let n = name.to_lowercase();
-    n.contains("llama") || n.contains("llamacpp")
-}
-
 /// 校验专业模式首 token 是否允许执行。
+///
 /// 允许通过的条件（满足任一即可）：
-/// 1. 与 `cfg.llama_server_path` 完全一致（用户已配置自定义路径）；
-/// 2. 文件名锚定匹配：`llama-server` / `llama-cli` / `llama-bench` / `llama-embedding` / `llama-export`；
-/// 3. 本身就是 `llama-server` 且 PATH 中能找到。
+/// 1. 与 `cfg.llama_server_path` 完全一致（用户已配置自定义路径），**且**经
+///    [`crate::util::path::validate_executable_candidate`] 二次校验（文件名严格
+///    匹配 + 拒绝世界可写目录），保证 P0-1 修复（路径白名单）。
+/// 2. 文件名锚定匹配：`llama-server` / `llama-cli` / `llama-bench` / `llama-embedding` / `llama-export`，
+///    **且**完整路径（若是绝对路径）经 `validate_executable_candidate` 二次校验。
+/// 3. 本身就是 `llama-server` 且 PATH 中能找到（裸名调用，走 `which::which`）。
 ///
 /// 其余情况（如 `cmd.exe` / `powershell.exe` / `calc.exe` / `evil-llama.exe`）一律拒绝，避免 RCE。
+///
+/// ## P0-1 安全修复
+/// 修复前：仅校验可执行文件名是否在白名单，攻击者可在白名单目录外放一个
+/// `llama-server.exe`（如 `C:\evil\llama-server.exe`）骗过后端，spawn 时执行恶意文件。
+/// 修复后：用户自定义路径或绝对路径必须**同时**通过
+///   - 文件名白名单（`llama-server` / `llama-cli` / ...）
+///   - [`validate_executable_candidate`] 的常规 file + 父目录非世界可写校验
 pub fn validate_pro_program(prog: &str, cfg: &AppConfig) -> anyhow::Result<String> {
     if prog.is_empty() {
         anyhow::bail!("专业模式命令首 token 为空");
     }
-    // 1) 与用户配置的路径一致（大小写不敏感、反斜杠归一）
+    // 公共提取：去掉可能存在的引号包裹（cmdline 解析后的 token 仍可能残留引号）。
+    let stripped = prog.trim_matches('"').trim();
+    // 文件名锚定匹配：仅接受已知的合法可执行名
+    let file_name = std::path::Path::new(stripped)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(stripped)
+        .to_lowercase();
+    let stem = file_name.trim_end_matches(".exe");
+    const ALLOWED_STEMS: &[&str] = &[
+        "llama-server",
+        "llama-cli",
+        "llama-bench",
+        "llama-embedding",
+        "llama-export",
+    ];
+    if !ALLOWED_STEMS.contains(&stem) {
+        anyhow::bail!(
+            "专业模式首 token 必须是以下之一：llama-server、llama-cli、llama-bench、llama-embedding、llama-export；或与 cfg.llama_server_path 完全一致。当前为 `{}`",
+            prog
+        );
+    }
+    // 1) cfg 自定义路径完全匹配（大小写不敏感、反斜杠归一）
     if let Some(custom) = &cfg.llama_server_path {
         if !custom.is_empty() {
-            let a = prog.to_lowercase().replace('/', "\\").trim_matches('"').to_string();
-            let b = custom.to_lowercase().replace('/', "\\").trim_matches('"').to_string();
+            let a = stripped.to_lowercase().replace('/', "\\");
+            let b = custom
+                .to_lowercase()
+                .replace('/', "\\")
+                .trim_matches('"')
+                .to_string();
             if a == b {
-                return Ok(prog.to_string());
+                // P0-1：即使匹配 cfg，仍走 validate_p0_path 做二次校验。
+                return validate_p0_path(stripped, stem, ALLOWED_STEMS, prog);
             }
         }
     }
-    // 2) 文件名锚定匹配：仅接受已知的合法可执行名
-    let file_name = std::path::Path::new(prog.trim_matches('"'))
+    // 判断是否带路径（区分裸名与绝对/相对路径）
+    let is_bare = !stripped.contains('\\') && !stripped.contains('/') && !stripped.starts_with('.');
+    if is_bare {
+        // 2) 裸名 llama-server 走 which::which
+        if stem == "llama-server" {
+            if let Ok(p) = which::which("llama-server") {
+                return Ok(osstr_to_utf8(&p));
+            }
+        }
+        // 2b) 裸名 llama-cli / llama-bench 等：直接接受
+        //     （不在 PATH 白名单约束范围，spawn 时由 which 或文件路径报错）
+        return Ok(stripped.to_string());
+    }
+    // 3) 带路径的形式（含 \ / / 或 . 前缀）：走 P0-1 路径校验
+    validate_p0_path(stripped, stem, ALLOWED_STEMS, prog)
+}
+
+/// P0-1 路径二次校验：把通过文件名白名单的候选路径走硬校验（文件名严格匹配 +
+/// 拒绝世界可写目录）。**不做存在性检查**：不存在的文件会在 spawn 时返回
+/// ENOENT，不应在此处拒绝（否则会误伤合法的「尚未安装 llama-server」场景）。
+fn validate_p0_path(
+    candidate: &str,
+    _stem: &str,
+    allowed_stems: &[&str],
+    original_prog: &str,
+) -> anyhow::Result<String> {
+    // 文件名校验（大小写不敏感）
+    let name_owned = std::path::Path::new(candidate)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or(prog)
-        .to_lowercase();
-    let stem = file_name.trim_end_matches(".exe");
-    const ALLOWED_STEMS: &[&str] = &["llama-server", "llama-cli", "llama-bench", "llama-embedding", "llama-export"];
-    if ALLOWED_STEMS.contains(&stem) {
-        return Ok(prog.to_string());
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| candidate.to_ascii_lowercase());
+    let name_stem = name_owned.trim_end_matches(".exe");
+    if !allowed_stems.contains(&name_stem) {
+        anyhow::bail!(
+            "P0-1 校验失败：可执行文件名 `{}` 不在白名单内",
+            original_prog
+        );
     }
-    // 3) 裸名 llama-server 必须 PATH 中能找到
-    if stem == "llama-server" {
-        if let Ok(p) = which::which("llama-server") {
-            return Ok(osstr_to_utf8(&p));
-        }
+    // 世界可写目录检查（防 PATH 注入）
+    if crate::util::path::is_world_writable_path(std::path::Path::new(candidate)) {
+        anyhow::bail!(
+            "P0-1 校验失败：可执行路径 `{}` 位于世界可写目录（拒绝 PATH 注入）",
+            original_prog
+        );
     }
-    anyhow::bail!(
-        "专业模式首 token 必须是以下之一：llama-server、llama-cli、llama-bench、llama-embedding、llama-export；或与 cfg.llama_server_path 完全一致。当前为 `{}`",
-        prog
-    )
+    Ok(candidate.to_string())
 }
 
 #[cfg(test)]
@@ -191,7 +251,10 @@ mod tests {
     #[test]
     fn validate_pro_program_rejects_powershell() {
         let cfg = empty_cfg();
-        let r = validate_pro_program("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", &cfg);
+        let r = validate_pro_program(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            &cfg,
+        );
         assert!(r.is_err(), "powershell.exe 必须被拒绝");
     }
 
@@ -257,7 +320,11 @@ mod tests {
         let v = split_command_line(r#""C:\Program Files\llama.cpp\llama-server.exe" -ngl 99"#);
         assert_eq!(
             v,
-            vec!["C:\\Program Files\\llama.cpp\\llama-server.exe", "-ngl", "99"]
+            vec![
+                "C:\\Program Files\\llama.cpp\\llama-server.exe",
+                "-ngl",
+                "99"
+            ]
         );
     }
 
@@ -299,7 +366,10 @@ mod tests {
         );
         // 整个被替换后的 models_dir 部分应在一个引号对内（防止分号分隔）。
         // 修正：quote_path 会把所有内部 `"` 转义为 `\"`，故期望串也必须带此转义。
-        assert!(expanded.contains(r#""D:\data\"; --api-key ATTACKER_KEY \"pwn""#),
-                "models_dir 必须被完整引号包裹：got {}", expanded);
+        assert!(
+            expanded.contains(r#""D:\data\"; --api-key ATTACKER_KEY \"pwn""#),
+            "models_dir 必须被完整引号包裹：got {}",
+            expanded
+        );
     }
 }

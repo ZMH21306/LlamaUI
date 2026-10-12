@@ -79,11 +79,20 @@ thiserror = "1"
 futures = "0.3"
 sysinfo = "0.31"
 sha2 = "0.10"
+base64 = "0.22"
+zeroize = { version = "1", features = ["derive"] }
 regex = "1"
 flate2 = "1"
 tar = "0.4"
-ureq = "2"
+urlencoding = "2"
+winreg = "0.52"
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_Foundation", "Win32_System_JobObjects", "Win32_Security", "Wdk_System_Threading", "Wdk_System_SystemServices"] }
+reqwest = { version = "0.12", features = ["stream", "native-tls", "blocking"] }
+uuid = { version = "1", features = ["v4"] }
+num_cpus = "1"
+ed25519-dalek = { version = "2", features = ["pem"] }
+zip = "0.6"
+libc = "0.2"
 
 # 结构化日志：tracing 生态（控制台彩色 + 文件滚动输出）
 tracing = "0.1"
@@ -100,7 +109,7 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri = { version = "2", features = ["test"] }
 
 [profile.release]
-panic = "abort"
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"

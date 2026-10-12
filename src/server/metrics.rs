@@ -3,15 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-/// 默认缓存时间（秒）。nvidia-smi 的数据 1s 内几乎不变，没必要每次 metrics 间隔
-/// （1.5s）都查询。
-const GPU_CACHE_TTL: Duration = Duration::from_secs(5);
+use crate::util::process::silent_tokio_command;
 
-/// 底层指标采样间隔（毫秒）。100ms = 0.1s，
-/// 5 次采样取平均后向上 emit 一次（即 500ms 更新一次 UI）。
-pub const METRICS_INTERVAL_MS: u64 = 100;
+/// GPU 指标缓存时间（秒）。
+pub const GPU_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// GPU 数据快照，附带采样时间。
 struct CachedGpu {
@@ -77,16 +74,9 @@ pub async fn query_gpu_stats() -> (f32, f32, f32) {
 /// 不带缓存的 GPU 查询（测试与内部使用）。
 async fn query_gpu_stats_uncached() -> (f32, f32, f32) {
     // 跨平台调用：Windows / Linux / macOS 上 NVIDIA 驱动都自带 nvidia-smi
-    let mut cmd = tokio::process::Command::new("nvidia-smi");
+    let mut cmd = silent_tokio_command("nvidia-smi");
     cmd.arg("--query-gpu=memory.used,memory.total,utilization.gpu")
         .arg("--format=csv,noheader,nounits");
-
-    // Windows 下隐藏控制台窗口（避免每秒 1-2 个黑色框闪现）
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
 
     let out = cmd.output().await;
     let out = match out {

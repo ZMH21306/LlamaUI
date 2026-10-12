@@ -31,16 +31,17 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use parking_lot::Mutex;
+use std::sync::Arc;
 
-pub mod config_io_cmd;
 pub mod config_cmd;
+pub mod config_io_cmd;
 pub mod detect_cmd;
 pub mod download_cmd;
 pub mod export_cmd;
 pub mod gpu_cmd;
+pub mod hf_model_cmd;
 pub mod init_cmd;
 pub mod model_cmd;
-pub mod plugin_cmd;
 pub mod recovery_cmd;
 pub mod remote_cmd;
 pub mod server_cmd;
@@ -67,25 +68,35 @@ pub struct AppState {
     pub config: std::sync::Arc<crate::config::ConfigStore>,
     /// 当前正在进行的检测的取消标志列表（支持并发检测场景）。
     pub detect_cancels: Mutex<Vec<crate::detect::CancelFlag>>,
+    /// 当前 llama 下载的取消标志（AtomicBool，支持取消进行中的下载）
+    pub download_cancel: Arc<std::sync::atomic::AtomicBool>,
     /// 多模型管理（目录索引 + 快速切换）。
-    pub model_manager: std::sync::Arc<crate::model_management::ModelManager>,
+    pub model_manager: std::sync::Arc<crate::models::ModelManager>,
     /// 远程服务器管理。
-    pub remote_server_manager: std::sync::Arc<crate::remote_server::RemoteServerManager>,
-    /// 插件系统管理器。
-    pub plugin_manager: std::sync::Arc<crate::plugin_framework::PluginManager>,
+    pub remote_server_manager: std::sync::Arc<crate::remote::RemoteServerManager>,
 }
 
 impl AppState {
     pub fn new() -> Self {
+        let config = std::sync::Arc::new(crate::config::ConfigStore::new());
+        let model_manager = std::sync::Arc::new(crate::models::ModelManager::new());
+
+        // 用配置中的模型目录初始化多模型索引，避免 `list_models` 永远返回空列表。
+        let models_dir = config.get().models_dir;
+        if !models_dir.trim().is_empty() {
+            let dir = std::path::Path::new(&models_dir);
+            if dir.is_dir() {
+                model_manager.add_directory(dir);
+            }
+        }
+
         Self {
             server: std::sync::Arc::new(crate::server::ServerProcess::new()),
-            config: std::sync::Arc::new(crate::config::ConfigStore::new()),
+            config,
             detect_cancels: Mutex::new(Vec::new()),
-            model_manager: std::sync::Arc::new(crate::model_management::ModelManager::new()),
-            remote_server_manager: std::sync::Arc::new(
-                crate::remote_server::RemoteServerManager::new(),
-            ),
-            plugin_manager: std::sync::Arc::new(crate::plugin_framework::PluginManager::new()),
+            download_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            model_manager,
+            remote_server_manager: std::sync::Arc::new(crate::remote::RemoteServerManager::new()),
         }
     }
 }

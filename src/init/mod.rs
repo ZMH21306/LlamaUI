@@ -52,12 +52,24 @@ pub async fn run_initialization(app: &AppHandle, cfg: &AppConfig) -> Result<(), 
     emit_step(app, STEP_ENV, "① 环境检查", "success", false);
 
     // ---- ② 驱动与 llama 安装检查 ----
-    emit_step(app, STEP_INSTALL, "② 驱动与 llama 安装检查", "running", true);
+    emit_step(
+        app,
+        STEP_INSTALL,
+        "② 驱动与 llama 安装检查",
+        "running",
+        true,
+    );
     if let Err(e) = install_check::step_install_check(app, cfg).await {
         emit_step(app, STEP_INSTALL, "② 驱动与 llama 安装检查", "failed", true);
         return Err(e);
     }
-    emit_step(app, STEP_INSTALL, "② 驱动与 llama 安装检查", "success", false);
+    emit_step(
+        app,
+        STEP_INSTALL,
+        "② 驱动与 llama 安装检查",
+        "success",
+        false,
+    );
 
     // ---- ③ 自动加载配置 ----
     emit_step(app, STEP_INIT, "③ 自动加载配置", "running", true);

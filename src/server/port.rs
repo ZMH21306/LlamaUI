@@ -3,14 +3,17 @@
 
 use std::net::TcpListener;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use tauri::AppHandle;
+use tokio::sync::Semaphore;
 
 use futures::stream::{self, StreamExt};
 
-use super::cmdline::is_llama_related_exe;
-use super::winapi::{get_process_exe_name, is_pid_alive};
+use super::winapi::is_pid_alive;
 use crate::detect::CancelFlag;
 use crate::log::emit_log;
+use crate::util::process::silent_tokio_command;
 
 /// 并行探测的前 N 个端口上限。剩余端口（>=N）顺序探测。
 ///
@@ -19,6 +22,9 @@ use crate::log::emit_log;
 /// `futures::stream::buffer_unordered(PARALLEL_PROBE)` 把前 10 个端口并行探测，
 /// 找到第一个空闲立即返回，使常见「端口空闲」场景的探测时间从分钟级降到 < 1s。
 const PARALLEL_PROBE: u16 = 10;
+
+/// 并行端口探测的并发限制（防止系统资源耗尽）
+const MAX_CONCURRENT_PORT_PROBES: usize = 20;
 
 /// 异步检查 `127.0.0.1:port` 是否可绑定。
 /// 用 `tokio::task::spawn_blocking` 包裹 `std::net::TcpListener::bind`，避免阻塞
@@ -30,81 +36,15 @@ pub async fn is_port_available(port: u16) -> bool {
         .unwrap_or(false)
 }
 
-/// 用 `netstat -ano -p TCP` 查找正在监听指定端口的进程 PID。
-/// 仅 Windows 有效（其它平台返回 None）。
-#[allow(dead_code)] // 保留以备未来「端口被 llama 占用则杀进程」逻辑复用
-#[cfg(windows)]
-pub async fn find_pid_listening_on(port: u16) -> Option<u32> {
-    use std::process::Stdio;
-    let output = tokio::process::Command::new("netstat")
-        .args(["-ano", "-p", "TCP"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
-        .await
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_netstat_for_port(&stdout, port)
-}
-
-#[cfg(not(windows))]
-pub async fn find_pid_listening_on(_port: u16) -> Option<u32> {
-    None
-}
-
-/// 从 netstat 输出里找出监听指定端口的 PID。
-/// 行格式：  TCP    0.0.0.0:8000    0.0.0.0:0    LISTENING    1234
-///          索引: 0      1             2            3             4
-/// 行字段数 ≥ 4，state 在倒数第二，pid 在最后。
-#[allow(dead_code)]
-fn parse_netstat_for_port(output: &str, port: u16) -> Option<u32> {
-    let needle = format!(":{}", port);
-    for line in output.lines() {
-        let trimmed = line.trim_start();
-        if !(trimmed.starts_with("TCP") || trimmed.starts_with("UDP")) {
-            continue;
-        }
-        if !trimmed.contains(&needle) {
-            continue;
-        }
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() < 5 {
-            continue;
-        }
-        // state 在倒数第二，pid 在最后
-        let state = parts[parts.len() - 2].to_ascii_uppercase();
-        // 状态匹配：LISTENING / LISTEN（中英文 locale 都覆盖）
-        if state != "LISTENING" && state != "LISTEN" {
-            continue;
-        }
-        if let Ok(pid) = parts[parts.len() - 1].parse::<u32>() {
-            return Some(pid);
-        }
-    }
-    None
-}
-
-/// 检查端口是否被我们认为是"占用但可释放"的：要么是被 llama 进程占用，要么根本无法找到
-/// 占用者（罕见，意味着权限不足或被内核态组件持有）。若是"其它服务"占用则不算可释放。
-#[allow(dead_code)]
-fn port_holder_is_killable(pid: Option<u32>) -> bool {
-    match pid {
-        None => true, // 找不到占用者：仍尝试一次（极端情况兜底）
-        Some(p) => matches!(get_process_exe_name(p), Some(name) if is_llama_related_exe(&name)),
-    }
-}
-
 /// 用 taskkill 杀进程（仅 Windows）。
 #[cfg(target_os = "windows")]
 pub async fn kill_pid_with_taskkill(pid: u32) {
     use std::process::Stdio;
-    // 1. 优雅终止
-    let _ = tokio::process::Command::new("taskkill")
+    // 1. 优雅终止（使用静默命令，Windows 下无控制台窗口）
+    let _ = silent_tokio_command("taskkill")
         .args(["/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(0x08000000)
         .output()
         .await;
 }
@@ -113,11 +53,10 @@ pub async fn kill_pid_with_taskkill(pid: u32) {
 #[cfg(target_os = "windows")]
 pub async fn force_kill_pid(pid: u32) {
     use std::process::Stdio;
-    let _ = tokio::process::Command::new("taskkill")
+    let _ = silent_tokio_command("taskkill")
         .args(["/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(0x08000000)
         .output()
         .await;
 }
@@ -126,7 +65,7 @@ pub async fn force_kill_pid(pid: u32) {
 #[cfg(not(target_os = "windows"))]
 pub async fn kill_pid_with_taskkill(pid: u32) {
     use std::process::Stdio;
-    let _ = tokio::process::Command::new("kill")
+    let _ = silent_tokio_command("kill")
         .arg(pid.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -138,7 +77,7 @@ pub async fn kill_pid_with_taskkill(pid: u32) {
 #[cfg(not(target_os = "windows"))]
 pub async fn force_kill_pid(pid: u32) {
     use std::process::Stdio;
-    let _ = tokio::process::Command::new("kill")
+    let _ = silent_tokio_command("kill")
         .args(["-9", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -150,10 +89,6 @@ pub async fn force_kill_pid(pid: u32) {
 pub struct PortChoice {
     pub port: u16,
     pub shifted: bool,
-    pub killed_holders: Vec<u32>,
-    /// 哪些端口被非 llama 占用而顺延。
-    #[allow(dead_code)] // 保留字段供未来 P1 修复「端口被 llama 占用则杀」逻辑
-    pub other_blockers: Vec<u16>,
 }
 
 /// 智能端口选择（并行探测前 10 个端口 + 顺序探测剩余 + 取消支持）。
@@ -180,6 +115,9 @@ pub async fn select_smart_port(
     max_probes: u16,
     cancel: &CancelFlag,
 ) -> Result<PortChoice, String> {
+    // 运行时信号量，用于限制并发端口探测（防止端口扫描资源耗尽）
+    static RUNTIME_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+    let _semaphore = RUNTIME_SEMAPHORE.get_or_init(|| Semaphore::new(MAX_CONCURRENT_PORT_PROBES));
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -187,8 +125,6 @@ pub async fn select_smart_port(
     let mut choice = PortChoice {
         port: desired,
         shifted: false,
-        killed_holders: Vec::new(),
-        other_blockers: Vec::new(),
     };
 
     // 1) 先杀本程序之前拉起的 llama-server（restart 流程关键）
@@ -216,8 +152,11 @@ pub async fn select_smart_port(
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
             if !is_pid_alive(pid) {
-                choice.killed_holders.push(pid);
-                emit_log(app, "system", &format!("旧 llama-server（PID {}）已停止", pid));
+                emit_log(
+                    app,
+                    "system",
+                    &format!("旧 llama-server（PID {}）已停止", pid),
+                );
             } else {
                 emit_log(
                     app,
@@ -233,13 +172,19 @@ pub async fn select_smart_port(
     }
 
     // 2) 并行探测前 PARALLEL_PROBE 个端口（DEFECT-004 性能修复）
+    // 使用信号量限制并发，防止系统资源耗尽
     let par = PARALLEL_PROBE.min(max_probes);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PORT_PROBES));
     let candidates: Vec<u16> = (0..par)
         .map(|i| desired.saturating_add(i))
         .filter(|&p| p != 0)
         .collect();
-    let probes = stream::iter(candidates.iter().copied().map(|port| async move {
-        (port, is_port_available(port).await)
+    let probes = stream::iter(candidates.iter().copied().map(|port| {
+        let sem = semaphore.clone();
+        async move {
+            let _permit = sem.acquire().await.unwrap();
+            (port, is_port_available(port).await)
+        }
     }))
     .buffer_unordered(par as usize)
     .collect::<Vec<_>>()
@@ -267,10 +212,7 @@ pub async fn select_smart_port(
     }
 
     if !auto_shift {
-        return Err(format!(
-            "端口 {} 被占用且未启用自动顺延",
-            desired
-        ));
+        return Err(format!("端口 {} 被占用且未启用自动顺延", desired));
     }
 
     Err(format!(
@@ -289,17 +231,26 @@ async fn probe_ports_parallel(desired: u16, max: u16, cancel: &CancelFlag) -> Op
         return None;
     }
     let par = PARALLEL_PROBE.min(max);
+    // 使用信号量限制并发数，防止系统资源耗尽
+    let semaphore = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_PORT_PROBES));
     let candidates: Vec<u16> = (0..par)
         .map(|i| desired.saturating_add(i))
         .filter(|&p| p != 0)
         .collect();
-    let probes = stream::iter(candidates.iter().copied().map(|port| async move {
-        (port, is_port_available(port).await)
+    let probes = stream::iter(candidates.iter().copied().map(|port| {
+        let sem = semaphore.clone();
+        async move {
+            // 获取信号量许可，限制并发
+            let _permit = sem.acquire().await.unwrap();
+            (port, is_port_available(port).await)
+        }
     }))
     .buffer_unordered(par as usize)
     .collect::<Vec<_>>()
     .await;
-    probes.into_iter().find_map(|(port, avail)| if avail { Some(port) } else { None })
+    probes
+        .into_iter()
+        .find_map(|(port, avail)| if avail { Some(port) } else { None })
 }
 
 #[cfg(test)]

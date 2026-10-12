@@ -30,12 +30,20 @@ pub mod tasks;
 pub mod winapi;
 
 // ============================================================
-// 公共 re-export：仅保留外部代码实际依赖的类型
+// P2-3 新服务器管理架构
+// ===========================================================
+
+pub mod manager;
+pub mod legacy;
+
 // ============================================================
+// 公共 re/export：仅保留外部代码实际依赖的类型
+// ===========================================================
 
 // 进程管理主类型：commands / init 通过 `crate::server::ServerProcess` 访问
 pub use state::ServerProcess;
+pub use manager::state_store::ServerStateStore;
 
-// 公开类型 re-export：保持 `crate::server::ServerStatus` / `LogLine` 等
+// 公开类型 re/export：保持 `crate::server::ServerStatus` / `LogLine` 等
 // 历史路径可用。真正的类型定义在 `crate::events`。
 pub use crate::events::{LogLine, ServerStatus};

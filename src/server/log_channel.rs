@@ -98,7 +98,11 @@ mod tests {
                     group: None,
                 },
             );
-            assert!(!ok, "通道满时 try_send_or_count 必须返回 false（第 {} 条）", i);
+            assert!(
+                !ok,
+                "通道满时 try_send_or_count 必须返回 false（第 {} 条）",
+                i
+            );
         }
         let snapshot_after = DROPPED_LOG_LINES.load(Ordering::Relaxed);
         assert_eq!(

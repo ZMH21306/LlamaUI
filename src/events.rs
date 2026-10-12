@@ -14,21 +14,18 @@
 use serde::{Deserialize, Serialize};
 
 /// 服务状态变化事件。
-#[allow(dead_code)] // 历史导出：crate 外部消费者可能依赖
 pub const EVT_SERVER_STATUS: &str = "server-status";
 
 /// 服务日志行事件（stdout / stderr / system）。
 pub const EVT_SERVER_LOG: &str = "server-log";
 
 /// 周期性指标事件（每 ~500ms 一次）。
-#[allow(dead_code)] // 历史导出：crate 外部消费者可能依赖
 pub const EVT_SERVER_METRICS: &str = "server-metrics";
 
 /// 初始化步骤状态变化事件。
 pub const EVT_SERVER_STEP: &str = "server-step";
 
 /// 自动检测进度事件。
-#[allow(dead_code)] // 历史导出：crate 外部消费者可能依赖
 pub const EVT_DETECT_PROGRESS: &str = "detect-progress";
 
 // ============================================================
@@ -44,8 +41,186 @@ pub enum ServerStatus {
     Starting,
     /// 运行中。
     Running,
+    /// 停止中（SIGTERM 已发送，等待子进程退出；5s 内未退出则强杀）。
+    Stopping,
     /// 异常退出。
     Crashed,
+}
+
+/// 下载状态事件（llama-server 下载流程）
+pub const EVT_DOWNLOAD_STATE: &str = "download-state";
+
+/// 下载日志条目（用于前端日志显示）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadLogEntry {
+    /// 日志文本
+    pub message: String,
+    /// 日志级别（"info", "warn", "error"）
+    #[serde(default)]
+    pub level: String,
+    /// 当前阶段（如 "initializing", "fetching_version", "downloading" 等）
+    #[serde(default)]
+    pub stage: String,
+    /// 是否自动滚动到底部
+    #[serde(default = "default_true")]
+    pub auto_scroll: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// 下载状态变更事件（llama-server 下载流程）
+///
+/// **设计要点**：
+/// - 所有状态变更通过此事件通知前端，前端根据此状态机驱动 UI
+/// - `Running` 状态下每次进度更新都会附带一个 `progress` 事件（见 `EVT_DOWNLOAD_PROGRESS`）
+/// - `Failed` 和 `Cancelled` 是终态，触发后不再发射任何状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DownloadState {
+    /// 开始下载
+    Started {
+        backend: String,
+        log_message: Option<String>,
+    },
+    /// 下载进行中
+    Running,
+    /// 正在取消
+    Cancelling,
+    /// 已取消
+    Cancelled,
+    /// 下载完成
+    Completed {
+        path: String,
+        file_size: u64,
+        sha256: String,
+        elapsed_ms: u64,
+        log_message: Option<String>,
+    },
+    /// 下载失败
+    Failed {
+        error: String,
+        log_entry: Option<DownloadLogEntry>,
+    },
+}
+
+impl DownloadState {
+    /// 是否为终态（不会再接收任何状态事件）
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            DownloadState::Cancelled
+                | DownloadState::Completed { .. }
+                | DownloadState::Failed { .. }
+        )
+    }
+}
+
+/// 下载进度事件（实时推送给前端）
+///
+/// 此事件与 `DownloadState::Running` 配合使用，在每次进度更新时发射。
+/// 前端应在收到 `DownloadState::Running` 后开始监听此事件。
+pub const EVT_DOWNLOAD_PROGRESS: &str = "download-progress";
+
+// ============================================================
+// 更新相关事件
+// ============================================================
+
+/// 更新状态变更事件（检查 → 下载 → 安装 → 完成/失败）。
+pub const EVT_UPDATE_STATE: &str = "update-state";
+
+/// 更新下载进度事件（实时推送）。
+pub const EVT_UPDATE_DOWNLOAD_PROGRESS: &str = "update-download-progress";
+
+/// 更新流程状态机。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UpdateState {
+    /// 空闲（未进行任何更新操作）。
+    Idle,
+    /// 正在检查更新。
+    Checking {
+        current_version: String,
+        message: String,
+    },
+    /// 检查完成，有新版本。
+    Available {
+        latest_version: String,
+        current_version: String,
+        release_notes: String,
+        download_url: String,
+        file_size: u64,
+        sha256: Option<String>,
+        message: String,
+    },
+    /// 检查完成，已是最新。
+    UpToDate {
+        current_version: String,
+        message: String,
+    },
+    /// 检查失败。
+    CheckFailed {
+        error: String,
+        current_version: String,
+    },
+    /// 开始下载更新。
+    DownloadStarted {
+        total_bytes: u64,
+        version: String,
+        message: String,
+    },
+    /// 下载进行中。
+    DownloadProgress {
+        progress: f64,
+        downloaded: u64,
+        total: u64,
+        speed_mbps: f64,
+        eta_secs: Option<u64>,
+        message: String,
+    },
+    /// 下载完成，准备安装。
+    DownloadCompleted {
+        download_path: String,
+        file_size: u64,
+        version: String,
+        message: String,
+    },
+    /// 安装中。
+    Installing {
+        progress: f64,
+        message: String,
+        version: String,
+    },
+    /// 安装完成（需要重启）。
+    Completed {
+        new_version: String,
+        elapsed_ms: u64,
+        message: String,
+    },
+    /// 下载/安装失败。
+    Failed {
+        error: String,
+        version: String,
+        stage: String,
+        message: String,
+    },
+    /// 已取消。
+    Cancelled { message: String },
+}
+
+/// 更新下载进度（实时推送给前端）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDownloadProgress {
+    pub stage: String,
+    pub progress: f64,
+    pub downloaded: u64,
+    pub total: u64,
+    pub speed_mbps: f64,
+    pub eta_secs: Option<u64>,
+    pub message: String,
+    /// 当前版本
+    pub version: Option<String>,
+    /// 当前阶段（如: "verifying", "extracting" 等）
+    pub step: Option<String>,
 }
 
 /// 单行日志。
@@ -115,6 +290,9 @@ mod tests {
         assert_eq!(EVT_SERVER_METRICS, "server-metrics");
         assert_eq!(EVT_SERVER_STEP, "server-step");
         assert_eq!(EVT_DETECT_PROGRESS, "detect-progress");
+        assert_eq!(EVT_DOWNLOAD_STATE, "download-state");
+        assert_eq!(EVT_UPDATE_STATE, "update-state");
+        assert_eq!(EVT_UPDATE_DOWNLOAD_PROGRESS, "update-download-progress");
     }
 
     #[test]

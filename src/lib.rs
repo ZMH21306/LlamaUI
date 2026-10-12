@@ -29,43 +29,75 @@
         clippy::bool_assert_comparison
     )
 )]
+#![allow(dead_code)]
 
+/// # 文档
+///
+/// 本 crate 暴露以下公开模块：
+/// - `config`：应用配置管理
+/// - `download`：llama-server 和 HF 模型下载
+/// - `errors`：统一错误类型
+/// - `events`：事件类型（服务端状态机、日志、进度）
+/// - `server`：llama-server 进程管理
+/// - `commands`：Tauri command 入口
+/// - `util`：通用工具（path / time / http / process）
 mod commands;
 mod config;
-mod config_io;
+mod constants;
 mod detect;
-mod error;
-pub mod error_macros;
+mod download;
+mod errors;
 mod events;
-pub mod gpu_detection;
-pub mod gpu_detect;
-pub mod gpu_error_transformer;
+mod gpu;
 mod init;
 mod log;
-pub mod log_sanitizer;
-mod llama_downloader;
-mod model_management;
-mod plugin_framework;
+mod models;
+mod net;
 mod recovery;
-mod remote_server;
+mod remote;
+mod security;
 mod server;
-mod tracing_setup;
-mod update_check;
-mod util;
+mod update;
+pub mod util;
 
-pub use error::{AppError, ConfigError, DetectError, ProcessError};
+// reqwest 0.12 与 reqwest-middleware 0.5（依赖 reqwest 0.13）版本冲突，
+// 暂时回退到纯 reqwest + 应用层重试（指数退避）。后续需升级 reqwest 到 0.13 再启用中间件。
+
+pub use config::{
+    export_config, import_config, AppConfig, ConfigStore, CURRENT_CONFIG_VERSION,
+    DEFAULT_PRO_CUSTOM_COMMAND,
+};
+pub use download::llama_downloader::{
+    detect_gpu_backend, download_and_install, DownloadProgress, DownloadResult, GpuBackend,
+};
+pub use errors::{AppError, ConfigError, DetectError, ProcessError};
 pub use events::{LogLine, ServerStatus, StepStatus};
-pub use log::{emit_log, emit_log_to, emit_status, emit_step};
+pub use gpu::detection::{
+    auto_fix_gpu_issue, detect_all_gpus_async, diagnose_gpu_issues, GpuInfo, GpuIssue,
+};
+pub use log::{
+    emit_log, emit_log_to, emit_status, emit_step, get_log_file_path, init, sanitize_log,
+};
+pub use models::{ModelCatalog, ModelInfo, ModelManager};
+pub use net::{NetClient, NetClientBuilder};
+pub use recovery::{diagnose, DiagnosisIssue, DiagnosisResult, IssueType};
+pub use remote::{probe_remote_server, RemoteServerInfo, RemoteServerManager};
+pub use update::{
+    check_for_updates, cleanup_old_installation, get_platform, is_newer_version, OldInstallation,
+    UpdateCheckResult,
+};
 
 use commands::AppState;
 use tauri::Emitter;
 use tauri::Manager;
 
+use commands::hf_model_cmd::HfState;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 1. 初始化 tracing 日志系统（控制台彩色 + 文件滚动 + panic hook）
     //    这必须在所有其他初始化之前，包括旧的 panic hook。
-    tracing_setup::init();
+    init();
 
     tracing::info!(
         target: "LlamaUI",
@@ -79,16 +111,32 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
+        .manage(HfState::new())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let state = window.state::<AppState>();
-                let status = state.server.status();
-                if status == crate::events::ServerStatus::Running
-                    || status == crate::events::ServerStatus::Starting
-                {
-                    // 拦截关闭请求，提示用户先停止服务
+                let label = window.label();
+                // HuggingFace 模型商店窗口：关闭时隐藏而非销毁，确保后续
+                // open_hf_store_window 能通过 get_webview_window 复用同一实例，
+                // 避免 config 预创建 + builder 重建导致的"弹两个窗口"问题。
+                if label == "hf-store" {
                     api.prevent_close();
-                    let _ = window.emit("close-requested", true);
+                    let _ = window.hide();
+                    return;
+                }
+                if label == "main" {
+                    // 关闭 hf-store 窗口（如果存在），避免其成为孤儿窗口
+                    if let Some(hf_window) = window.app_handle().get_webview_window("hf-store") {
+                        let _ = hf_window.hide();
+                    }
+                    let state = window.state::<AppState>();
+                    let status = state.server.status();
+                    if status == crate::events::ServerStatus::Running
+                        || status == crate::events::ServerStatus::Starting
+                    {
+                        // 拦截关闭请求，提示用户先停止服务
+                        api.prevent_close();
+                        let _ = window.emit("close-requested", true);
+                    }
                 }
             }
         })
@@ -109,6 +157,7 @@ pub fn run() {
             commands::detect_cmd::detect_models_dir,
             commands::detect_cmd::cancel_detection,
             commands::detect_cmd::check_models_dir,
+            commands::detect_cmd::get_llama_version,
             // 启动初始化
             commands::init_cmd::run_initialization,
             // 杂项
@@ -124,8 +173,11 @@ pub fn run() {
             commands::recovery_cmd::auto_fix_issues,
             commands::update_cmd::check_updates,
             commands::update_cmd::cleanup_old_version,
+            commands::update_cmd::download_update_cmd,
+            commands::update_cmd::cancel_update_download,
             // llama 自动下载
             commands::download_cmd::download_llama_server,
+            commands::download_cmd::cancel_download_llama_server,
             commands::download_cmd::detect_gpu,
             commands::download_cmd::list_gpu_backends,
             // GPU 检测与诊断
@@ -137,14 +189,23 @@ pub fn run() {
             commands::model_cmd::refresh_models,
             commands::model_cmd::select_model,
             commands::model_cmd::get_selected_model,
+            // HuggingFace 模型商店
+            commands::hf_model_cmd::search_hf_models,
+            commands::hf_model_cmd::get_hf_model_files,
+            commands::hf_model_cmd::download_hf_model,
+            commands::hf_model_cmd::cancel_hf_download,
+            commands::hf_model_cmd::set_hf_token,
+            commands::hf_model_cmd::get_hf_token,
+            commands::hf_model_cmd::set_hf_download_dir,
+            commands::hf_model_cmd::get_hf_download_dir,
+            commands::hf_model_cmd::precreate_hf_store_window,
+            commands::hf_model_cmd::open_hf_store_window,
             // 远程服务器管理
             commands::remote_cmd::add_remote_server,
             commands::remote_cmd::remove_remote_server,
             commands::remote_cmd::list_remote_servers,
             commands::remote_cmd::get_remote_server,
             commands::remote_cmd::probe_remote_server,
-            // 插件管理
-            commands::plugin_cmd::list_plugins,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

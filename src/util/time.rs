@@ -20,7 +20,12 @@ mod tests {
     fn now_ts_format_is_stable() {
         // 不验证具体值（依赖系统时间），仅验证格式
         let s = now_ts();
-        assert_eq!(s.len(), 23, "格式必须为 YYYY-MM-DD HH:MM:SS.mmm：got `{}`", s);
+        assert_eq!(
+            s.len(),
+            23,
+            "格式必须为 YYYY-MM-DD HH:MM:SS.mmm：got `{}`",
+            s
+        );
         assert_eq!(&s[4..5], "-");
         assert_eq!(&s[7..8], "-");
         assert_eq!(&s[10..11], " ");

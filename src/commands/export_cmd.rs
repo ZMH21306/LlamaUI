@@ -2,11 +2,11 @@
 //!
 //! 支持将运行日志导出为 txt/json/csv 格式。
 
-use serde::{Deserialize, Serialize};
-use tauri::State;
-use crate::server::LogLine;
 use super::AppState;
+use crate::server::LogLine;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use tauri::State;
 
 /// 导出格式枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -41,12 +41,9 @@ fn default_export_scope() -> String {
 
 /// 导出日志到文件
 #[tauri::command]
-pub fn export_logs(
-    state: State<'_, AppState>,
-    req: ExportLogsRequest,
-) -> Result<(), String> {
+pub fn export_logs(state: State<'_, AppState>, req: ExportLogsRequest) -> Result<(), String> {
     let logs = state.server.logs_snapshot();
-    
+
     // 根据 scope 过滤日志
     let filtered = match req.scope.as_str() {
         "visible" => {
@@ -64,17 +61,16 @@ pub fn export_logs(
         }
         _ => logs, // "all"
     };
-    
+
     // 格式化输出
     let content = match req.format {
         ExportFormat::Text => format_as_text(&filtered),
         ExportFormat::Json => format_as_json(&filtered),
         ExportFormat::Csv => format_as_csv(&filtered),
     };
-    
+
     // 写入文件
-    fs::write(&req.path, content)
-        .map_err(|e| format!("写入文件失败：{}", e))
+    fs::write(&req.path, content).map_err(|e| format!("写入文件失败：{}", e))
 }
 
 fn format_as_text(logs: &[LogLine]) -> String {
@@ -93,8 +89,10 @@ fn format_as_csv(logs: &[LogLine]) -> String {
     for l in logs {
         // CSV 转义：文本中的双引号加倍，字段用双引号包裹
         let text = l.text.replace('"', "\"\"");
-        out.push_str(&format!("\"{}\",\"{}\",\"{}\"\n", 
-            l.timestamp, l.stream, text));
+        out.push_str(&format!(
+            "\"{}\",\"{}\",\"{}\"\n",
+            l.timestamp, l.stream, text
+        ));
     }
     out
 }
@@ -102,7 +100,7 @@ fn format_as_csv(logs: &[LogLine]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn format_text_basic() {
         let logs = vec![
@@ -113,14 +111,14 @@ mod tests {
         assert!(out.contains("[stdout] hello"));
         assert!(out.contains("[stderr] error"));
     }
-    
+
     #[test]
     fn format_csv_escapes_quotes() {
         let logs = vec![LogLine::plain("stdout", "say \"hello\"")];
         let out = format_as_csv(&logs);
         assert!(out.contains("\"say \"\"hello\"\"\""));
     }
-    
+
     #[test]
     fn format_json_valid() {
         let logs = vec![LogLine::plain("stdout", "test")];

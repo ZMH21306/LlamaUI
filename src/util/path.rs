@@ -18,6 +18,20 @@
 
 use std::path::{Path, PathBuf};
 
+// 从统一常量模块引入共享常量
+use crate::constants::{RISKY_DIR_SEGMENTS, SAFE_PATH_COMPONENTS};
+
+// 以下常量仅本模块使用，保持本地定义（历史兼容性）
+/// 可执行文件名白名单（大小写不敏感，自动追加 `.exe` 变体）。
+///
+/// 用于 `validate_executable_candidate` 的文件名校验。
+pub const ALLOWED_LLAMA_EXECUTABLE_NAMES: &[&str] = &["llama-server"];
+
+/// 路径标准化后用于比较的最大长度。
+///
+/// 超过此长度的路径将被截断以避免 DoS（极端长路径攻击）。
+pub const MAX_PATH_LENGTH_FOR_COMPARE: usize = 4096;
+
 /// 把路径标准化为"适合大小写不敏感比较"的形式。
 ///
 /// 1) 转 ASCII 小写
@@ -55,9 +69,6 @@ pub fn segment_eq_with_separator(path: &str, sep: &str, segment: &str) -> bool {
     path.contains(&needle)
 }
 
-/// 高风险目录段名。出现在父目录末段或中间段都视为可疑。
-pub const RISKY_DIR_SEGMENTS: &[&str] = &["tmp", "temp", "downloads"];
-
 /// 判断 `path` 是否位于世界可写 / 临时目录。
 ///
 /// 检查两种情况（任一命中即返回 `true`）：
@@ -79,19 +90,45 @@ pub fn is_world_writable_path(path: &Path) -> bool {
     })
 }
 
+/// 检查路径是否包含不安全的组件（如 `..`, `.`, 设备名等）。
+///
+/// 用于防止路径遍历攻击：若路径的任意组件为 `..`、`.` 或设备名，
+/// 则视为不安全，返回 `true`。
+pub fn has_unsafe_component(path: &Path) -> bool {
+    path.components().any(|comp| {
+        let s = comp.as_os_str().to_string_lossy().to_ascii_lowercase();
+        SAFE_PATH_COMPONENTS
+            .iter()
+            .any(|unsafe_comp| s == *unsafe_comp)
+    })
+}
+
 /// 通用可执行文件白名单校验。
 ///
-/// 接受候选前做三项校验（任一不通过即返回 `None`）：
-/// 1) 必须是 regular file（拒绝目录 / FIFO / device）
+/// 接受候选前做四项校验（任一不通过即返回 `None`）：
+/// 1) 必须是 regular file（拒绝目录 / FIFO / device / 符号链接）
 /// 2) 文件名必须严格等于 `allowed_names` 中的某一个
 ///    （按大小写不敏感比较，自动追加 `.exe` 变体）
 /// 3) 父目录不能在世界可写位置（防 PATH 注入）
+/// 4) 若文件是符号链接，目标路径也必须在安全位置
 ///
 /// `allowed_names` 应只包含**文件名**（不含路径），如 `&["llama-server"]`。
 pub fn validate_executable_candidate(p: &Path, allowed_names: &[&str]) -> Option<PathBuf> {
-    if !p.is_file() {
+    // 0) 检查路径包含不安全组件（如 ..、.、设备名）以防止路径遍历
+    if has_unsafe_component(p) {
         return None;
     }
+    // 1) 必须是 regular file（拒绝目录 / FIFO / device / 符号链接）
+    // 使用 symlink_metadata 而非 metadata，避免跟随符号链接
+    let metadata = std::fs::symlink_metadata(p).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    // 拒绝符号链接：即使目标是合法文件，符号链接本身可能被替换
+    if metadata.file_type().is_symlink() {
+        return None;
+    }
+
     let name = p.file_name().and_then(|s| s.to_str())?.to_ascii_lowercase();
     let stem = name.trim_end_matches(".exe");
     if !allowed_names.iter().any(|allowed| {
@@ -104,8 +141,167 @@ pub fn validate_executable_candidate(p: &Path, allowed_names: &[&str]) -> Option
     if is_world_writable_path(p) {
         return None;
     }
+
     Some(p.to_path_buf())
 }
+
+/// P0-2 安全修复：对下载/保存类输入的文件名做严格净化，拒绝路径遍历攻击。
+///
+/// 背景：HuggingFace 模型文件名由 HF API 返回（`siblings[].rfilename`），理论上是
+/// 相对路径（如 `model.gguf` 或 `subdir/model.gguf`）。但若 API 被劫持或前端
+/// 拼接时混入恶意字符，攻击者可构造 `../etc/passwd` 或 `..\evil.exe` 写入
+/// 指定目录之外，造成任意文件覆盖 / 任意文件写入。
+///
+/// 规则：
+/// - 拒绝含 `..` 段的路径（`..` / `../` / `..\` / `foo/../../bar`）
+/// - 拒绝绝对路径（`/` 开头、`X:\` 开头、`\\` UNC）
+/// - 拒绝 Windows 盘符前缀（`C:` / `c:`）
+/// - 拒绝 NUL 字符
+/// - 拒绝 Windows 设备名（`CON` / `NUL` / `PRN` / `AUX` / `LPT1` 等）
+/// - 拒绝控制字符（`< 0x20`）
+/// - 拒绝长度 > 255 的单段
+/// - 拒绝多段路径（仅允许单层文件名，如 `model.gguf`）
+///
+/// 返回净化后的**最后一段**文件名（剥掉目录前缀，仅保留 `basename`），
+/// 调用方应将其与目标目录拼接后保存。
+///
+/// # Examples
+/// ```rust
+/// use llama_ui_lib::util::path::sanitize_filename;
+/// assert_eq!(sanitize_filename("model.gguf"), Ok("model.gguf".to_string()));
+/// assert_eq!(sanitize_filename("../etc/passwd").as_ref().err().map(|e| e.to_string()), Some("路径遍历（含 `..` 段）".to_string()));
+/// ```
+pub fn sanitize_filename(input: &str) -> Result<String, FilenameError> {
+    if input.is_empty() {
+        return Err(FilenameError::Empty);
+    }
+    if input.contains('\0') {
+        return Err(FilenameError::Nul);
+    }
+    // 拒绝控制字符（含 \r \n \t \x00-\x1F）
+    if input.bytes().any(|b| b < 0x20) {
+        return Err(FilenameError::ControlChar);
+    }
+    // 拒绝绝对路径：Unix `/` 开头、UNC `\\` 开头、Windows 盘符 `X:\` 开头
+    if input.starts_with('/')
+        || input.starts_with('\\')
+        || input.len() >= 2
+            && input.as_bytes()[1] == b':'
+            && (input.as_bytes()[0].is_ascii_alphabetic())
+    {
+        return Err(FilenameError::AbsolutePath);
+    }
+    // 拒绝多段路径（含 `/` 或 `\` 且不止一段）
+    let has_sep = input.contains('/') || input.contains('\\');
+    if has_sep {
+        // 逐段检查 `..` / `.` / 设备名 / 长度
+        for seg in input.split(['/', '\\']) {
+            if seg.is_empty() {
+                // 允许尾部的空段（如 `model.gguf/` 会被 trim 处理）
+                continue;
+            }
+            if seg == "." || seg == ".." {
+                return Err(FilenameError::PathTraversal);
+            }
+            if seg.len() > 255 {
+                return Err(FilenameError::SegmentTooLong);
+            }
+            let seg_upper = seg.to_ascii_uppercase();
+            if matches!(
+                seg_upper.as_str(),
+                "CON"
+                    | "NUL"
+                    | "PRN"
+                    | "AUX"
+                    | "LPT1"
+                    | "LPT2"
+                    | "LPT3"
+                    | "LPT4"
+                    | "LPT5"
+                    | "LPT6"
+                    | "LPT7"
+                    | "LPT8"
+                    | "LPT9"
+                    | "COM1"
+                    | "COM2"
+                    | "COM3"
+                    | "COM4"
+                    | "COM5"
+                    | "COM6"
+                    | "COM7"
+                    | "COM8"
+                    | "COM9"
+            ) {
+                return Err(FilenameError::DeviceName);
+            }
+        }
+        // 多段路径：拒绝（仅允许单层文件名）
+        return Err(FilenameError::Subdirectory);
+    }
+    // 单段路径：直接做设备名 / 长度检查
+    if input.len() > 255 {
+        return Err(FilenameError::SegmentTooLong);
+    }
+    let upper = input.to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON"
+            | "NUL"
+            | "PRN"
+            | "AUX"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+    ) {
+        return Err(FilenameError::DeviceName);
+    }
+    Ok(input.to_string())
+}
+
+/// 文件名净化失败的错误类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilenameError {
+    Empty,
+    Nul,
+    ControlChar,
+    AbsolutePath,
+    PathTraversal,
+    SegmentTooLong,
+    DeviceName,
+    Subdirectory,
+}
+
+impl std::fmt::Display for FilenameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("文件名不能为空"),
+            Self::Nul => f.write_str("文件名含 NUL 字符"),
+            Self::ControlChar => f.write_str("文件名含控制字符"),
+            Self::AbsolutePath => f.write_str("文件名不能是绝对路径"),
+            Self::PathTraversal => f.write_str("路径遍历（含 `..` 段）"),
+            Self::SegmentTooLong => f.write_str("文件名单段超过 255 字节"),
+            Self::DeviceName => f.write_str("文件名是 Windows 设备名（CON/NUL/PRN/AUX/LPT*/COM*）"),
+            Self::Subdirectory => f.write_str("文件名不能含子目录（仅允许单层文件名）"),
+        }
+    }
+}
+
+impl std::error::Error for FilenameError {}
 
 #[cfg(test)]
 mod tests {
@@ -144,37 +340,53 @@ mod tests {
     #[test]
     fn segment_eq_with_separator_finds_middle() {
         // 路径中段含 `\temp\`
-        assert!(segment_eq_with_separator("c:\\foo\\temp\\bar", "\\", "temp"));
+        assert!(segment_eq_with_separator(
+            "c:\\foo\\temp\\bar",
+            "\\",
+            "temp"
+        ));
     }
 
     #[test]
     fn segment_eq_with_separator_rejects_partial() {
         // `tempbar` 不是 `temp` + 分隔符
-        assert!(!segment_eq_with_separator("c:\\foo\\tempbar\\bar", "\\", "temp"));
+        assert!(!segment_eq_with_separator(
+            "c:\\foo\\tempbar\\bar",
+            "\\",
+            "temp"
+        ));
     }
 
     #[test]
     fn is_world_writable_detects_temp_dir() {
         // 父目录末段是 temp
-        assert!(is_world_writable_path(Path::new("C:\\users\\x\\AppData\\Local\\Temp\\llama-server.exe")));
+        assert!(is_world_writable_path(Path::new(
+            "C:\\users\\x\\AppData\\Local\\Temp\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_detects_middle_temp() {
         // 父目录中含 \temp\
-        assert!(is_world_writable_path(Path::new("C:\\foo\\temp\\bar\\llama-server.exe")));
+        assert!(is_world_writable_path(Path::new(
+            "C:\\foo\\temp\\bar\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_allows_normal_dirs() {
         // 普通目录
-        assert!(!is_world_writable_path(Path::new("C:\\Program Files\\llama.cpp\\llama-server.exe")));
+        assert!(!is_world_writable_path(Path::new(
+            "C:\\Program Files\\llama.cpp\\llama-server.exe"
+        )));
     }
 
     #[test]
     fn is_world_writable_handles_relative_paths() {
         // 相对路径
-        assert!(!is_world_writable_path(Path::new("target/debug/llama-server.exe")));
+        assert!(!is_world_writable_path(Path::new(
+            "target/debug/llama-server.exe"
+        )));
     }
 
     #[test]
@@ -189,5 +401,114 @@ mod tests {
         // 不存在于测试环境中的文件，但 `is_file` 检查会先于名称检查
         let p = Path::new("C:\\nonexistent\\evil-llama.exe");
         assert!(validate_executable_candidate(p, &["llama-server"]).is_none());
+    }
+
+    // ---- P0-2 sanitize_filename 测试 ----
+
+    #[test]
+    fn sanitize_filename_accepts_simple() {
+        assert_eq!(sanitize_filename("model.gguf").unwrap(), "model.gguf");
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_path_traversal() {
+        assert_eq!(
+            sanitize_filename("../etc/passwd").err(),
+            Some(FilenameError::PathTraversal)
+        );
+        assert_eq!(
+            sanitize_filename("..\\evil.exe").err(),
+            Some(FilenameError::PathTraversal)
+        );
+        assert_eq!(
+            sanitize_filename("foo/../../bar").err(),
+            Some(FilenameError::PathTraversal)
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_absolute() {
+        assert_eq!(
+            sanitize_filename("/etc/passwd").err(),
+            Some(FilenameError::AbsolutePath)
+        );
+        assert_eq!(
+            sanitize_filename("\\\\server\\share\\file").err(),
+            Some(FilenameError::AbsolutePath)
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_windows_drive() {
+        assert_eq!(
+            sanitize_filename("C:\\windows\\system32\\cmd.exe").err(),
+            Some(FilenameError::AbsolutePath)
+        );
+        assert_eq!(
+            sanitize_filename("d:/data/model.gguf").err(),
+            Some(FilenameError::AbsolutePath)
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_device_names() {
+        assert_eq!(
+            sanitize_filename("CON").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("NUL").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("LPT1").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("COM1").err(),
+            Some(FilenameError::DeviceName)
+        );
+        assert_eq!(
+            sanitize_filename("prn").err(),
+            Some(FilenameError::DeviceName)
+        ); // 大小不敏感
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_control_chars() {
+        assert_eq!(
+            sanitize_filename("model\x00.gguf").err(),
+            Some(FilenameError::Nul)
+        );
+        assert_eq!(
+            sanitize_filename("model\n.gguf").err(),
+            Some(FilenameError::ControlChar)
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_empty() {
+        assert_eq!(sanitize_filename("").err(), Some(FilenameError::Empty));
+    }
+
+    #[test]
+    fn sanitize_filename_accepts_underscore_and_dash() {
+        assert_eq!(
+            sanitize_filename("my-model_v2.gguf").unwrap(),
+            "my-model_v2.gguf"
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_rejects_multiple_segments() {
+        // 含子目录的路径应被拒绝（仅允许单层文件名）
+        assert_eq!(
+            sanitize_filename("sub/model.gguf").err(),
+            Some(FilenameError::Subdirectory)
+        );
+        assert_eq!(
+            sanitize_filename("sub\\model.gguf").err(),
+            Some(FilenameError::Subdirectory)
+        );
     }
 }

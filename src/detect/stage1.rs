@@ -55,15 +55,6 @@ pub(crate) fn models() -> Option<PathBuf> {
     None
 }
 
-/// P2-1 白名单校验辅助函数（保留为阶段 1 的语义包装，便于未来扩展）。
-///
-/// 实现委托给 `util::path::validate_executable_candidate`，本函数的存在是为了
-/// 兼容历史调用点与测试代码。如需调整白名单规则，请直接修改 `util::path`。
-#[allow(dead_code)]
-pub(crate) fn validate_llama_candidate(p: &Path) -> Option<PathBuf> {
-    validate_executable_candidate(p, &["llama-server", "llama-server.exe"])
-}
-
 #[cfg(test)]
 mod tests {
     //! 白名单校验回归测试（P2-1）。
@@ -74,6 +65,13 @@ mod tests {
     //! - `/tmp` 等世界可写目录下的"合法名"被拒绝
     //! - 目录、FIFO 等非 regular file 被拒绝
     use super::*;
+
+    /// 阶段 1 在 `llama()` 中使用的白名单规则（与 `llama()` 内 ALLOWED 保持一致）。
+    const ALLOWED: &[&str] = &["llama-server", "llama-server.exe"];
+
+    fn validate_llama_candidate(p: &Path) -> Option<PathBuf> {
+        validate_executable_candidate(p, ALLOWED)
+    }
 
     /// 合法的 `llama-server.exe` 通过白名单
     #[cfg(windows)]

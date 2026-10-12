@@ -57,6 +57,24 @@ const SKIP_NAMES: &[&str] = &[
 
 /// 阶段 4：在所有盘符根下递归找 `llama-server.exe`。
 pub(crate) fn full_disk_llama(ctx: &Ctx) -> Option<PathBuf> {
+    // 先扫 home 目录（C:\Users\* 或其它平台下的用户主目录），
+    // 它不在 drive_roots() 里（盘符根跳过 users），必须单独处理。
+    if let Some(home) = dirs::home_dir() {
+        if ctx.check_deadline(4).is_err() {
+            return None;
+        }
+        ctx.emit(
+            4,
+            "④ 全盘深度扫描（兜底）",
+            &format!("扫描用户主目录：{}", home.display()),
+            false,
+            "running",
+        );
+        if let Some(found) = find_exe_recursive(&home, FULL_DISK_DEPTH, "llama-server", ctx) {
+            return Some(found);
+        }
+    }
+    // 再扫每个盘符根
     let roots = drive_roots();
     for (i, root) in roots.iter().enumerate() {
         if ctx.check_deadline(4).is_err() {
@@ -79,6 +97,24 @@ pub(crate) fn full_disk_llama(ctx: &Ctx) -> Option<PathBuf> {
 
 /// 阶段 4：在所有盘符根下递归找含 `.gguf` 的目录。
 pub(crate) fn full_disk_models(ctx: &Ctx) -> Option<PathBuf> {
+    // 先扫 home 目录（C:\Users\* 或其它平台下的用户主目录），
+    // 它不在 drive_roots() 里（盘符根跳过 users），必须单独处理。
+    if let Some(home) = dirs::home_dir() {
+        if ctx.check_deadline(4).is_err() {
+            return None;
+        }
+        ctx.emit(
+            4,
+            "④ 全盘深度扫描（兜底）",
+            &format!("扫描用户主目录：{}", home.display()),
+            false,
+            "running",
+        );
+        if let Some(found) = find_gguf_dir_recursive(&home, FULL_DISK_DEPTH, ctx) {
+            return Some(found);
+        }
+    }
+    // 再扫每个盘符根
     let roots = drive_roots();
     for (i, root) in roots.iter().enumerate() {
         if ctx.check_deadline(4).is_err() {

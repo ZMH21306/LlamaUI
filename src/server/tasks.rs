@@ -34,16 +34,17 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout};
 use tokio::task::JoinHandle;
 
-use crate::events::{LogLine, ServerStatus};
+use crate::events::{LogLine, ServerStatus, EVT_SERVER_METRICS};
 use crate::log::emit_log;
 use crate::util::time::now_ts;
 
 use super::log_channel::{try_send_or_count, DROPPED_LOG_LINES, LOG_CHANNEL_CAPACITY};
 use super::log_truncate::truncate_log_line;
-use super::metrics::{query_gpu_stats, Metrics, METRICS_INTERVAL_MS};
-use super::state::{ServerInner, MAX_LOG_LINES};
+use super::metrics::{query_gpu_stats, Metrics};
+use super::state::ServerInner;
 #[cfg(windows)]
 use super::winapi::query_windows_virtual_size;
+use crate::constants::{MAX_LOG_LINES, METRICS_INTERVAL_MS};
 
 use sysinfo::{ProcessesToUpdate, System};
 
@@ -227,10 +228,7 @@ pub(crate) fn spawn_metrics_sampler(
             // Snapshot what we need with the lock held briefly.
             let (pid_opt, uptime, port) = {
                 let guard = inner.lock();
-                let uptime = guard
-                    .started_at
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
+                let uptime = guard.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                 (guard.pid, uptime, guard.active_port)
             };
 
@@ -265,7 +263,11 @@ pub(crate) fn spawn_metrics_sampler(
             #[cfg(windows)]
             let virtual_size_bytes = {
                 let virt = query_windows_virtual_size(pid);
-                if virt > 0 { virt } else { virt_sysinfo }
+                if virt > 0 {
+                    virt
+                } else {
+                    virt_sysinfo
+                }
             };
             #[cfg(not(windows))]
             let virtual_size_bytes = virt_sysinfo;
@@ -306,7 +308,7 @@ pub(crate) fn spawn_metrics_sampler(
                     gpu_util_pct: acc_gpu_util / count,
                     app_memory_bytes: (acc_app_memory as f64 / f64::from(sample_count)) as u64,
                 };
-                let _ = app.emit("server-metrics", &m);
+                let _ = app.emit(EVT_SERVER_METRICS, &m);
 
                 // 重置累积器
                 acc_cpu = 0.0;
@@ -337,18 +339,11 @@ mod tests {
 
     /// 编译期断言：所有任务工厂都返回 `JoinHandle<()>`，
     /// 防止后续重构把签名改坏（`lifecycle::start` 收集到同一个 Vec）。
-    #[allow(dead_code)]
     fn _signature_invariants() {
-        fn _check_stdout(
-            s: ChildStdout,
-            tx: tokio::sync::mpsc::Sender<LogLine>,
-        ) -> JoinHandle<()> {
+        fn _check_stdout(s: ChildStdout, tx: tokio::sync::mpsc::Sender<LogLine>) -> JoinHandle<()> {
             spawn_stdout_reader(s, tx)
         }
-        fn _check_stderr(
-            s: ChildStderr,
-            tx: tokio::sync::mpsc::Sender<LogLine>,
-        ) -> JoinHandle<()> {
+        fn _check_stderr(s: ChildStderr, tx: tokio::sync::mpsc::Sender<LogLine>) -> JoinHandle<()> {
             spawn_stderr_reader(s, tx)
         }
     }

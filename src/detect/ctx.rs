@@ -109,7 +109,7 @@ impl Ctx {
     /// 发射 `detect-progress` 事件到前端。
     pub fn emit(&self, stage: u8, stage_name: &str, message: &str, found: bool, status: &str) {
         let _ = self.app.emit(
-            "detect-progress",
+            crate::events::EVT_DETECT_PROGRESS,
             DetectProgress {
                 kind: self.kind.clone(),
                 stage,
