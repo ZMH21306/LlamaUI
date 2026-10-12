@@ -25,6 +25,7 @@ export const EVENTS = {
   HF_DOWNLOAD_PROGRESS: 'hf-download-progress',
   
    // UI intents (no IPC)
+  CONFIG_LOADED: 'config-loaded',
   UI_START_REQUESTED: 'ui:start-requested',
   UI_STOP_REQUESTED: 'ui:stop-requested',
   UI_RESTART_REQUESTED: 'ui:restart-requested',
