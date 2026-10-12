@@ -34,19 +34,44 @@ export async function createApp() {
             Stopped: {
                 [EVENTS.UI_START_REQUESTED]: () => {
                     bus.emit(EVENTS.UI_CONFIG_DIRTY);
-                    ipc.invoke(EVENTS.UI_START_REQUESTED)
+                    ipc.invoke('start_server')
                         .catch(err => console.error('[bootstrap] start failed:', err));
                     return 'Starting';
                 },
+                [EVENTS.SERVER_STATUS]: (status) => {
+                    const s = typeof status === 'object' ? status.status : status;
+                    return s === 'Running' ? 'Running' : 'Stopped';
+                },
             },
             Starting: {
-                [EVENTS.SERVER_STATUS]: (status) => status === 'Running' ? 'Running' : 'Starting',
+                [EVENTS.SERVER_STATUS]: (status) => {
+                    const s = typeof status === 'object' ? status.status : status;
+                    if (s === 'Running') return 'Running';
+                    if (s === 'Crashed') return 'Crashed';
+                    return 'Starting';
+                },
             },
             Running: {
                 [EVENTS.UI_STOP_REQUESTED]: () => 'Stopping',
+                [EVENTS.SERVER_STATUS]: (status) => {
+                    const s = typeof status === 'object' ? status.status : status;
+                    if (s === 'Stopped' || s === 'Crashed') return s;
+                    return 'Running';
+                },
             },
             Stopping: {
-                [EVENTS.SERVER_STATUS]: (status) => status === 'Stopped' ? 'Stopped' : 'Stopping',
+                [EVENTS.SERVER_STATUS]: (status) => {
+                    const s = typeof status === 'object' ? status.status : status;
+                    return s === 'Stopped' ? 'Stopped' : 'Stopping';
+                },
+            },
+            Crashed: {
+                [EVENTS.UI_START_REQUESTED]: () => {
+                    bus.emit(EVENTS.UI_CONFIG_DIRTY);
+                    ipc.invoke('start_server')
+                        .catch(err => console.error('[bootstrap] start failed:', err));
+                    return 'Starting';
+                },
             },
         },
     });
@@ -80,10 +105,23 @@ export async function createApp() {
         }
     });
 
-    // 后端 → 前端事件流
+    // 后端 → 前端事件流（通过 bus 分发）
+    ipc.listen(EVENTS.SERVER_STATUS, (status) => {
+        bus.emit(EVENTS.SERVER_STATUS, status);
+    });
+
+    ipc.listen(EVENTS.SERVER_LOG, (log) => {
+        bus.emit(EVENTS.SERVER_LOG, log);
+    });
+
+    ipc.listen(EVENTS.SERVER_METRICS, (metrics) => {
+        bus.emit(EVENTS.SERVER_METRICS, metrics);
+    });
+
     bus.on(EVENTS.SERVER_STATUS, (status) => {
         serviceMachine.transition(EVENTS.SERVER_STATUS, status);
-        store.setState(status, 'service.status');
+        const s = typeof status === 'object' ? status.status : status;
+        store.setState({ status: s }, 'service');
     });
 
     bus.on(EVENTS.SERVER_LOG, (log) => {
@@ -97,23 +135,12 @@ export async function createApp() {
     // 初始化
     async function init() {
         try {
-            const status = await ipc.invoke(EVENTS.UI_INIT_REQUESTED);
-            serviceMachine.transition(EVENTS.SERVER_STATUS, status);
-            store.setState(status, 'service');
+            const resp = await ipc.invoke('get_status');
+            serviceMachine.transition(EVENTS.SERVER_STATUS, resp.status);
+            store.setState({ status: resp.status, pid: null, startedAt: null }, 'service');
         } catch (err) {
             console.error('[bootstrap] init failed:', err);
         }
-
-        ipc.listen(EVENTS.SERVER_STATUS, (status) => {
-            serviceMachine.transition(EVENTS.SERVER_STATUS, status);
-            store.setState(status, 'service.status');
-        });
-        ipc.listen(EVENTS.SERVER_METRICS, (metrics) => {
-            store.setState(metrics, 'metrics');
-        });
-        ipc.listen(EVENTS.SERVER_LOG, (log) => {
-            bus.emit(EVENTS.SERVER_LOG, log);
-        });
     }
 
     await init();
@@ -122,7 +149,7 @@ export async function createApp() {
     window.addEventListener('beforeunload', async () => {
         const status = serviceMachine.state;
         if (['Starting', 'Running', 'Stopping'].includes(status)) {
-            await ipc.invoke(EVENTS.UI_STOP_REQUESTED).catch(() => {});
+            await ipc.invoke('stop_server').catch(() => {});
         }
     });
 
@@ -133,7 +160,7 @@ export async function createApp() {
         views,
         /** 销毁应用 */
         destroy: async () => {
-            await ipc.invoke(EVENTS.UI_STOP_REQUESTED).catch(() => {});
+            await ipc.invoke('stop_server').catch(() => {});
             Object.values(views).forEach(view => view.destroy && view.destroy());
         },
     };
