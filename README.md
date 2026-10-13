@@ -1,5 +1,5 @@
  LlamaUI
-
+> 此项目由于过大的维护压力已暂停更新于2026.10.13
 > LLM Desktop Console for managing llama-server
 
 [![Release](https://img.shields.io/github/v/release/ZMH21306/LlamaUI?label=version&sort=semver)](https://github.com/ZMH21306/LlamaUI/releases)
